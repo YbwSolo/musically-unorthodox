@@ -48,11 +48,23 @@ maths the plugin uses, and several end with a "your turn" exercise.
 
 ## AI tutor (optional, free)
 
-If [Ollama](https://ollama.com) is running on the Mac with a chat model installed (`ollama pull llama3.2`), an
-"Ask the AI tutor" box appears in the Mix Brain panel on the EQ tab. The question goes to the model on that
-computer together with this track's measurements and a short fact sheet; nothing leaves the machine and there is
-no account or key. Without Ollama the box simply is not shown. Answers come from a small model and can be wrong,
-which the plugin says under every answer.
+Settings > **Turn on AI tutor** downloads the tutor once (about 2 GB). After that an "Ask the AI tutor" box appears
+in the Mix Brain panel on the EQ tab. The question goes to an AI model running on that Mac, together with this
+track's measurements and a short fact sheet. Nothing leaves the machine, there is no account or key, and it works
+without the internet. Answers come from a small model and can be wrong, which the plugin says under every answer.
+
+How it works: the download is a helper program (the [llama.cpp](https://github.com/ggml-org/llama.cpp) server, MIT
+licence, from that project's own Mac builds, pinned and checksummed in `scripts/make_tutor_pack.sh`) and one model
+file (Llama 3.2 3B, named in `scripts/make_installer.sh`, fetched from Hugging Face and checksummed). They are saved
+in `/Users/Shared/Musically Unorthodox`, so every account on a studio Mac shares one copy. The plugin starts the
+helper when someone asks a question; it only listens on the Mac itself and gives its memory back when idle.
+Needs macOS 13.3 or newer. Settings > Remove deletes it again.
+
+Every release build installs the tutor on the build Mac and asks it two questions with the real model before
+anything is published (`MUTutorCheck`), so a broken tutor never ships.
+
+If the built-in tutor is not installed but [Ollama](https://ollama.com) is running with a chat model, the plugin uses that and no download
+is needed.
 
 ## Tabs
 
@@ -108,13 +120,14 @@ Source/
   session/SessionBus.*           process-wide bus shared by all instances, learn and balance, shared reference
   session/BalanceEngine.*        role targets, balance plan, masking detection
   update/Updater.*               in-plugin updates: feed check, download, checksum, in-place install
-  ai/LocalAI.*                   optional tutor through a local Ollama server
+  ai/LocalAI.*                   optional AI tutor: built-in helper and model, or a local Ollama server
   state/LocalSettings.h          per-computer settings (update checks, lesson progress)
   ui/                            theme, icons, look and feel, widgets, help text, pages
   tests/TestMain.cpp             DSP and analysis tests
   tests/SessionHarness.cpp       4-instance offline session test
   tests/PreviewHarness.cpp       live UI preview fed with synthetic stems
-  tests/mock_ollama.py           stand-in AI server for the harness
+  tests/mock_ollama.py           stand-in AI servers for the harness (also mock_tutor_helper.py)
+  tests/TutorCheck.cpp           runs the real tutor end to end on the build Mac
 ```
 
 ## Notes

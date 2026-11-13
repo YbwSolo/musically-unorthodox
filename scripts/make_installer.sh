@@ -54,10 +54,39 @@ rm -rf pkgroot pkgscripts
 # Stable names so "releases/latest/download/<name>" always points at the newest build.
 cp "dist/$ZIP" dist/MusicallyUnorthodox-bundles.zip
 SHA="$(shasum -a 256 "dist/$ZIP" | cut -d' ' -f1)"
-NOTES="$(git log -1 --pretty=%B 2>/dev/null | grep -v -e '^Co-Authored-By' -e '^Claude-Session' | head -24 | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))' 2>/dev/null || echo '""')"
 BUILDNUM="$BUILD"; [ "$BUILD" = "local" ] && BUILDNUM=0
-cat > dist/latest.json <<JSON
-{ "build": $BUILDNUM, "version": "$VERSION", "file": "MusicallyUnorthodox-bundles.zip", "sha256": "$SHA", "notes": $NOTES }
-JSON
+
+# AI tutor: the helper pack (see make_tutor_pack.sh) and the model it runs. The plugin reads both from the feed,
+# so the model can be changed here later without touching the plugin's code.
+TUTOR_PACK="dist-tutor/MusicallyUnorthodox-tutor-macos.zip"
+MODEL_NAME="Llama 3.2 3B"
+MODEL_URL="https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+MODEL_SHA="6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff"
+TUTOR_SHA=""; TUTOR_VERSION=""; MODEL_BYTES=""
+if [ -f "$TUTOR_PACK" ]; then
+  cp "$TUTOR_PACK" dist/
+  TUTOR_SHA="$(shasum -a 256 "$TUTOR_PACK" | cut -d' ' -f1)"
+  TUTOR_VERSION="$(unzip -p "$TUTOR_PACK" tutor/VERSION)"
+  MODEL_BYTES="$(curl -sIL "$MODEL_URL" | tr -d '\r' | awk 'tolower($1)=="content-length:" {v=$2} END {print v}')"
+fi
+
+BUILDNUM="$BUILDNUM" VERSION="$VERSION" ZIPSHA="$SHA" TUTOR_SHA="$TUTOR_SHA" TUTOR_VERSION="$TUTOR_VERSION" \
+MODEL_NAME="$MODEL_NAME" MODEL_URL="$MODEL_URL" MODEL_SHA="$MODEL_SHA" MODEL_BYTES="$MODEL_BYTES" python3 - <<'PY'
+import json, os, subprocess
+e = os.environ
+try:
+    body = subprocess.run(["git", "log", "-1", "--pretty=%B"], capture_output=True, text=True).stdout
+except Exception:
+    body = ""
+notes = "\n".join([l for l in body.splitlines() if not l.startswith(("Co-Authored-By", "Claude-Session"))][:24]).strip()
+feed = {"build": int(e["BUILDNUM"]), "version": e["VERSION"], "file": "MusicallyUnorthodox-bundles.zip", "sha256": e["ZIPSHA"], "notes": notes}
+if e["TUTOR_SHA"] and e["MODEL_BYTES"].isdigit() and int(e["MODEL_BYTES"]) > 100000000:
+    feed["tutor"] = {"version": e["TUTOR_VERSION"], "file": "MusicallyUnorthodox-tutor-macos.zip", "sha256": e["TUTOR_SHA"],
+                     "model": {"name": e["MODEL_NAME"], "url": e["MODEL_URL"], "sha256": e["MODEL_SHA"], "bytes": int(e["MODEL_BYTES"])}}
+else:
+    print("NOTE: no AI tutor section in the feed (pack or model size missing)")
+open("dist/latest.json", "w").write(json.dumps(feed, indent=1) + "\n")
+PY
 echo "Installer written to dist/"
 ls -la dist
+cat dist/latest.json

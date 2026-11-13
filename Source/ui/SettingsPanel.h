@@ -17,7 +17,7 @@ public:
 
 private:
     MUProcessor& proc;
-    juce::Rectangle<int> card, updateText, updateBar, notesArea, aiText;
+    juce::Rectangle<int> card, updateText, updateBar, notesArea, aiText, aiBar;
     juce::ComboBox roleBox;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> roleAtt;
     Segmented sizeSwitch { juce::StringArray { "Compact", "Standard", "Large" } };
@@ -27,7 +27,7 @@ private:
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> offsetAtts;
     std::vector<std::pair<juce::String, juce::Rectangle<int>>> labels;
     juce::String detected, updateLine, notes, aiLine;
-    float progress = 0.0f;
-    bool showProgress = false;
+    float progress = 0.0f, aiProgress = 0.0f;
+    bool showProgress = false, showAiProgress = false;
 };
 }

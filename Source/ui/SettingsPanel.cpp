@@ -26,8 +26,18 @@ SettingsPanel::SettingsPanel (MUProcessor& p) : proc (p), takePart (p, ids::auto
     checkButton.onClick = [this] { proc.getUpdater().checkNow(); };
     styleButton (installButton, "Install update", true);
     installButton.onClick = [this] { proc.getUpdater().installNow(); };
-    styleButton (aiButton, "Look again", false);
-    aiButton.onClick = [this] { proc.getAI().refresh(); };
+    styleButton (aiButton, "Turn on AI tutor", false);
+    aiButton.onClick = [this]
+    {
+        auto& ai = proc.getAI();
+        switch (ai.getStatus().setup)
+        {
+            case LocalAI::Setup::Downloading: ai.cancelInstall(); break;
+            case LocalAI::Setup::Ready:       ai.removeBuiltIn(); break;
+            case LocalAI::Setup::Unsupported: ai.refresh(); break;
+            default:                          ai.installBuiltIn(); break;
+        }
+    };
     for (auto* c : std::initializer_list<juce::Component*> { &roleBox, &sizeSwitch, &takePart, &closeButton, &resetButton, &checkButton, &installButton, &aiButton }) addAndMakeVisible (c);
 
     for (int r = (int) Role::Vocal + 1; r < (int) Role::Master; ++r)
@@ -58,13 +68,31 @@ void SettingsPanel::refresh()
     const auto n = (st.phase == Phase::Available || st.phase == Phase::Installed) ? st.latest.notes : juce::String();
 
     const auto ai = proc.getAI().getStatus();
-    const juce::String aiNow = ai.available ? "On. Using the model \"" + ai.model + "\" on this computer. Ask it questions from the Mix Brain panel on the EQ tab."
-                                            : juce::String ("Off. It needs Ollama, a free program that runs AI models on this computer, so nothing you ask leaves the room. "
-                                                            "1. Install Ollama from ollama.com.  2. Open Terminal and run:  ollama pull llama3.2  3. Press Look again.");
+    using Setup = LocalAI::Setup;
+    juce::String aiNow, aiLabel;
+    const bool aiBusy = ai.setup == Setup::Downloading;
+    if (aiBusy)                          { aiNow = ai.setupMessage + "\nYou can keep working while it downloads."; aiLabel = "Stop"; }
+    else if (ai.setup == Setup::Ready)   { aiNow = "On. Ask it questions from the Mix Brain panel on the EQ tab. It runs on this computer (" + ai.model + "), so it works without the internet and nothing you ask leaves the room."; aiLabel = "Remove"; }
+    else if (ai.setup == Setup::Unsupported)
+    {
+        aiNow = ai.available ? "On, through Ollama (" + ai.model + "). Ask it questions from the Mix Brain panel on the EQ tab." : juce::String ("The built-in AI tutor is available on Mac.");
+        aiLabel = "Look again";
+    }
+    else
+    {
+        aiNow = ai.setup == Setup::Failed ? ai.setupMessage
+              : juce::String ("Off. One press downloads it (about 2 GB, once). After that it runs on this computer: free, no account, no internet needed, and nothing you ask leaves the room.");
+        if (ai.available && ai.setup != Setup::Failed) aiNow = "On, through Ollama (" + ai.model + "). The built-in tutor does the same job without Ollama.";
+        aiLabel = ai.setup == Setup::Failed ? "Try again" : "Turn on AI tutor";
+    }
+    if (aiButton.getButtonText() != aiLabel) aiButton.setButtonText (aiLabel);
+    const float aiP = aiBusy ? ai.progress : 0.0f;
 
-    if (d != detected || line != updateLine || prog != showProgress || std::abs (st.progress - progress) > 0.004f || n != notes || aiNow != aiLine)
+    if (d != detected || line != updateLine || prog != showProgress || std::abs (st.progress - progress) > 0.004f || n != notes || aiNow != aiLine
+        || aiBusy != showAiProgress || std::abs (aiP - aiProgress) > 0.002f)
     {
         detected = d; updateLine = line; showProgress = prog; progress = st.progress; notes = n; aiLine = aiNow;
+        showAiProgress = aiBusy; aiProgress = aiP;
         repaint();
     }
 }
@@ -106,6 +134,11 @@ void SettingsPanel::paint (juce::Graphics& g)
         g.restoreState();
     }
     drawWrapped (g, aiLine, aiText.toFloat(), body (12.0f), textDim, 1.35f);
+    if (showAiProgress)
+    {
+        g.setColour (control); g.fillRoundedRectangle (aiBar.toFloat(), 2.0f);
+        g.setColour (yellow); g.fillRoundedRectangle (aiBar.toFloat().withWidth ((float) aiBar.getWidth() * juce::jlimit (0.02f, 1.0f, aiProgress)), 2.0f);
+    }
 
     g.setFont (body (11.0f)); g.setColour (textMute);
     g.drawText ("Musically Unorthodox mix assistant. In Music In Media C.I.C., Northampton.",
@@ -160,7 +193,8 @@ void SettingsPanel::resized()
     notesArea = crow (112);
     c.removeFromTop (2);
     labels.push_back ({ "#AI tutor", crow (18) });
-    aiText = crow (88);
-    aiButton.setBounds (crow (28).removeFromLeft (110));
+    aiText = crow (68);
+    aiBar = crow (4);
+    aiButton.setBounds (crow (28).removeFromLeft (150));
 }
 }

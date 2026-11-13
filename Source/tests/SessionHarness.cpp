@@ -358,6 +358,24 @@ int main()
             const auto st = wait (u, { Phase::Checking });
             check (st.phase == Phase::Failed, "An unreachable feed fails politely", st.message);
         }
+        // the real, published feed (only when asked for: it needs the internet)
+        if (juce::SystemStats::getEnvironmentVariable ("MU_TEST_REAL_FEED", {}).isNotEmpty())
+        {
+            makeBundle (au, "old au binary", "stale.txt");
+            makeBundle (vst3, "old vst3 binary", "stale.txt");
+            Updater u;
+            u.configureForTesting (MU_UPDATE_BASE_URL, au, vst3, 1);
+            u.checkNow();
+            auto st = wait (u, { Phase::Checking });
+            check (st.phase == Phase::Available && st.latest.build >= 6, "The published update feed is reachable", "build " + juce::String (st.latest.build) + " " + st.message);
+            u.installNow();
+            for (int i = 0; i < 3000 && (u.getState().phase == Phase::Downloading || u.getState().phase == Phase::Installing || u.getState().phase == Phase::Available); ++i) juce::Thread::sleep (20);
+            st = u.getState();
+            const auto bin = au.getChildFile ("Contents/MacOS/Musically Unorthodox");
+            check (st.phase == Phase::Installed && bin.getSize() > 1000000 && au.getChildFile ("Contents/Info.plist").existsAsFile()
+                   && vst3.getChildFile ("Contents/MacOS/Musically Unorthodox").getSize() > 1000000 && ! au.getChildFile ("Contents/Resources/stale.txt").exists(),
+                   "The published update downloads, passes its checksum and installs", st.message + " (" + juce::String (bin.getSize() / 1000000) + " MB binary)");
+        }
         root.deleteRecursively();
     }
 
@@ -371,6 +389,8 @@ int main()
         check (parsedRequest.isObject() && ! (bool) parsedRequest.getProperty ("stream", true) && parsedRequest["messages"].size() == 2, "Tutor request is valid JSON with streaming off");
 
         const auto prompt = vocal->tutorPrompt();
+        const auto dumpTo = juce::SystemStats::getEnvironmentVariable ("MU_DUMP_TUTOR_PROMPT", {});
+        if (dumpTo.isNotEmpty()) juce::File (dumpTo).replaceWithText (prompt);
         check (prompt.contains ("Lead vocal") && prompt.contains ("LUFS") && prompt.length() > 600, "Tutor is told about this track", juce::String (prompt.length()) + " characters");
 
         const auto address = juce::SystemStats::getEnvironmentVariable ("MU_TEST_AI_URL", {});
@@ -393,6 +413,101 @@ int main()
         juce::Thread::sleep (400);
         for (int i = 0; i < 150 && absent.getStatus().available; ++i) juce::Thread::sleep (20);
         check (! absent.getStatus().available, "Tutor stays off when no local AI is running");
+
+        // ---- built-in tutor: read the feed, install from a local feed, start the helper, ask, remove
+        {
+            TutorPack tp;
+            const juce::String sha = juce::String::repeatedString ("cd", 32);
+            auto feedText = [&] (const juce::String& file, const juce::String& url)
+            {
+                return "{ \"build\": 7, \"tutor\": { \"version\": \"t1\", \"file\": \"" + file + "\", \"sha256\": \"" + sha + "\", \"model\": { \"name\": \"Test model\", \"url\": \""
+                       + url + "\", \"sha256\": \"" + sha + "\", \"bytes\": 1000 } } }";
+            };
+            check (LocalAI::parseTutorFeed (feedText ("tutor.zip", "https://huggingface.co/a/b/resolve/main/m.gguf"), tp) && tp.modelBytes == 1000 && tp.modelName == "Test model", "Tutor feed is read");
+            check (! LocalAI::parseTutorFeed (feedText ("../tutor.zip", "https://huggingface.co/a/m.gguf"), tp)
+                   && ! LocalAI::parseTutorFeed (feedText ("tutor.zip", "https://elsewhere.example/m.gguf"), tp)
+                   && ! LocalAI::parseTutorFeed ("{ \"build\": 7 }", tp), "Tutor feed rejects paths, other model hosts and feeds without a tutor");
+            check (LocalAI::parseAnswer ("{\"choices\":[{\"message\":{\"content\":\"### Tip\\n* Cut 300 Hz\"}}]}") == "Tip\n- Cut 300 Hz", "Built-in tutor answers are read and cleaned");
+        }
+        const juce::File helperScript (juce::SystemStats::getEnvironmentVariable ("MU_TEST_TUTOR_HELPER", {}));
+        if (helperScript.existsAsFile())
+        {
+            auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("mu-tutor-test");
+            root.deleteRecursively();
+            const auto feed = root.getChildFile ("feed"), stage = root.getChildFile ("stage");
+            feed.createDirectory();
+            const auto program = stage.getChildFile ("tutor/x64/llama-server");
+            program.getParentDirectory().createDirectory();
+            helperScript.copyFileTo (program);
+            program.setExecutePermission (true);
+            stage.getChildFile ("tutor/VERSION").replaceWithText ("t1");
+            const auto zip = feed.getChildFile ("tutor.zip");
+            juce::ChildProcess zipper;
+            const bool zipped = zipper.start (juce::StringArray { "sh", "-c", "cd '" + stage.getFullPathName() + "' && zip -qry '" + zip.getFullPathName() + "' tutor" })
+                                && zipper.waitForProcessToFinish (20000) && zip.existsAsFile();
+            const auto model = feed.getChildFile ("model.gguf");
+            {
+                juce::FileOutputStream out (model);
+                juce::Random rng (7);
+                for (int i = 0; i < 100000; ++i) out.writeInt (rng.nextInt());
+            }
+            auto writeFeed = [&] (const juce::String& modelSha)
+            {
+                feed.getChildFile ("latest.json").replaceWithText ("{ \"build\": 7, \"tutor\": { \"version\": \"t1\", \"file\": \"tutor.zip\", \"sha256\": \"" + LocalAI::sha256Of (zip)
+                    + "\", \"model\": { \"name\": \"Test model\", \"url\": \"file://" + model.getFullPathName() + "\", \"sha256\": \"" + modelSha + "\", \"bytes\": " + juce::String (model.getSize()) + " } } }");
+            };
+            auto settle = [] (LocalAI& a) { for (int i = 0; i < 1500 && a.getStatus().setup == LocalAI::Setup::Downloading; ++i) juce::Thread::sleep (20); juce::Thread::sleep (150); return a.getStatus(); };
+            const auto feedUrl = "file://" + feed.getFullPathName();
+            check (zipped, "Test tutor package built");
+
+            {
+                writeFeed (juce::String::repeatedString ("0", 64));
+                LocalAI bad;
+                bad.setAddressForTesting ("http://127.0.0.1:9");
+                bad.configureForTesting (feedUrl, root.getChildFile ("home-bad"));
+                bad.installBuiltIn();
+                const auto st = settle (bad);
+                check (st.setup == LocalAI::Setup::Failed && ! st.available, "A tutor download that does not match its checksum is refused", st.setupMessage);
+            }
+            writeFeed (LocalAI::sha256Of (model));
+            {
+                const auto home = root.getChildFile ("home");
+                home.createDirectory();
+                // a download that was cut off earlier
+                home.getChildFile ("model-" + LocalAI::sha256Of (model).substring (0, 12) + ".gguf.part").replaceWithData ("half", 4);
+                LocalAI ai;
+                ai.setAddressForTesting ("http://127.0.0.1:9");
+                ai.configureForTesting (feedUrl, home);
+                ai.refresh();
+                juce::Thread::sleep (500);
+                check (! ai.getStatus().available && ai.getStatus().setup == LocalAI::Setup::NotInstalled, "Built-in tutor starts switched off");
+                ai.installBuiltIn();
+                auto st = settle (ai);
+                check (st.setup == LocalAI::Setup::Ready && st.available && st.builtIn && st.model == "Test model", "One press downloads and installs the built-in tutor", st.setupMessage);
+                ai.ask (prompt, "Why is my vocal muddy?");
+                for (int i = 0; i < 1500 && ai.getStatus().answerId == 0; ++i) juce::Thread::sleep (20);
+                st = ai.getStatus();
+                check (st.answer.startsWith ("Built-in answer\n- to: Why is my vocal muddy? (model model-") && st.answer.contains ("ctx 4096") && ! st.busy,
+                       "The plugin starts the helper and gets an answer back", st.answer + st.error);
+                ai.ask (prompt, "And the bass?");
+                for (int i = 0; i < 1500 && ai.getStatus().answerId < 2; ++i) juce::Thread::sleep (20);
+                check (ai.getStatus().answer.contains ("And the bass?"), "A second question reuses the running helper", ai.getStatus().answer + ai.getStatus().error);
+                {
+                    LocalAI second;                                   // another plugin process on the same computer
+                    second.setAddressForTesting ("http://127.0.0.1:9");
+                    second.configureForTesting (feedUrl, home);
+                    second.refresh();
+                    juce::Thread::sleep (400);
+                    check (second.getStatus().available && second.getStatus().builtIn, "Other instances find the installed tutor");
+                }
+                ai.removeBuiltIn();
+                juce::Thread::sleep (600);
+                bool left = false;
+                for (const auto& e : juce::RangedDirectoryIterator (home, true, "*", juce::File::findFiles)) { left = true; juce::ignoreUnused (e); }
+                check (! ai.getStatus().available && ai.getStatus().setup == LocalAI::Setup::NotInstalled && ! left, "Removing the tutor deletes it from the disk");
+            }
+            root.deleteRecursively();
+        }
     }
 
     // ---- the editor builds, runs and closes cleanly on every tab (needs a display)

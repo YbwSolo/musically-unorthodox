@@ -148,6 +148,16 @@ if(MU_BUILD_TESTS)
 endif()
 
 if(MU_BUILD_TESTS)
+    # Runs the built-in AI tutor for real: installs it from a feed, starts the helper, asks questions.
+    juce_add_console_app(MUTutorCheck PRODUCT_NAME "MUTutorCheck")
+    target_sources(MUTutorCheck PRIVATE Source/tests/TutorCheck.cpp Source/ai/LocalAI.cpp)
+    target_include_directories(MUTutorCheck PRIVATE Source)
+    target_compile_definitions(MUTutorCheck PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 MU_UPDATE_BASE_URL="${MU_UPDATE_BASE_URL}")
+    target_link_libraries(MUTutorCheck PRIVATE juce::juce_core juce::juce_events juce::juce_data_structures juce::juce_cryptography
+                          juce::juce_recommended_config_flags)
+endif()
+
+if(MU_BUILD_TESTS)
     add_executable(MUPreview Source/tests/PreviewHarness.cpp)
     target_include_directories(MUPreview PRIVATE Source)
     target_link_libraries(MUPreview PRIVATE MusicallyUnorthodox MUAssets juce::juce_audio_utils juce::juce_dsp)
