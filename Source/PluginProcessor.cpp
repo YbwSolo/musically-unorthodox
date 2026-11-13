@@ -587,14 +587,20 @@ juce::String MUProcessor::tutorPrompt()
          "A compressor turns down whatever goes over the threshold, which evens out loud and quiet parts. Ratio sets how much it turns down. "
          "Attack is NOT a delay: the compressor begins turning down the instant the sound crosses the threshold. Attack is how quickly it reaches the full turn-down. "
          "A fast attack clamps the very start of each hit; a slow attack lets the punch of the hit through before the level has dropped. "
-         "Release is how long it takes to let the level come back up afterwards. A typical vocal gets 3 to 6 dB of reduction on the loud words.\n"
+         "Release is how long it takes to let the level come back up afterwards. A typical vocal gets 3 to 6 dB of reduction on the loud words. "
+         "On a vocal, start with a fast attack (1 to 10 ms) so every word stays level, and slow it down if the vocal starts to sound flat.\n"
          "A de-esser only ever turns down. It turns down sharp S sounds between 5 and 8 kHz and goes after the compressor. "
          "To use it, switch it on and lower its threshold until the S sounds soften. "
          "A gate turns the track down between phrases to hide background noise. "
-         "Saturation adds harmonics, which makes a sound feel thicker and closer.\n"
-         "Streaming services play music at about -14 LUFS, and true peak should stay under -1 dB. "
+         "Saturation adds harmonics, which makes a sound feel thicker and closer. "
+         "Phone and laptop speakers cannot play much below about 150 Hz, so a deep 808 or sub bass vanishes on them. Boosting the bass with EQ does not help. "
+         "Saturation on the Tone tab adds harmonics above the note that small speakers can play, so the bass is still heard.\n"
+         "LUFS measures how loud music sounds to a listener over time, not just its peaks. Streaming services play music at about -14 LUFS and simply turn louder songs down, "
+         "so pushing a master louder than that gains nothing. True peak should stay under -1 dB. The Master tab sets this on the stereo output. "
          "A mix that is not mastered yet should sit near -18 LUFS with peaks under -6 dB.\n"
-         "When a Mix Brain suggestion below fits the question, point to it: tell the student to press Analyse on the EQ tab and press Apply on that suggestion.\n\n"
+         "When one track covers another (for example the beat drowning the vocal), there are two fixes and neither is on the Dynamics tab: "
+         "the Mix tab lists the collision with a Fix button, and the Analyse button on the EQ tab lists it as a Mix Brain suggestion with an Apply button.\n"
+         "When a Mix Brain suggestion below fits the question, point to it: tell the student to open the EQ tab, press Analyse and press Apply on that suggestion.\n\n"
          "EXAMPLES OF GOOD ANSWERS\n"
          "Question: What does attack do? Answer: The compressor starts turning the sound down the moment it goes over the threshold. "
          "Attack sets how quickly it gets to the full turn-down. A fast attack clamps the start of every hit, and a slow attack lets the punch through first. "
@@ -641,7 +647,7 @@ juce::String MUProcessor::tutorPrompt()
     else
     {
         int n = 0;
-        for (auto& f : found) s << "(" << ++n << ") " << f.title << ": " << f.action << ". ";
+        for (auto& f : found) s << "(" << ++n << ") " << f.title << ". Its Apply button does this: " << f.action << ". ";
     }
     return s;
 }
