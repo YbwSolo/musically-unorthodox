@@ -3,7 +3,7 @@
 
 namespace mu
 {
-// Overlay opened from the header: track role, window size and how this track takes part in the session balance.
+// Overlay opened from the header: track role and balance on the left; updates and the AI tutor on the right.
 class SettingsPanel : public juce::Component
 {
 public:
@@ -17,15 +17,17 @@ public:
 
 private:
     MUProcessor& proc;
-    juce::Rectangle<int> card;
+    juce::Rectangle<int> card, updateText, updateBar, notesArea, aiText;
     juce::ComboBox roleBox;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> roleAtt;
     Segmented sizeSwitch { juce::StringArray { "Compact", "Standard", "Large" } };
     ParamToggle takePart;
-    juce::TextButton closeButton, resetButton;
+    juce::TextButton closeButton, resetButton, checkButton, installButton, aiButton;
     juce::OwnedArray<juce::Slider> offsetSliders;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> offsetAtts;
     std::vector<std::pair<juce::String, juce::Rectangle<int>>> labels;
-    juce::String detected;
+    juce::String detected, updateLine, notes, aiLine;
+    float progress = 0.0f;
+    bool showProgress = false;
 };
 }

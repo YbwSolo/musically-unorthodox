@@ -48,6 +48,8 @@ MUEditor::MUEditor (MUProcessor& p)
     pageAnim = 1.0f;
     page (tab)->setAlpha (1.0f);
     proc.editorOpened();
+    proc.getUpdater().autoCheck();
+    proc.getAI().refresh();
     lastTick = juce::Time::getMillisecondCounterHiRes();
     startTimerHz (60);
 }
@@ -76,7 +78,9 @@ juce::Component* MUEditor::page (int t)
 
 void MUEditor::showTab (int t)
 {
+    const int previous = tab;
     tab = juce::jlimit (0, HeaderBar::NumTabs - 1, t);
+    slideFrom = tab > previous ? 36.0f : tab < previous ? -36.0f : 0.0f;      // the new page arrives from the side its tab is on
     for (int i = 0; i < HeaderBar::NumTabs; ++i) page (i)->setVisible (i == tab);
     proc.setCurrentTab (tab);
     header.setTab (tab);
@@ -99,7 +103,7 @@ void MUEditor::timerCallback()
         pageAnim = juce::jmin (1.0f, pageAnim + dt * 7.0f);
         const float eased = 1.0f - (1.0f - pageAnim) * (1.0f - pageAnim);
         page (tab)->setAlpha (eased);
-        page (tab)->setTransform (juce::AffineTransform::translation (0.0f, (1.0f - eased) * 10.0f));
+        page (tab)->setTransform (juce::AffineTransform::translation ((1.0f - eased) * slideFrom, 0.0f));
     }
     switch (tab)
     {

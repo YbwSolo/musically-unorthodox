@@ -15,6 +15,22 @@ Knob::Knob (MUProcessor& p, const juce::String& paramId, const juce::String& l, 
     addAndMakeVisible (slider);
     att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.apvts, paramId, slider);
     setHelp (*this, helpKey.isNotEmpty() ? helpKey : paramId);
+    shown = (float) slider.valueToProportionOfLength (slider.getValue());
+    // when a preset or the A/B switch moves the value, the pointer sweeps to its new position instead of jumping
+    slider.onValueChange = [this]
+    {
+        if (slider.isMouseButtonDown() || ! isShowing()) { shown = (float) slider.valueToProportionOfLength (slider.getValue()); slider.getProperties().remove ("animPos"); }
+        else if (! isTimerRunning()) startTimerHz (60);
+    };
+}
+
+void Knob::timerCallback()
+{
+    const float target = (float) slider.valueToProportionOfLength (slider.getValue());
+    shown = approach (shown, target, 1.0f / 60.0f, 0.07f);
+    if (std::abs (shown - target) < 0.002f || slider.isMouseButtonDown()) { shown = target; slider.getProperties().remove ("animPos"); stopTimer(); }
+    else slider.getProperties().set ("animPos", shown);
+    slider.repaint();
 }
 
 void Knob::resized()
@@ -40,6 +56,7 @@ ParamToggle::ParamToggle (MUProcessor& p, const juce::String& paramId, const juc
     att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, paramId, *this);
     setHelp (*this, helpKey.isNotEmpty() ? helpKey : paramId);
     setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    setWantsKeyboardFocus (false);     // the space bar should keep starting and stopping the song in the host
 }
 
 // ---- Segmented -------------------------------------------------------------------------------------
@@ -158,6 +175,7 @@ IconButton::IconButton (const juce::String& iconName, const juce::String& helpKe
 {
     if (helpKey.isNotEmpty()) setHelp (*this, helpKey);
     setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    setWantsKeyboardFocus (false);
 }
 
 void IconButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
@@ -175,6 +193,7 @@ juce::TextButton& styleButton (juce::TextButton& b, const juce::String& text, bo
     b.setButtonText (text);
     b.getProperties().set ("primary", primary);
     b.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    b.setWantsKeyboardFocus (false);
     if (helpKey.isNotEmpty()) setHelp (b, helpKey);
     return b;
 }

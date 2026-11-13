@@ -6,6 +6,7 @@
 #include <cstdio>
 #include "PluginProcessor.h"
 #include "SyntheticStems.h"
+#include <unistd.h>
 
 using namespace mu;
 
@@ -258,6 +259,140 @@ int main()
         check (copy->getCurrentPresetName() == master->getCurrentPresetName(), "State restores the preset name", copy->getCurrentPresetName());
         check (std::abs (copy->getParam (ids::targetLufs) - master->getParam (ids::targetLufs)) < 0.01f, "State restores the loudness target");
         master->setAutoBalanceMode (false);
+    }
+
+    // ---- in-plugin updates, against a local feed
+    {
+        UpdateInfo parsed;
+        const juce::String goodSha = juce::String::repeatedString ("ab", 32);
+        check (Updater::parseFeed ("{\"build\": 7, \"version\": \"0.4.7\", \"file\": \"MusicallyUnorthodox-bundles.zip\", \"sha256\": \"" + goodSha + "\", \"notes\": \"n\"}", parsed)
+               && parsed.build == 7 && parsed.version == "0.4.7", "Update feed is read");
+        check (! Updater::parseFeed ("{\"build\": 7, \"file\": \"../evil.zip\", \"sha256\": \"" + goodSha + "\"}", parsed)
+               && ! Updater::parseFeed ("{\"build\": 7, \"file\": \"https://elsewhere.example/x.zip\", \"sha256\": \"" + goodSha + "\"}", parsed)
+               && ! Updater::parseFeed ("not json", parsed) && ! Updater::parseFeed ("{\"build\": 7, \"file\": \"a.zip\", \"sha256\": \"short\"}", parsed),
+               "Update feed rejects paths, other sites, bad checksums and junk");
+
+        auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("mu-updater-test");
+        root.deleteRecursively();
+        const auto feed = root.getChildFile ("feed"), stage = root.getChildFile ("stage"), installed = root.getChildFile ("installed");
+        feed.createDirectory();
+        auto makeBundle = [] (const juce::File& bundle, const juce::String& binaryText, const juce::String& extraFile)
+        {
+            bundle.getChildFile ("Contents/MacOS").createDirectory();
+            bundle.getChildFile ("Contents/Resources").createDirectory();
+            const auto bin = bundle.getChildFile ("Contents/MacOS/Musically Unorthodox");
+            bin.replaceWithText (binaryText); bin.setExecutePermission (true);
+            bundle.getChildFile ("Contents/Info.plist").replaceWithText ("plist " + binaryText);
+            bundle.getChildFile ("Contents/Resources").getChildFile (extraFile).replaceWithText (extraFile);
+        };
+        makeBundle (stage.getChildFile ("Components/Musically Unorthodox.component"), "new au binary", "new.txt");
+        makeBundle (stage.getChildFile ("VST3/Musically Unorthodox.vst3"), "new vst3 binary", "new.txt");
+        const auto au = installed.getChildFile ("Musically Unorthodox.component"), vst3 = installed.getChildFile ("Musically Unorthodox.vst3");
+        makeBundle (au, "old au binary", "stale.txt");
+        makeBundle (vst3, "old vst3 binary", "stale.txt");
+        juce::ChildProcess zipper;
+        const auto zip = feed.getChildFile ("MusicallyUnorthodox-bundles.zip");
+        const bool zipped = zipper.start (juce::StringArray { "sh", "-c", "cd '" + stage.getFullPathName() + "' && zip -qry '" + zip.getFullPathName() + "' Components VST3" })
+                            && zipper.waitForProcessToFinish (20000) && zip.existsAsFile();
+        check (zipped, "Test update package built");
+        auto writeFeed = [&] (int build, const juce::String& sha)
+        {
+            feed.getChildFile ("latest.json").replaceWithText ("{ \"build\": " + juce::String (build) + ", \"version\": \"0.4." + juce::String (build)
+                                                               + "\", \"file\": \"MusicallyUnorthodox-bundles.zip\", \"sha256\": \"" + sha + "\", \"notes\": \"Test notes\" }");
+        };
+        auto wait = [] (Updater& u, std::initializer_list<UpdateState::Phase> busy)
+        {
+            for (int i = 0; i < 600; ++i)
+            {
+                const auto ph = u.getState().phase;
+                bool still = false;
+                for (auto b : busy) still = still || ph == b;
+                if (! still) break;
+                juce::Thread::sleep (20);
+            }
+            return u.getState();
+        };
+        using Phase = UpdateState::Phase;
+        const auto feedUrl = "file://" + feed.getFullPathName();
+
+        writeFeed (7, Updater::sha256Of (zip));
+        {
+            Updater u;
+            u.configureForTesting (feedUrl, au, vst3, 5);
+            u.checkNow();
+            auto st = wait (u, { Phase::Checking });
+            check (st.phase == Phase::Available && st.latest.build == 7 && st.latest.notes == "Test notes", "A newer build is found", st.message);
+            u.installNow();
+            st = wait (u, { Phase::Downloading, Phase::Installing, Phase::Available });
+            check (st.phase == Phase::Installed, "The update downloads, verifies and installs", st.message);
+            const auto bin = au.getChildFile ("Contents/MacOS/Musically Unorthodox");
+            check (bin.loadFileAsString() == "new au binary" && vst3.getChildFile ("Contents/MacOS/Musically Unorthodox").loadFileAsString() == "new vst3 binary", "Both plugin bundles are replaced in place");
+            check (::access (bin.getFullPathName().toRawUTF8(), X_OK) == 0, "The new binary keeps its executable permission");
+            check (! au.getChildFile ("Contents/Resources/stale.txt").exists() && au.getChildFile ("Contents/Resources/new.txt").existsAsFile(), "Files the new version dropped are removed");
+            bool leftovers = false;
+            for (const auto& e : juce::RangedDirectoryIterator (installed, true)) leftovers = leftovers || e.getFile().getFileName().endsWith (".mu-new");
+            check (! leftovers, "No temporary files are left behind");
+        }
+        {
+            Updater u;
+            u.configureForTesting (feedUrl, au, vst3, 7);
+            u.checkNow();
+            check (wait (u, { Phase::Checking }).phase == Phase::UpToDate, "The same build reports that it is up to date");
+        }
+        {
+            makeBundle (au, "old au binary", "stale.txt");
+            writeFeed (8, juce::String::repeatedString ("0", 64));
+            Updater u;
+            u.configureForTesting (feedUrl, au, vst3, 5);
+            u.checkNow();
+            wait (u, { Phase::Checking });
+            u.installNow();
+            const auto st = wait (u, { Phase::Downloading, Phase::Installing, Phase::Available });
+            check (st.phase == Phase::Failed && au.getChildFile ("Contents/MacOS/Musically Unorthodox").loadFileAsString() == "old au binary",
+                   "A download that does not match its checksum is refused and nothing is touched", st.message);
+        }
+        {
+            Updater u;
+            u.configureForTesting ("file://" + root.getChildFile ("nowhere").getFullPathName(), au, vst3, 5);
+            u.checkNow();
+            const auto st = wait (u, { Phase::Checking });
+            check (st.phase == Phase::Failed, "An unreachable feed fails politely", st.message);
+        }
+        root.deleteRecursively();
+    }
+
+    // ---- AI tutor plumbing (against tests/mock_ollama.py when MU_TEST_AI_URL is set)
+    {
+        check (LocalAI::chooseModel ({ "nomic-embed-text:latest", "mistral:7b", "llama3.2:latest" }, {}) == "llama3.2:latest", "Tutor prefers a small chat model and skips embedding models");
+        check (LocalAI::chooseModel ({ "mistral:7b", "llama3.2:latest" }, "mistral:7b") == "mistral:7b" && LocalAI::chooseModel ({}, {}).isEmpty(), "Tutor honours a chosen model and copes with none");
+        check (LocalAI::parseAnswer ("{\"message\":{\"role\":\"assistant\",\"content\":\"<think>hmm</think>**Cut** the mud.\"}}") == "Cut the mud.", "Tutor answers are cleaned of reasoning tags and markdown");
+        const auto request = LocalAI::buildRequest ("llama3.2", "sys", "why \"muddy\"?");
+        const auto parsedRequest = juce::JSON::parse (request);
+        check (parsedRequest.isObject() && ! (bool) parsedRequest.getProperty ("stream", true) && parsedRequest["messages"].size() == 2, "Tutor request is valid JSON with streaming off");
+
+        const auto prompt = vocal->tutorPrompt();
+        check (prompt.contains ("Lead vocal") && prompt.contains ("LUFS") && prompt.length() > 600, "Tutor is told about this track", juce::String (prompt.length()) + " characters");
+
+        const auto address = juce::SystemStats::getEnvironmentVariable ("MU_TEST_AI_URL", {});
+        if (address.isNotEmpty())
+        {
+            LocalAI ai;
+            ai.setAddressForTesting (address);
+            ai.refresh();
+            for (int i = 0; i < 200 && ! ai.getStatus().available; ++i) juce::Thread::sleep (20);
+            check (ai.getStatus().available && ai.getStatus().model == "llama3.2:latest", "Tutor finds the local model", ai.getStatus().model);
+            juce::Thread::sleep (50);
+            ai.ask (prompt, "Why does my vocal sound muddy?");
+            for (int i = 0; i < 400 && ai.getStatus().answerId == 0; ++i) juce::Thread::sleep (20);
+            const auto st = ai.getStatus();
+            check (st.answer.startsWith ("Mock answer to: Why does my vocal sound muddy?") && ! st.busy, "Tutor question goes out and the answer comes back", st.answer + st.error);
+        }
+        LocalAI absent;
+        absent.setAddressForTesting ("http://127.0.0.1:9");
+        absent.refresh();
+        juce::Thread::sleep (400);
+        for (int i = 0; i < 150 && absent.getStatus().available; ++i) juce::Thread::sleep (20);
+        check (! absent.getStatus().available, "Tutor stays off when no local AI is running");
     }
 
     // ---- the editor builds, runs and closes cleanly on every tab (needs a display)

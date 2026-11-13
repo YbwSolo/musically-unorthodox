@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.22)
-project(MusicallyUnorthodox VERSION 0.3.0 LANGUAGES C CXX)
+
+# Version is <base>.<build number>. CI passes its run number as the build, so every release has a higher
+# plugin version than the last one: hosts re-scan it and the in-plugin updater can tell which is newer.
+set(MU_VERSION_BASE "0.4")
+set(MU_BUILD_NUMBER "0" CACHE STRING "Build number (CI run number); 0 for local builds")
+set(MU_UPDATE_BASE_URL "https://github.com/YbwSolo/musically-unorthodox/releases/latest/download" CACHE STRING "Where the plugin looks for latest.json")
+project(MusicallyUnorthodox VERSION ${MU_VERSION_BASE}.${MU_BUILD_NUMBER} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -42,7 +48,7 @@ juce_add_plugin(MusicallyUnorthodox
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     COPY_PLUGIN_AFTER_BUILD TRUE
     AU_MAIN_TYPE kAudioUnitType_Effect
     VST3_CATEGORIES Fx Analyzer Dynamics EQ
@@ -71,6 +77,8 @@ target_sources(MusicallyUnorthodox PRIVATE
     Source/state/ParameterLayout.cpp
     Source/state/ChainPresets.cpp
     Source/session/SessionBus.cpp
+    Source/update/Updater.cpp
+    Source/ai/LocalAI.cpp
     Source/dsp/SpectrumAnalyzer.cpp
     ${MU_DSP_SOURCES}
     Source/ui/Theme.cpp
@@ -97,12 +105,15 @@ target_compile_definitions(MusicallyUnorthodox PUBLIC
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_REPORT_APP_USAGE=0
-    MU_VERSION_STRING="${PROJECT_VERSION}")
+    MU_VERSION_STRING="${PROJECT_VERSION}"
+    MU_BUILD_NUMBER=${MU_BUILD_NUMBER}
+    MU_UPDATE_BASE_URL="${MU_UPDATE_BASE_URL}")
 
 target_link_libraries(MusicallyUnorthodox PRIVATE
     MUAssets
     juce::juce_audio_utils
     juce::juce_dsp
+    juce::juce_cryptography
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)

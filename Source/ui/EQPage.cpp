@@ -51,6 +51,10 @@ public:
         }
         for (int bnd = 0; bnd < kNumEQBands; ++bnd)
             dynOffset[(size_t) bnd] = approach (dynOffset[(size_t) bnd], proc.getEQ().getBandDynamicOffsetDb (bnd), dt, 0.04f);
+        if (scan >= 0.0f) { scan += dt / 0.75f; if (scan > 1.2f) scan = -1.0f; }
+        highlightAlpha = approach (highlightAlpha, highlightOn ? 1.0f : 0.0f, dt, 0.08f);
+        for (int bnd = 0; bnd < kNumEQBands; ++bnd)
+            nodeScale[(size_t) bnd] = approach (nodeScale[(size_t) bnd], proc.getParam (ids::eqBandEnabled (bnd)) > 0.5f ? 1.0f : 0.0f, dt, 0.045f);
         ghostTimer -= dt;
         if (ghostTimer <= 0.0f) { ghostTimer = 0.5f; updateGhost(); }
         repaint();
@@ -79,8 +83,23 @@ public:
         if (showPre) drawSpectrum (g, r, pre, text.withAlpha (0.20f), text.withAlpha (0.06f), 1.0f);
         drawSpectrum (g, r, post, yellow.withAlpha (0.85f), yellow.withAlpha (0.13f), 1.4f);
         drawGhost (g, r);
+        if (highlightAlpha > 0.01f)
+        {
+            // the range a Mix Brain suggestion is talking about
+            const float x0 = freqToX (highlightHz / 1.35f, r.getX(), r.getWidth()), x1 = freqToX (highlightHz * 1.35f, r.getX(), r.getWidth());
+            g.setColour (yellow.withAlpha (0.13f * highlightAlpha)); g.fillRect (x0, r.getY(), x1 - x0, r.getHeight());
+            g.setColour (yellow.withAlpha (0.8f * highlightAlpha)); g.fillRect (freqToX (highlightHz, r.getX(), r.getWidth()) - 0.5f, r.getY(), 1.0f, r.getHeight());
+        }
         drawCurves (g, r);
         drawNodes (g, r);
+        if (scan >= 0.0f && scan <= 1.0f)
+        {
+            // one sweep across the display while the track is analysed
+            const float x = r.getX() + r.getWidth() * scan;
+            g.setGradientFill (juce::ColourGradient (yellow.withAlpha (0.0f), x - 90.0f, 0.0f, yellow.withAlpha (0.22f), x, 0.0f, false));
+            g.fillRect (x - 90.0f, r.getY(), 90.0f, r.getHeight());
+            g.setColour (yellow); g.fillRect (x - 1.0f, r.getY(), 2.0f, r.getHeight());
+        }
         g.restoreState();
 
         // readout
@@ -363,10 +382,11 @@ private:
         for (int b = 0; b < kNumEQBands; ++b)
         {
             const auto s = proc.getBandSettings (b);
-            if (! s.enabled) continue;
+            const float scale = nodeScale[(size_t) b];
+            if (scale < 0.04f) continue;                       // bands grow in when added and shrink away when removed
             const auto pos = nodePos (r, s);
             const bool sel = b == selected;
-            const float rad = (float) kNodeRadius + (b == hoverNode || b == dragBand ? 1.5f : 0.0f);
+            const float rad = ((float) kNodeRadius + (b == hoverNode || b == dragBand ? 1.5f : 0.0f)) * scale;
 
             if (s.dynamic && typeHasGain (s.type))
             {
@@ -406,6 +426,13 @@ private:
     float ghostTimer = 0.0f;
     int dragBand = -1, hoverNode = -1;
     float dragStartFreq = 1000.0f, dragStartGain = 0.0f, hoverFreq = -1.0f, hoverGain = 0.0f;
+    std::array<float, kNumEQBands> nodeScale {};
+    float scan = -1.0f, highlightHz = 1000.0f, highlightAlpha = 0.0f;
+    bool highlightOn = false;
+
+public:
+    void startScan() { scan = 0.0f; }
+    void setHighlight (float hz) { highlightOn = hz > 0.0f; if (highlightOn) highlightHz = hz; }
 };
 
 // =====================================================================================================
@@ -573,18 +600,37 @@ public:
         addAndMakeVisible (viewport);
     }
 
-    void setSuggestions (std::vector<Suggestion> s)
+    void setSuggestions (std::vector<Suggestion> s, float firstDelay = 0.0f)
     {
         cards.clear();
         for (size_t i = 0; i < s.size(); ++i)
         {
             auto c = std::make_unique<Card> (*this, s[i], (int) i);
+            c->delay += firstDelay;
             content.addAndMakeVisible (*c);
             cards.push_back (std::move (c));
         }
         layout();
     }
     bool isEmpty() const { return cards.empty(); }
+
+    // the frequency of the suggestion under the mouse, so the display can point at it
+    float hoveredHz() const
+    {
+        for (auto& c : cards)
+            if (c->isMouseOver (true))
+                return c->suggestion.kind == Suggestion::Kind::EqBand ? c->suggestion.band.freqHz : c->suggestion.freqHz;
+        return -1.0f;
+    }
+
+    void setAnswer (const juce::String& question, const juce::String& text, const juce::String& footer)
+    {
+        answer = std::make_unique<AnswerCard>();
+        answer->question = question; answer->text = text; answer->footer = footer;
+        content.addAndMakeVisible (*answer);
+        layout();
+        viewport.setViewPosition (0, 0);
+    }
     int remaining() const { int n = 0; for (auto& c : cards) if (! c->applied) ++n; return n; }
 
     void applyAll()
@@ -658,10 +704,41 @@ private:
         float appear = 0.0f, delay = 0.0f;
     };
 
+    struct AnswerCard : public juce::Component
+    {
+        int heightFor (int w) const
+        {
+            const float tw = (float) w - 24.0f;
+            return juce::roundToInt (12.0f + wrappedHeight (question, tw, bodyBold (12.0f), 1.25f) + 8.0f + wrappedHeight (text, tw, body (12.0f), 1.4f) + 10.0f + wrappedHeight (footer, tw, body (10.5f), 1.25f) + 12.0f);
+        }
+        void paint (juce::Graphics& g) override
+        {
+            fillPanel (g, getLocalBounds().toFloat(), raised);
+            g.setColour (yellow); g.fillRect (0, 10, 3, getHeight() - 20);
+            auto r = getLocalBounds().reduced (12, 0).toFloat();
+            r.removeFromTop (12.0f);
+            const float qh = wrappedHeight (question, r.getWidth(), bodyBold (12.0f), 1.25f);
+            drawWrapped (g, question, r.removeFromTop (qh), bodyBold (12.0f), text_(), 1.25f);
+            r.removeFromTop (8.0f);
+            const float th = wrappedHeight (text, r.getWidth(), body (12.0f), 1.4f);
+            drawWrapped (g, text, r.removeFromTop (th), body (12.0f), textDim, 1.4f);
+            r.removeFromTop (10.0f);
+            drawWrapped (g, footer, r, body (10.5f), textMute, 1.25f);
+        }
+        static juce::Colour text_() { return theme::text; }
+        juce::String question, text, footer;
+    };
+
     void layout()
     {
         const int w = juce::jmax (100, viewport.getWidth() - 10);
         int y = 0;
+        if (answer != nullptr)
+        {
+            const int h = answer->heightFor (w);
+            answer->setBounds (0, y, w, h);
+            y += h + 8;
+        }
         for (auto& c : cards)
         {
             const int h = c->heightFor (w);
@@ -676,6 +753,7 @@ private:
     juce::Viewport viewport;
     juce::Component content;
     std::vector<std::unique_ptr<Card>> cards;
+    std::unique_ptr<AnswerCard> answer;
 };
 
 // =====================================================================================================
@@ -690,10 +768,23 @@ EQPage::EQPage (MUProcessor& p, std::function<void (const juce::String&)> status
     for (auto* c : std::initializer_list<juce::Component*> { &eqPower, &autoGain, &deltaButton, &resetButton, &showInput, &analyseButton, &applyAllButton, &captureButton, &matchButton, &matchAmount })
         addAndMakeVisible (c);
 
+    // optional AI tutor: only shown when a local model is available
+    askBox.setFont (body (12.5f));
+    askBox.setTextToShowWhenEmpty ("Ask the AI tutor about this track", textMute);
+    askBox.setIndents (8, 6);
+    askBox.onReturnKey = [this] { askTutor(); juce::Component::unfocusAllComponents(); };
+    askBox.onEscapeKey = [this] { askBox.clear(); juce::Component::unfocusAllComponents(); };
+    setHelp (askBox, "eq.ask");
+    styleButton (askButton, "Ask", false, "eq.ask");
+    askButton.onClick = [this] { askTutor(); };
+    addChildComponent (askBox); addChildComponent (askButton);
+    lastAnswerId = proc.getAI().getStatus().answerId;
+
     deltaButton.setClickingTogglesState (true);
     deltaButton.onClick = [this] { proc.setListenMode (deltaButton.getToggleState() ? Listen::EqDelta : Listen::Normal); };
     resetButton.onClick = [this] { proc.resetEQ(); setStatus ("EQ reset to flat."); };
     showInput.setButtonText ("Show input");
+    showInput.setWantsKeyboardFocus (false);
     showInput.setToggleState (true, juce::dontSendNotification);
     showInput.onClick = [this] { graph->showPre = showInput.getToggleState(); };
     setHelp (showInput, "eq.pre");
@@ -744,10 +835,21 @@ void EQPage::runAnalysis()
     juce::String status;
     auto found = proc.analyse (status);
     brainStatus = status;
-    suggestions->setSuggestions (std::move (found));
+    const bool any = ! found.empty();
+    suggestions->setSuggestions (std::move (found), any ? 0.6f : 0.0f);
+    if (proc.secondsHeard() >= 3.0f) graph->startScan();
     applyAllButton.setVisible (suggestions->remaining() > 1);
     resized();
     repaint();
+}
+
+void EQPage::askTutor()
+{
+    const auto question = askBox.getText().trim();
+    if (question.isEmpty() || proc.getAI().getStatus().busy) return;
+    askedQuestion = question;
+    proc.getAI().ask (proc.tutorPrompt(), question);
+    askButton.setButtonText ("...");
 }
 
 void EQPage::refreshReference()
@@ -760,6 +862,7 @@ void EQPage::refreshReference()
 
 void EQPage::tick (float dt)
 {
+    graph->setHighlight (suggestions->hoveredHz());
     graph->tick (dt);
     suggestions->tick (dt);
     chips->repaint();
@@ -770,6 +873,20 @@ void EQPage::tick (float dt)
         if (controls != nullptr) { controls->refresh(); controls->repaint(); }
         refreshReference();
         applyAllButton.setVisible (suggestions->remaining() > 1);
+
+        const auto ai = proc.getAI().getStatus();
+        if (ai.available != tutorShown) { tutorShown = ai.available; askBox.setVisible (tutorShown); askButton.setVisible (tutorShown); resized(); repaint(); }
+        if (! ai.busy) askButton.setButtonText ("Ask");
+        if (ai.answerId != lastAnswerId)
+        {
+            lastAnswerId = ai.answerId;
+            if (ai.answer.isNotEmpty())
+            {
+                suggestions->setAnswer (askedQuestion, ai.answer, "Answer from an AI model (" + ai.model + ") running on this computer. It can be wrong: check it with your ears.");
+                askBox.clear();
+            }
+            else setStatus (ai.error);
+        }
     }
 }
 
@@ -828,6 +945,14 @@ void EQPage::resized()
     const int statusH = juce::roundToInt (wrappedHeight (brainStatus, (float) b.getWidth(), body (12.0f))) + 4;
     statusArea = b.removeFromTop (statusH);
     b.removeFromTop (10);
+    if (tutorShown)
+    {
+        auto ask = b.removeFromTop (28);
+        askButton.setBounds (ask.removeFromRight (52));
+        ask.removeFromRight (6);
+        askBox.setBounds (ask);
+        b.removeFromTop (10);
+    }
     b.removeFromBottom (12);
     referenceArea = b.removeFromBottom (98);
     auto row = referenceArea.withTrimmedTop (42).withHeight (28);

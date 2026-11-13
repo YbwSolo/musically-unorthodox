@@ -564,6 +564,63 @@ juce::String MUProcessor::applySuggestion (const Suggestion& s)
     return {};
 }
 
+// ---- AI tutor ------------------------------------------------------------------------------------
+juce::String MUProcessor::tutorPrompt()
+{
+    juce::String s;
+    s << "You are the tutor inside Musically Unorthodox, a mixing and mastering plugin used by music students. "
+         "Answer in plain English that a beginner can follow, in no more than 110 words, with no markdown and no headings. "
+         "Only recommend things this plugin can do, and say which tab they are on. "
+         "Tabs: Mix (balance track levels, fix collisions between tracks), EQ (8 bands, dynamic bands, Analyse button), "
+         "Dynamics (compressor with Clean, Punch, Smooth and Glue styles, gate, de-esser), "
+         "Tone (Smooth resonance tamer, saturation, level rider, vocal space, stereo width, mono bass), Master (loudness target, limiter). "
+         "Stay consistent with these facts: cut problems before boosting. A compressor turns down what goes over the threshold; the ratio sets how much; "
+         "attack is how fast it turns down and release is how fast it lets go. Typical vocal compression is 3 to 6 dB on the loud words. "
+         "A de-esser works around 5 to 8 kHz and goes after the compressor. Streaming services play music at about -14 LUFS; keep true peak under -1 dB. "
+         "Use only the measurements given below and never invent numbers. If the measurements do not answer the question, say what to listen for instead.\n\n";
+
+    const auto role = getEffectiveRole();
+    s << "This track: " << roleNames()[(int) role] << ". ";
+    if (! isPlaying() && loudness.getIntegrated() < -70.0f) s << "Nothing has been played through it yet, so there are no measurements. ";
+    else
+        s << "Loudness " << juce::String (loudness.getShortTerm(), 1) << " LUFS short-term, " << juce::String (loudness.getIntegrated(), 1) << " LUFS integrated, true peak "
+          << juce::String (loudness.getTruePeakHold(), 1) << " dB, crest factor " << juce::String (loudness.getCrestFactorDb(), 1) << " dB. ";
+
+    if (getParam (ids::compEnabled) > 0.5f)
+        s << "Compressor on: threshold " << getParamText (ids::compThreshold) << ", ratio " << getParamText (ids::compRatio) << ", attack " << getParamText (ids::compAttack)
+          << ", release " << getParamText (ids::compRelease) << ", reducing by " << juce::String (-comp.getGainReductionDb(), 1) << " dB right now. ";
+    else s << "Compressor off. ";
+    juce::StringArray bands;
+    for (int b = 0; b < kNumEQBands; ++b)
+    {
+        const auto e = getBandSettings (b);
+        if (! e.enabled) continue;
+        bands.add (eqTypeNames()[(int) e.type] + " at " + juce::String (juce::roundToInt (e.freqHz)) + " Hz"
+                   + (e.type == EQType::Bell || e.type == EQType::LowShelf || e.type == EQType::HighShelf ? " " + juce::String (e.dynamic ? e.rangeDb : e.gainDb, 1) + " dB" + (e.dynamic ? " dynamic" : "") : ""));
+    }
+    s << (bands.isEmpty() ? "EQ flat. " : "EQ bands: " + bands.joinIntoString ("; ") + ". ");
+    juce::StringArray on;
+    if (getParam (ids::gateOn) > 0.5f) on.add ("gate");
+    if (getParam (ids::dsOn) > 0.5f) on.add ("de-esser");
+    if (getParam (ids::smOn) > 0.5f) on.add ("Smooth");
+    if (getParam (ids::satOn) > 0.5f) on.add ("saturation");
+    if (getParam (ids::riderOn) > 0.5f) on.add ("level rider");
+    if (getParam (ids::vsEnabled) > 0.5f) on.add ("vocal space");
+    if (role == Role::Master && getParam (ids::peakGuard) > 0.5f) on.add ("limiter");
+    s << "Also switched on: " << (on.isEmpty() ? juce::String ("nothing") : on.joinIntoString (", ")) << ". ";
+
+    juce::String status;
+    const auto found = analyse (status);
+    if (secondsHeard() < 3.0f) s << "Tone analysis: not enough audio heard yet. ";
+    else if (found.empty()) s << "Tone analysis: nothing stands out for this kind of track. ";
+    else
+    {
+        s << "Tone analysis found: ";
+        for (auto& f : found) s << f.title << " (suggested: " << f.action << "); ";
+    }
+    return s;
+}
+
 // ---- Reference -----------------------------------------------------------------------------------
 juce::String MUProcessor::captureReference()
 {

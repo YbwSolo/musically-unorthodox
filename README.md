@@ -9,11 +9,24 @@ stereo tools) and explains each control as you use it.
 Internal tool for Musically Unorthodox (In Music In Media C.I.C., Northampton). Not for public distribution.
 Everything runs on the computer; nothing is sent anywhere.
 
-## Getting the installer
+## Installing and updating
 
 Every push to `main` builds the AU, VST3 and standalone on a Mac runner, runs the tests and Apple's `auval`,
-and attaches a double-click `.pkg` to a Release on the repo page. Download the latest `.pkg`, run it, restart Logic.
-If macOS says it can't be opened: right-click the .pkg > Open > Open (it is not notarised).
+and attaches a double-click `.pkg` to a Release on the repo page. Install that `.pkg` once on each Mac and restart
+Logic. If macOS says it can't be opened: right-click the .pkg > Open > Open (it is not notarised).
+
+After that the plugin updates itself. When a newer build exists an **Update ready** button appears in the header;
+Settings > Install update downloads it, checks it against its checksum and replaces the plugin in place. It loads
+the next time the host is opened. Nothing to download by hand.
+
+How it works: each release carries `latest.json` (build number, file name, SHA-256) and
+`MusicallyUnorthodox-bundles.zip`. The plugin reads `MU_UPDATE_BASE_URL/latest.json` (set in `CMakeLists.txt`),
+at most once every six hours per computer. The installer hands ownership of the two plugin bundles to the person
+who ran it, so no administrator password is needed to update.
+
+**The update address has to be reachable without a login.** While this repository is private, GitHub answers the
+plugin with "not found". Either make the repository public, or publish the two feed files somewhere public and
+point `MU_UPDATE_BASE_URL` at it.
 
 Logic: Audio Units > Musically Unorthodox. Also installs the VST3 and a standalone app in Applications.
 
@@ -30,7 +43,16 @@ Logic: Audio Units > Musically Unorthodox. Also installs the VST3 and a standalo
    release check.
 
 Hover over any control and the bar along the bottom says what it does, when to use it and typical settings.
-The **Learn** tab has ten short lessons with diagrams you can drag.
+The **Learn** tab has ten lessons, each a few steps long. Every step has an animated example drawn from the same
+maths the plugin uses, and several end with a "your turn" exercise.
+
+## AI tutor (optional, free)
+
+If [Ollama](https://ollama.com) is running on the Mac with a chat model installed (`ollama pull llama3.2`), an
+"Ask the AI tutor" box appears in the Mix Brain panel on the EQ tab. The question goes to the model on that
+computer together with this track's measurements and a short fact sheet; nothing leaves the machine and there is
+no account or key. Without Ollama the box simply is not shown. Answers come from a small model and can be wrong,
+which the plugin says under every answer.
 
 ## Tabs
 
@@ -41,7 +63,7 @@ The **Learn** tab has ten short lessons with diagrams you can drag.
 | Dynamics | Compressor with four styles (Clean, Punch, Smooth, Glue), sidechain high-pass, parallel mix, scrolling level and reduction display, transfer curve, Auto set; gate; de-esser |
 | Tone | Smooth (resonance tamer), saturation (tape, tube, warm), level rider, Vocal space, stereo width and mono bass, output |
 | Master | Target modes (-18 / -14 / -9 LUFS), true-peak limiter with look-ahead, auto level, loudness history, release check |
-| Learn | Lessons: mix order, the frequency map, EQ, compression, attack and release, gates and de-essers, saturation, loudness, the vocal chain, vocals over a two-track beat |
+| Learn | Animated lessons: how sound works, what an EQ is, masking, what a compressor is, attack and release, gate and de-esser, saturation, stereo and mono, loudness and mastering, putting it together |
 
 ## What it does not do (yet)
 
@@ -50,6 +72,7 @@ The **Learn** tab has ten short lessons with diagrams you can drag.
 - Smooth works on 24 quarter-octave bands, not per FFT bin like a full spectral processor.
 - No external sidechain input: instances share information through the session instead.
 - The Mix Brain is a rule-based comparison against role tone curves and the other tracks. It is not a trained model.
+  The AI tutor is separate, optional, and only explains; it never changes settings.
 - It cannot change the settings of other plugins; it sits after them and corrects the result.
 
 ## Building on a Mac by hand
@@ -84,10 +107,14 @@ Source/
   analysis/TonalAnalysis.*       role tone curves, suggestions, clash wording, EQ match
   session/SessionBus.*           process-wide bus shared by all instances, learn and balance, shared reference
   session/BalanceEngine.*        role targets, balance plan, masking detection
+  update/Updater.*               in-plugin updates: feed check, download, checksum, in-place install
+  ai/LocalAI.*                   optional tutor through a local Ollama server
+  state/LocalSettings.h          per-computer settings (update checks, lesson progress)
   ui/                            theme, icons, look and feel, widgets, help text, pages
   tests/TestMain.cpp             DSP and analysis tests
   tests/SessionHarness.cpp       4-instance offline session test
   tests/PreviewHarness.cpp       live UI preview fed with synthetic stems
+  tests/mock_ollama.py           stand-in AI server for the harness
 ```
 
 ## Notes

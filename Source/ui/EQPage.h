@@ -24,6 +24,7 @@ public:
 private:
     void runAnalysis();
     void refreshReference();
+    void askTutor();
 
     MUProcessor& proc;
     std::function<void (const juce::String&)> setStatus;
@@ -42,5 +43,26 @@ private:
     juce::String brainStatus, referenceText;
     juce::Rectangle<int> brainArea, statusArea, referenceArea, toolbarArea;
     float refreshTimer = 0.0f;
+    /** Only takes the keyboard after a click, so opening the plugin never steals the host's keys. */
+    struct AskEditor : juce::TextEditor
+    {
+        AskEditor() { setWantsKeyboardFocus (false); }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            setWantsKeyboardFocus (true);
+            grabKeyboardFocus();
+            juce::TextEditor::mouseDown (e);
+        }
+        void focusLost (FocusChangeType cause) override
+        {
+            juce::TextEditor::focusLost (cause);
+            setWantsKeyboardFocus (false);
+        }
+    };
+    AskEditor askBox;
+    juce::TextButton askButton;
+    juce::String askedQuestion;
+    int lastAnswerId = 0;
+    bool tutorShown = false;
 };
 }

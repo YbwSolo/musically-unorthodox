@@ -32,12 +32,13 @@ private:
     float blockX = 0.0f, blockW = 0.0f;
     bool blockPlaced = false;
     juce::Rectangle<int> tabArea;
-    juce::TextButton presetButton;
+    juce::TextButton presetButton, updateButton;
     Segmented abSwitch { juce::StringArray { "A", "B" } };
     IconButton bypassButton { "bypass", "header.bypass" };
     juce::TextButton settingsButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAtt;
     juce::String shownPreset;
-    int shownAB = -1;
+    int shownAB = -1, shownUpdate = -1;
+    float updatePulse = 0.0f;
 };
 }

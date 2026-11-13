@@ -44,7 +44,7 @@ private:
     LearnPage learnPage;
     SettingsPanel settings;
     int tab = 0;
-    float pageAnim = 1.0f;
+    float pageAnim = 1.0f, slideFrom = 0.0f;
     double lastTick = 0.0;
     static constexpr int kBaseW = 1180, kBaseH = 720;
 };

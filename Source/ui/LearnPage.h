@@ -1,11 +1,13 @@
 #pragma once
 #include "Widgets.h"
+#include "../state/LocalSettings.h"
 
 namespace mu
 {
-class LessonDiagram;
+class LessonStage;
 
-// Short lessons with diagrams you can drag, and a button that takes each idea to your own track.
+// Step-by-step lessons. Each step is a couple of sentences under an animated example that is drawn from the
+// same maths the plugin uses, so what moves on screen is what the processing really does.
 class LearnPage : public juce::Component
 {
 public:
@@ -19,16 +21,21 @@ public:
     void mouseExit (const juce::MouseEvent&) override;
 
 private:
-    void showLesson (int i);
+    void showLesson (int lesson, int step = 0);
+    void showStep (int step);
     int lessonAt (juce::Point<int> p) const;
+    int stepDotAt (juce::Point<int> p) const;
+    juce::Rectangle<int> lessonRow (int lesson) const;
+    bool isDone (int lesson) const;
 
     MUProcessor& proc;
     std::function<void (const juce::String&)> setStatus;
     std::function<void (int)> goToTab;
-    std::unique_ptr<LessonDiagram> diagram;
-    juce::TextButton tryButton;
-    juce::Rectangle<int> listArea, contentArea, textArea;
-    int current = 0, hover = -1;
-    float blockY = 0.0f, fade = 1.0f;
+    juce::SharedResourcePointer<LocalSettings> settings;
+    std::unique_ptr<LessonStage> stage;
+    juce::TextButton prevButton, nextButton, tryButton;
+    juce::Rectangle<int> listArea, contentArea, textArea, dotsArea;
+    int lesson = 0, step = 0, hover = -1;
+    float blockY = 0.0f, textFade = 1.0f, dotAnim = 0.0f;
 };
 }

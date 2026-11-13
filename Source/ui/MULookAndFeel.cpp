@@ -41,6 +41,7 @@ void MULookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, in
     const float radius = side * 0.5f - 2.0f;
     const bool enabled = s.isEnabled();
     const bool hot = s.isMouseOverOrDragging();
+    if (s.getProperties().contains ("animPos")) pos = (float) s.getProperties()["animPos"];      // a value gliding to its new place
     const float angle = startAngle + pos * (endAngle - startAngle);
     const float track = juce::jmax (2.5f, side * 0.07f);
 

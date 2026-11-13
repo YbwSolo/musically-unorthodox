@@ -5,7 +5,8 @@ set -e
 cd "$(dirname "$0")/.."
 ART="${1:-build-mac/MusicallyUnorthodox_artefacts/Release}"
 BUILD="${2:-local}"
-VERSION="$(grep -m1 'project(MusicallyUnorthodox VERSION' CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+).*/\1/')"
+BASE="$(grep -m1 'set(MU_VERSION_BASE' CMakeLists.txt | sed -E 's/.*"([0-9.]+)".*/\1/')"
+if [ "$BUILD" = "local" ]; then VERSION="$BASE.0"; else VERSION="$BASE.$BUILD"; fi
 NAME="Musically Unorthodox"
 
 AU="$ART/AU/$NAME.component"
@@ -28,10 +29,35 @@ codesign --force --deep --sign - "pkgroot/Library/Audio/Plug-Ins/Components/$NAM
 codesign --force --deep --sign - "pkgroot/Library/Audio/Plug-Ins/VST3/$NAME.vst3" || true
 [ -d "pkgroot/Applications/$NAME.app" ] && codesign --force --deep --sign - "pkgroot/Applications/$NAME.app" || true
 
-pkgbuild --root pkgroot --identifier com.musicallyunorthodox.mixassistant.pkg --version "$VERSION" \
+# After installing, hand the two plugin bundles to the person at the keyboard, so the plugin can update
+# itself later without asking for an administrator password.
+rm -rf pkgscripts && mkdir pkgscripts
+cat > pkgscripts/postinstall <<'POST'
+#!/bin/bash
+OWNER="$(stat -f%Su /dev/console 2>/dev/null)"
+if [ -n "$OWNER" ] && [ "$OWNER" != "root" ]; then
+  chown -R "$OWNER" "/Library/Audio/Plug-Ins/Components/Musically Unorthodox.component" 2>/dev/null || true
+  chown -R "$OWNER" "/Library/Audio/Plug-Ins/VST3/Musically Unorthodox.vst3" 2>/dev/null || true
+fi
+exit 0
+POST
+chmod +x pkgscripts/postinstall
+
+pkgbuild --root pkgroot --scripts pkgscripts --identifier com.musicallyunorthodox.mixassistant.pkg --version "$VERSION" \
          --install-location / "dist/MusicallyUnorthodox-$VERSION-build$BUILD.pkg"
 
-( cd pkgroot/Library/Audio/Plug-Ins && zip -qry "../../../../dist/MusicallyUnorthodox-$VERSION-build$BUILD-bundles.zip" Components VST3 )
-rm -rf pkgroot
+ZIP="MusicallyUnorthodox-$VERSION-build$BUILD-bundles.zip"
+( cd pkgroot/Library/Audio/Plug-Ins && zip -qry "../../../../dist/$ZIP" Components VST3 )
+rm -rf pkgroot pkgscripts
+
+# Update feed read by the plugin: which build is newest, where its bundles are, and a checksum.
+# Stable names so "releases/latest/download/<name>" always points at the newest build.
+cp "dist/$ZIP" dist/MusicallyUnorthodox-bundles.zip
+SHA="$(shasum -a 256 "dist/$ZIP" | cut -d' ' -f1)"
+NOTES="$(git log -1 --pretty=%B 2>/dev/null | grep -v -e '^Co-Authored-By' -e '^Claude-Session' | head -24 | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))' 2>/dev/null || echo '""')"
+BUILDNUM="$BUILD"; [ "$BUILD" = "local" ] && BUILDNUM=0
+cat > dist/latest.json <<JSON
+{ "build": $BUILDNUM, "version": "$VERSION", "file": "MusicallyUnorthodox-bundles.zip", "sha256": "$SHA", "notes": $NOTES }
+JSON
 echo "Installer written to dist/"
 ls -la dist

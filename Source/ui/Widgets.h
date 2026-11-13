@@ -9,7 +9,7 @@ namespace mu
 class MUProcessor;
 
 // Rotary control: label above, value underneath (click the value to type), bound to a parameter.
-class Knob : public juce::Component
+class Knob : public juce::Component, private juce::Timer
 {
 public:
     Knob (MUProcessor&, const juce::String& paramId, const juce::String& label, const juce::String& helpKey = {});
@@ -20,8 +20,10 @@ public:
     juce::Slider slider;
 
 private:
+    void timerCallback() override;
     juce::String label;
     bool dimmed = false;
+    float shown = -1.0f;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
 };
 

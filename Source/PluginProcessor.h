@@ -19,6 +19,9 @@
 #include "dsp/History.h"
 #include "analysis/TonalAnalysis.h"
 #include "session/SessionBus.h"
+#include "update/Updater.h"
+#include "ai/LocalAI.h"
+#include "state/LocalSettings.h"
 
 namespace mu
 {
@@ -75,6 +78,10 @@ public:
     // Access for the editor
     juce::AudioProcessorValueTreeState apvts;
     SessionBus& getBus() { return *bus; }
+    Updater& getUpdater() { return *updater; }
+    LocalAI& getAI() { return *ai; }
+    LocalSettings& getSettings() { return *settings; }
+    juce::String tutorPrompt();          // what the AI tutor is told about this track and this plugin
     const LoudnessMeter& getLoudness() const { return loudness; }                // what leaves the plugin
     const LoudnessMeter& getMixMeter() const { return mixMeter; }                // master only: the mix before the mastering stage
     const SpectrumAnalyzer& getSpectrum() const { return spectrum; }          // after the chain
@@ -163,6 +170,9 @@ private:
     void applySnapshot (const std::vector<float>& values);
 
     juce::SharedResourcePointer<SessionBus> bus;
+    juce::SharedResourcePointer<Updater> updater;
+    juce::SharedResourcePointer<LocalAI> ai;
+    juce::SharedResourcePointer<LocalSettings> settings;
     int slot = -1;
     int instanceNumber = 0;
     juce::String trackName;

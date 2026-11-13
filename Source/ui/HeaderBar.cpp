@@ -36,6 +36,10 @@ HeaderBar::HeaderBar (MUProcessor& p) : proc (p)
     bypassAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ids::bypass, bypassButton);
     addAndMakeVisible (bypassButton);
 
+    styleButton (updateButton, "Update", true, "header.update");
+    updateButton.onClick = [this] { if (onSettings) onSettings(); };
+    addChildComponent (updateButton);
+
     styleButton (settingsButton, "Settings", false, "header.settings");
     settingsButton.onClick = [this] { if (onSettings) onSettings(); };
     addAndMakeVisible (settingsButton);
@@ -120,6 +124,21 @@ void HeaderBar::tick (float dt)
         shownPreset = name;
         presetButton.setButtonText (name.isEmpty() ? "Presets" : name);
     }
+    // an update that is waiting, or one that needs a restart, gets a button of its own
+    const auto phase = proc.getUpdater().getState().phase;
+    const int want = phase == UpdateState::Phase::Available ? 1 : phase == UpdateState::Phase::Installed ? 2 : 0;
+    if (want != shownUpdate)
+    {
+        shownUpdate = want;
+        updateButton.setButtonText (want == 2 ? "Restart to finish" : "Update ready");
+        updateButton.setVisible (want != 0);
+        resized();
+    }
+    if (want != 0)
+    {
+        updatePulse = std::fmod (updatePulse + dt, 2.4f);
+        updateButton.setAlpha (0.82f + 0.18f * std::cos (updatePulse / 2.4f * juce::MathConstants<float>::twoPi));
+    }
     if (proc.getABSlot() != shownAB)
     {
         shownAB = proc.getABSlot();
@@ -158,16 +177,16 @@ void HeaderBar::resized()
     auto r = getLocalBounds().reduced (16, 0);
     const int logoW = juce::roundToInt (34.0f * (logo.isValid() ? (float) logo.getWidth() / (float) logo.getHeight() : 4.9f));
     r.removeFromLeft (logoW + 28);
-    auto right = r.removeFromRight (392).withSizeKeepingCentre (392, 28);
+    auto right = r.removeFromRight (400).withSizeKeepingCentre (400, 28);
     settingsButton.setBounds (right.removeFromRight (76));
     right.removeFromRight (8);
     bypassButton.setBounds (right.removeFromRight (28));
     right.removeFromRight (8);
     abSwitch.setBounds (right.removeFromRight (56));
     right.removeFromRight (8);
+    if (updateButton.isVisible()) { updateButton.setBounds (right.removeFromLeft (shownUpdate == 2 ? 118 : 96)); right.removeFromLeft (8); }
     presetButton.setBounds (right);
-    tabArea = r;
-    blockPlaced = false;
+    if (tabArea != r) { tabArea = r; blockPlaced = false; }
 }
 
 void HeaderBar::mouseDown (const juce::MouseEvent& e)

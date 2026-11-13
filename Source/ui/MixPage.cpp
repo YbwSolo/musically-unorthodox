@@ -22,6 +22,7 @@ MixPage::MixPage (MUProcessor& p, std::function<void (const juce::String&)> stat
         setStatus (plan.usable ? "Balanced. " + plan.summary : juce::String ("Nothing to balance yet. Play the song so every track can be measured."));
     };
     keepBalanced.setButtonText ("Keep balanced");
+    keepBalanced.setWantsKeyboardFocus (false);
     keepBalanced.setToggleState (proc.getBus().isAutoBalance(), juce::dontSendNotification);
     keepBalanced.onClick = [this] { proc.setAutoBalanceMode (keepBalanced.getToggleState()); proc.getBus().setAutoBalance (keepBalanced.getToggleState(), proc.currentTargets()); };
     setHelp (keepBalanced, "mix.auto");
@@ -106,6 +107,7 @@ void MixPage::tick (float dt)
     learnProgress = learn.active ? juce::jlimit (0.0f, 1.0f, learnProgress + dt / 20.0f) : approach (learnProgress, 0.0f, dt, 0.15f);
     if (learn.active && learnProgress < learn.progress - 0.05f) learnProgress = learn.progress;
     pulse = playing ? std::fmod (pulse + dt, 2.0f) : 0.0f;
+    march = std::fmod (march + dt * 26.0f, 10.0f);
     repaint();
 }
 
@@ -288,7 +290,10 @@ void MixPage::drawLanes (juce::Graphics& g)
             if (std::abs (targetX - nowX) > 6.0f)
             {
                 const float y = bar.getCentreY(), dir = targetX > nowX ? 1.0f : -1.0f;
-                g.fillRect (juce::jmin (nowX, targetX), y - 1.0f, std::abs (targetX - nowX), 2.0f);
+                // dashes that travel towards where the track should be
+                const float a = juce::jmin (nowX, targetX), b = juce::jmax (nowX, targetX) - 8.0f;
+                for (float x = a - 10.0f + (dir > 0.0f ? march : 10.0f - march); x < b; x += 10.0f)
+                    if (x + 6.0f > a) g.fillRect (juce::jmax (a, x), y - 1.0f, juce::jmin (6.0f, b - x), 2.0f);
                 juce::Path head2;
                 head2.addTriangle (targetX - dir * 2.0f, y, targetX - dir * 9.0f, y - 5.0f, targetX - dir * 9.0f, y + 5.0f);
                 g.fillPath (head2);
