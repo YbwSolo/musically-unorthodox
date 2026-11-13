@@ -850,6 +850,7 @@ void EQPage::askTutor()
     askedQuestion = question;
     proc.getAI().ask (proc.tutorPrompt(), question);
     askButton.setButtonText ("...");
+    setStatus ("The tutor is thinking. The first answer after a break takes a little longer while it wakes up.");
 }
 
 void EQPage::refreshReference()

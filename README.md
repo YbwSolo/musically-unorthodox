@@ -63,6 +63,11 @@ Needs macOS 13.3 or newer. Settings > Remove deletes it again.
 Every release build installs the tutor on the build Mac and asks it two questions with the real model before
 anything is published (`MUTutorCheck`), so a broken tutor never ships.
 
+What the tutor is told lives in `MUProcessor::tutorPrompt()`: where everything is in the plugin, the facts the
+lessons teach, two example answers, and this track's measurements and Mix Brain suggestions. To tune it, push to a
+branch called `tutor-tuning`: the "Tutor answers check" workflow asks every question in
+`Source/tests/tutor_questions.txt` with the real model and prints the answers, without publishing anything.
+
 If the built-in tutor is not installed but [Ollama](https://ollama.com) is running with a chat model, the plugin uses that and no download
 is needed.
 

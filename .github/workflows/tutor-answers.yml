@@ -1,0 +1,38 @@
+name: Tutor answers check
+
+# Asks the built-in AI tutor a list of questions with the real helper and the real model, so the wording of the
+# tutor's fact sheet can be tuned by reading real answers. Does not build or publish the plugin.
+on:
+  push:
+    branches: [ tutor-tuning ]
+  workflow_dispatch:
+
+jobs:
+  ask:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CMake and Ninja
+        run: brew install cmake ninja || true
+
+      - name: Build the check tool
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_BUILD_TESTS=ON
+          cmake --build build --target MUTutorCheck
+
+      - name: Keep the tutor model between runs
+        uses: actions/cache@v4
+        with:
+          path: tutor-check
+          key: tutor-model-6c1a2b411610
+
+      - name: Ask the tutor
+        env:
+          MU_TUTOR_DIR: ${{ github.workspace }}/tutor-check
+          MU_TUTOR_ARGS: "--device none"
+        run: |
+          BIN="$(find build -type f -name MUTutorCheck -perm +111 | head -1)"
+          QUESTIONS=()
+          while IFS= read -r LINE; do [ -n "$LINE" ] && QUESTIONS+=("$LINE"); done < Source/tests/tutor_questions.txt
+          "$BIN" "https://github.com/YbwSolo/musically-unorthodox/releases/latest/download" Source/tests/sample_tutor_prompt.txt "${QUESTIONS[@]}"
