@@ -23,9 +23,11 @@ class GainReductionMeter : public juce::Component
 {
 public:
     void setReduction (float db);
+    void setLabel (const juce::String& s) { label = s; }
     void paint (juce::Graphics&) override;
 private:
     float shown = 0.0f;
+    juce::String label;
 };
 
 // Big numeric readout with caption, optionally coloured against a target.

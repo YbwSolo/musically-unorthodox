@@ -20,6 +20,14 @@ public:
     virtual bool fillBandsDb (std::array<float, kAnalysisBands>& out) const = 0;
     virtual void applyMaskingCut (float hz, float db) = 0;
     virtual void setSessionInstanceNumber (int n) = 0;
+    virtual void resetMeasurement() = 0;
+};
+
+struct LearnState
+{
+    bool active = false;
+    float progress = 0.0f;        // 0..1
+    juce::String message;
 };
 
 // One process-wide bus shared by every instance in the host (via juce::SharedResourcePointer).
@@ -61,6 +69,12 @@ public:
 
     void setAutoBalance (bool on, BalanceTargets targets);
     bool isAutoBalance() const { return autoBalance; }
+
+    // "Learn & balance": wipe every instance's integrated reading, listen for a while, then apply the plan.
+    void startLearn (float seconds, BalanceTargets targets);
+    void cancelLearn();
+    LearnState getLearnState() const;
+    void resetAllMeasurements();
     BalanceTargets getTargets() const { return targets; }
     BalancePlan getLastPlan() const;
     std::array<float, kAnalysisBands> bandCentres() const;
@@ -76,5 +90,8 @@ private:
     BalanceTargets targets;
     BalancePlan lastPlan;
     int nextInstanceNumber = 1;
+    bool learning = false;
+    double learnStartMs = 0.0, learnLengthMs = 0.0;
+    juce::String learnMessage;
 };
 }

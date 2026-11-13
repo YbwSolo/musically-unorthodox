@@ -4,22 +4,6 @@
 
 namespace mu
 {
-float roleOffsetLu (Role r) noexcept
-{
-    switch (r)
-    {
-        case Role::Vocal:        return 0.0f;
-        case Role::BackingVocal: return -6.0f;
-        case Role::Kick:         return -3.5f;
-        case Role::Bass808:      return -2.5f;
-        case Role::Drums:        return -4.5f;
-        case Role::Melody:       return -8.0f;
-        case Role::Beat:         return -1.5f;
-        case Role::FX:           return -12.0f;
-        default:                 return -4.0f;
-    }
-}
-
 int rolePriority (Role r) noexcept
 {
     switch (r)
@@ -68,12 +52,12 @@ BalancePlan computeBalance (const std::vector<TrackInfo>& tracks, const BalanceT
     for (auto* p : parts) if (p->role == Role::Vocal) { anchor = p; break; }
     if (anchor == nullptr)
         anchor = *std::max_element (parts.begin(), parts.end(), [] (auto* a, auto* b) { return a->levelLufs < b->levelLufs; });
-    const float anchorOffset = roleOffsetLu (anchor->role);
+    const float anchorOffset = t.offsetFor (anchor->role);
 
     // 2. Desired level of each track relative to the anchor's current level.
     std::vector<float> desired (parts.size());
     for (size_t i = 0; i < parts.size(); ++i)
-        desired[i] = anchor->levelLufs + (roleOffsetLu (parts[i]->role) - anchorOffset);
+        desired[i] = anchor->levelLufs + (t.offsetFor (parts[i]->role) - anchorOffset);
 
     // 3. Global shift so the projected master lands on the target. Projected master is derived from the
     //    measured master when there is one (keeps bus processing / correlation in the estimate),

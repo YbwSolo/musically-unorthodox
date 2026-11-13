@@ -47,6 +47,7 @@ int main()
     if (auto* p = master->apvts.getParameter (ids::role)) p->setValueNotifyingHost (p->convertTo0to1 ((float) Role::Master));
 
     check (master->getBus().getNumInstances() == 4, "Four instances on the bus");
+    check (master->getLatencySamples() > 0 && master->getLatencySamples() == stems[0].proc->getLatencySamples(), "Every instance reports the same fixed latency", juce::String (master->getLatencySamples()) + " samples");
     check (master->getBus().getMasterSlot() == master->getSessionSlot(), "Master slot found");
 
     juce::MidiBuffer midi;
@@ -102,6 +103,30 @@ int main()
     const float v = stems[0].proc->getLoudness().getIntegrated(), b = stems[1].proc->getLoudness().getIntegrated(), k = stems[2].proc->getLoudness().getIntegrated();
     std::printf ("   after: vocal %.2f  beat %.2f  808 %.2f  master %.2f\n", v, b, k, masterAfter);
     check (std::abs ((b - v) - (-1.5f)) < 1.0f, "Beat sits ~1.5 LU under vocal", juce::String (b - v, 2));
+
+    // Chain presets load and fit thresholds to the measured level
+    {
+        const auto msg = stems[0].proc->applyChainPreset (1);   // MU Lead Vocal
+        check (msg.contains ("fitted"), "Lead vocal chain fits thresholds to the measured level", msg);
+        check ((int) stems[0].proc->getParam (ids::role) == (int) Role::Vocal, "Chain preset sets the role");
+        check (stems[0].proc->getParam (ids::compEnabled) > 0.5f && stems[0].proc->getParam (ids::dsOn) > 0.5f && stems[0].proc->getParam (ids::riderOn) > 0.5f, "Lead vocal chain switches its modules on");
+        stems[1].proc->applyChainPreset (6);   // MU Beat
+        check (stems[1].proc->getParam (ids::vsEnabled) > 0.5f, "Beat chain turns Vocal Space on");
+        master->applyChainPreset (8);          // MU Master Prep
+        check (master->getParam (ids::peakGuard) > 0.5f && master->getParam (ids::masterAutoTrim) > 0.5f, "Master prep arms peak guard and auto trim");
+    }
+
+    // Master auto trim converges on the target even if the balance left a residual error
+    {
+        master->setParam (ids::targetLufs, -16.0f);
+        for (auto& s : stems) s.proc->resetMeters();
+        master->resetMeters();
+        runSeconds (12.0);
+        const float integ = master->getLoudness().getIntegrated();
+        check (std::abs (integ - (-16.0f)) < 0.7f, "Master auto trim lands on a new target", juce::String (integ, 2) + " (trim " + juce::String (master->getMasterAutoTrimDb(), 2) + " dB)");
+        check (master->getLoudness().getTruePeakHold() <= -6.0f + 0.3f, "Peak guard keeps the master under the ceiling", juce::String (master->getLoudness().getTruePeakHold(), 2));
+        master->setParam (ids::targetLufs, -18.0f);
+    }
 
     // Vocal space key: the vocal instance is loud, so beat instances should see a key level > 0.
     check (master->getBus().getVocalKeyLevel() > 0.3f, "Vocal key level present", juce::String (master->getBus().getVocalKeyLevel(), 2));

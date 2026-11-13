@@ -1,109 +1,89 @@
 #include "SettingsPage.h"
 #include "Theme.h"
-#include "../license/License.h"
 
 namespace mu
 {
 SettingsPage::SettingsPage (MUProcessor& p) : proc (p)
 {
-    title.setFont (theme::titleFont (14.0f));
-    title.setText ("LICENCE", juce::dontSendNotification);
-    addAndMakeVisible (title);
-    status.setFont (theme::labelFont (12.0f));
-    addAndMakeVisible (status);
-    for (auto* l : { &emailL, &keyL })
+    for (auto* panel : { &instancePanel, &displayPanel, &aboutPanel }) addAndMakeVisible (panel);
+
+    resetAll.setComponentID ("ghost");
+    resetAll.setTooltip ("Puts every control on this instance back to its default. The role and targets are kept.");
+    resetAll.onClick = [this]
     {
-        l->setFont (theme::labelFont (12.0f));
-        l->setColour (juce::Label::textColourId, theme::textDim);
-        addAndMakeVisible (l);
-    }
-    email.setTextToShowWhenEmpty ("you@example.com", theme::textMute);
-    key.setTextToShowWhenEmpty ("MU-XXXX-XXXX-XXXX-XXXX", theme::textMute);
-    for (auto* e : { &email, &key })
-    {
-        e->setFont (theme::monoFont (13.0f));
-        e->setIndents (8, 4);
-        addAndMakeVisible (e);
-    }
-    activate.onClick = [this]
-    {
-        if (License::get().activate (email.getText(), key.getText()))
-            status.setText ("Pro activated. Thank you.", juce::dontSendNotification);
-        else
-            status.setText ("That key does not match this email. Check for typos or get in touch.", juce::dontSendNotification);
-        refresh();
+        const int role = (int) proc.getParam (ids::role);
+        proc.applyChainPreset (0);
+        proc.setParam (ids::role, (float) role);
+        proc.resetTrim();
     };
-    addAndMakeVisible (activate);
-    deactivate.onClick = [this] { License::get().deactivate(); refresh(); };
-    addAndMakeVisible (deactivate);
+    resetTrim.setComponentID ("ghost");
+    resetTrim.onClick = [this] { proc.resetTrim(); };
+    resetMeters.setComponentID ("ghost");
+    resetMeters.onClick = [this] { proc.resetMeters(); };
+    for (auto* b : { &resetAll, &resetTrim, &resetMeters }) instancePanel.addAndMakeVisible (b);
 
-    features.setFont (theme::labelFont (12.0f));
-    features.setColour (juce::Label::textColourId, theme::textDim);
-    features.setJustificationType (juce::Justification::topLeft);
-    features.setText ("FREE\n"
-                      "  Session view, role detection, loudness and true-peak metering, Balance Now, manual EQ and compressor.\n\n"
-                      "PRO\n"
-                      "  Auto balance that keeps following the mix, masking fixes between tracks, Clean Harsh resonance cuts,\n"
-                      "  Vocal Space ducking on the beat, Auto Set on the compressor.", juce::dontSendNotification);
-    addAndMakeVisible (features);
+    instanceInfo.setFont (theme::body (12.0f));
+    instanceInfo.setColour (juce::Label::textColourId, theme::textDim);
+    instanceInfo.setJustificationType (juce::Justification::topLeft);
+    instancePanel.addAndMakeVisible (instanceInfo);
 
-    about.setFont (theme::labelFont (11.0f));
-    about.setColour (juce::Label::textColourId, theme::textMute);
-    about.setJustificationType (juce::Justification::bottomLeft);
-    about.setText (juce::String ("Musically Unorthodox mix assistant v") + MU_VERSION_STRING
-                   + "\nHow it works: put one instance on every track plus one on the master (role: Master). Instances in the same session talk to each other; "
-                     "nothing leaves your computer and nothing runs in the cloud.", juce::dontSendNotification);
-    addAndMakeVisible (about);
+    scaleLabel.setText ("Window size", juce::dontSendNotification);
+    scaleLabel.setFont (theme::body (12.0f));
+    scaleLabel.setColour (juce::Label::textColourId, theme::textDim);
+    displayPanel.addAndMakeVisible (scaleLabel);
+    scaleBox.addItemList ({ "Compact", "Normal", "Large" }, 1);
+    scaleBox.setSelectedItemIndex (1, juce::dontSendNotification);
+    scaleBox.onChange = [this]
+    {
+        const float scales[] = { 0.9f, 1.0f, 1.2f };
+        if (onScaleChanged) onScaleChanged (scales[juce::jlimit (0, 2, scaleBox.getSelectedItemIndex())]);
+    };
+    displayPanel.addAndMakeVisible (scaleBox);
+
+    aboutText.setFont (theme::body (12.0f));
+    aboutText.setColour (juce::Label::textColourId, theme::textDim);
+    aboutText.setJustificationType (juce::Justification::topLeft);
+    aboutText.setText (juce::String ("Musically Unorthodox mix assistant v") + MU_VERSION_STRING + "\n\n"
+                       "Made for the MU studio. Put one instance on every track and one on the master; they talk to each other inside the project. "
+                       "Nothing leaves this computer.\n\nmusicallyunorthodox.com", juce::dontSendNotification);
+    aboutPanel.addAndMakeVisible (aboutText);
     refresh();
 }
 
 void SettingsPage::refresh()
 {
-    auto& lic = License::get();
-    const bool pro = lic.isPro();
-    if (pro)
-    {
-        status.setColour (juce::Label::textColourId, theme::good);
-        if (! status.getText().startsWith ("Pro activated")) status.setText ("Pro licence active for " + lic.getEmail(), juce::dontSendNotification);
-        email.setText (lic.getEmail(), false);
-        key.setText (lic.getKey(), false);
-    }
-    else
-    {
-        status.setColour (juce::Label::textColourId, theme::textDim);
-        if (status.getText().isEmpty() || status.getText().startsWith ("Pro licence")) status.setText ("Free version. Enter your email and key to unlock Pro.", juce::dontSendNotification);
-    }
-    email.setEnabled (! pro); key.setEnabled (! pro);
-    activate.setVisible (! pro);
-    deactivate.setVisible (pro);
+    juce::String s;
+    s << "Role: " << roleNames()[(int) proc.getEffectiveRole()] << "    Session slot: " << proc.getSessionSlot() + 1
+      << "    Instances in session: " << proc.getBus().getNumInstances() << "\n"
+      << "Reported latency: " << proc.getLatencySamples() << " samples at " << juce::String (proc.getSampleRate() / 1000.0, 1) << " kHz"
+      << "    Chain: " << (proc.getCurrentPresetIndex() >= 0 ? chainPresetNames()[proc.getCurrentPresetIndex()] : juce::String ("custom"));
+    instanceInfo.setText (s, juce::dontSendNotification);
 }
 
-void SettingsPage::paint (juce::Graphics& g)
-{
-    g.fillAll (theme::bg);
-    auto r = getLocalBounds().reduced (16);
-    theme::drawPanel (g, r.removeFromTop (150).toFloat(), 8.0f);
-}
+void SettingsPage::paint (juce::Graphics& g) { g.fillAll (theme::bg); }
 
 void SettingsPage::resized()
 {
-    auto r = getLocalBounds().reduced (16);
-    auto panel = r.removeFromTop (150).reduced (14, 10);
-    title.setBounds (panel.removeFromTop (22));
-    status.setBounds (panel.removeFromTop (20));
-    panel.removeFromTop (6);
-    auto row = panel.removeFromTop (28);
-    emailL.setBounds (row.removeFromLeft (80));
-    email.setBounds (row.removeFromLeft (260));
-    row.removeFromLeft (16);
-    keyL.setBounds (row.removeFromLeft (90));
-    key.setBounds (row.removeFromLeft (230));
-    panel.removeFromTop (10);
-    auto brow = panel.removeFromTop (28);
-    activate.setBounds (brow.removeFromLeft (150));
-    deactivate.setBounds (brow.removeFromLeft (150));
+    auto r = getLocalBounds().reduced (18, 16);
+    instancePanel.setBounds (r.removeFromTop (130));
     r.removeFromTop (12);
-    features.setBounds (r.removeFromTop (120));
-    about.setBounds (r);
+    displayPanel.setBounds (r.removeFromTop (90));
+    r.removeFromTop (12);
+    aboutPanel.setBounds (r.removeFromTop (140));
+
+    auto c = instancePanel.getContentArea();
+    auto row = c.removeFromTop (30);
+    resetAll.setBounds (row.removeFromLeft (190)); row.removeFromLeft (8);
+    resetTrim.setBounds (row.removeFromLeft (190)); row.removeFromLeft (8);
+    resetMeters.setBounds (row.removeFromLeft (150));
+    c.removeFromTop (10);
+    instanceInfo.setBounds (c);
+
+    auto d = displayPanel.getContentArea();
+    auto drow = d.removeFromTop (26);
+    scaleLabel.setBounds (drow.removeFromLeft (110));
+    scaleBox.setBounds (drow.removeFromLeft (160));
+
+    aboutText.setBounds (aboutPanel.getContentArea());
 }
 }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(MusicallyUnorthodox VERSION 0.1.0 LANGUAGES C CXX)
+project(MusicallyUnorthodox VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,7 +21,10 @@ else()
 endif()
 
 juce_add_binary_data(MUAssets SOURCES
-    Assets/mu_logo_white.png)
+    Assets/mu_logo_white.png
+    Assets/fonts/Anton-Regular.ttf
+    Assets/fonts/Inter-Regular.ttf
+    Assets/fonts/Inter-SemiBold.ttf)
 
 juce_add_plugin(MusicallyUnorthodox
     COMPANY_NAME "Musically Unorthodox"
@@ -46,23 +49,31 @@ target_sources(MusicallyUnorthodox PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/state/ParameterLayout.cpp
+    Source/state/ChainPresets.cpp
     Source/session/SessionBus.cpp
     Source/session/BalanceEngine.cpp
     Source/dsp/LoudnessMeter.cpp
     Source/dsp/SpectrumAnalyzer.cpp
     Source/dsp/EQEngine.cpp
     Source/dsp/Compressor.cpp
+    Source/dsp/Gate.cpp
+    Source/dsp/DeEsser.cpp
+    Source/dsp/Saturator.cpp
+    Source/dsp/Rider.cpp
+    Source/dsp/PeakGuard.cpp
     Source/dsp/VocalSpace.cpp
     Source/dsp/RoleDetector.cpp
-    Source/license/License.cpp
     Source/ui/Theme.cpp
     Source/ui/MULookAndFeel.cpp
     Source/ui/HeaderBar.cpp
     Source/ui/MixPage.cpp
     Source/ui/EQPage.cpp
     Source/ui/CompressorPage.cpp
+    Source/ui/ChainPage.cpp
     Source/ui/LevelsPage.cpp
+    Source/ui/HelpPage.cpp
     Source/ui/SettingsPage.cpp
+    Source/ui/Widgets.cpp
     Source/ui/Meters.cpp)
 
 target_include_directories(MusicallyUnorthodox PRIVATE Source)
@@ -79,7 +90,6 @@ target_link_libraries(MusicallyUnorthodox PRIVATE
     MUAssets
     juce::juce_audio_utils
     juce::juce_dsp
-    juce::juce_cryptography
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
@@ -91,6 +101,11 @@ if(MU_BUILD_TESTS)
         Source/dsp/LoudnessMeter.cpp
         Source/dsp/EQEngine.cpp
         Source/dsp/Compressor.cpp
+        Source/dsp/Gate.cpp
+        Source/dsp/DeEsser.cpp
+        Source/dsp/Saturator.cpp
+        Source/dsp/Rider.cpp
+        Source/dsp/PeakGuard.cpp
         Source/dsp/VocalSpace.cpp
         Source/dsp/RoleDetector.cpp
         Source/session/BalanceEngine.cpp)
@@ -111,6 +126,6 @@ endif()
 if(MU_BUILD_TESTS)
     add_executable(MUSession Source/tests/SessionHarness.cpp)
     target_include_directories(MUSession PRIVATE Source)
-    target_link_libraries(MUSession PRIVATE MusicallyUnorthodox MUAssets juce::juce_audio_utils juce::juce_dsp juce::juce_cryptography)
+    target_link_libraries(MUSession PRIVATE MusicallyUnorthodox MUAssets juce::juce_audio_utils juce::juce_dsp)
     target_compile_definitions(MUSession PRIVATE JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1)
 endif()

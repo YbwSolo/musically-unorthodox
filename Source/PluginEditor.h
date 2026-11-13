@@ -6,7 +6,9 @@
 #include "ui/MixPage.h"
 #include "ui/EQPage.h"
 #include "ui/CompressorPage.h"
+#include "ui/ChainPage.h"
 #include "ui/LevelsPage.h"
+#include "ui/HelpPage.h"
 #include "ui/SettingsPage.h"
 
 namespace mu
@@ -26,14 +28,19 @@ private:
 
     MUProcessor& proc;
     MULookAndFeel lnf;
-    juce::TooltipWindow tooltips { this, 600 };
+    juce::TooltipWindow tooltips { this, 500 };
     HeaderBar header;
     MixPage mixPage;
     EQPage eqPage;
     CompressorPage compPage;
+    ChainPage chainPage;
     LevelsPage levelsPage;
+    HelpPage helpPage;
     SettingsPage settingsPage;
+    juce::Label toast;
+    double toastUntil = 0.0;
     int tab = 0;
     int slow = 0;
+    static constexpr int kBaseW = 1100, kBaseH = 680;
 };
 }

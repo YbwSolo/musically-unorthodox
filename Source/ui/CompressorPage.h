@@ -2,6 +2,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../PluginProcessor.h"
 #include "Meters.h"
+#include "Widgets.h"
 
 namespace mu
 {
@@ -24,15 +25,15 @@ public:
 
 private:
     MUProcessor& proc;
+    ModulePanel compPanel { "Compressor", "levels the performance" }, gatePanel { "Gate", "closes between phrases" };
     TransferCurve curve;
-    juce::ToggleButton on { "Compressor" }, autoMakeup { "Auto makeup" };
-    juce::Slider threshold, ratio, attack, release, knee, makeup, mix;
-    juce::Label thresholdL { {}, "THRESHOLD" }, ratioL { {}, "RATIO" }, attackL { {}, "ATTACK" }, releaseL { {}, "RELEASE" },
-                kneeL { {}, "KNEE" }, makeupL { {}, "MAKEUP" }, mixL { {}, "MIX" }, result;
-    juce::TextButton autoSet { "AUTO SET" };
-    GainReductionMeter grMeter;
+    std::unique_ptr<Knob> threshold, ratio, attack, release, knee, makeup, mix;
+    std::unique_ptr<Knob> gThreshold, gRange, gAttack, gRelease, gHold;
+    juce::ToggleButton autoMakeup { "Auto makeup" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoMakeupAtt;
+    juce::TextButton autoSet { juce::String ("AUTO SET  ") + juce::String (juce::CharPointer_UTF8 ("\xE2\x86\x92")) };
+    juce::Label result;
+    GainReductionMeter grMeter, gateMeter;
     LevelMeter inMeter { -60.0f, 6.0f }, outMeter { -60.0f, 6.0f };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAtt, autoMakeupAtt;
-    std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> sliderAtts;
 };
 }

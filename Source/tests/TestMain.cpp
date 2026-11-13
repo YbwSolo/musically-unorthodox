@@ -7,6 +7,11 @@
 #include "dsp/LoudnessMeter.h"
 #include "dsp/EQEngine.h"
 #include "dsp/Compressor.h"
+#include "dsp/Gate.h"
+#include "dsp/DeEsser.h"
+#include "dsp/Saturator.h"
+#include "dsp/Rider.h"
+#include "dsp/PeakGuard.h"
 #include "dsp/VocalSpace.h"
 #include "dsp/RoleDetector.h"
 #include "session/BalanceEngine.h"
@@ -233,6 +238,134 @@ int main()
             check (clashes[0].freqHz > 1200.0f && clashes[0].freqHz < 4000.0f, "Clash in presence region", juce::String (clashes[0].freqHz, 0));
             check (clashes[0].suggestedCutDb < 0.0f && clashes[0].suggestedCutDb >= -4.0f, "Cut is modest", juce::String (clashes[0].suggestedCutDb, 1));
         }
+    }
+
+
+    // --- helper to run a processor over a buffer in blocks
+    auto runBlocks = [] (auto& proc, juce::AudioBuffer<float>& s, int block)
+    {
+        for (int pos = 0; pos < s.getNumSamples(); pos += block)
+        {
+            juce::AudioBuffer<float> view (s.getArrayOfWritePointers(), s.getNumChannels(), pos, juce::jmin (block, s.getNumSamples() - pos));
+            proc.process (view);
+        }
+    };
+    auto tailDb = [&] (const juce::AudioBuffer<float>& s, float ref) { return juce::Decibels::gainToDecibels (s.getMagnitude (0, s.getNumSamples() / 2, s.getNumSamples() / 2) / ref); };
+
+    // --- Gate
+    {
+        Gate g; g.prepare (fs, 512, 2);
+        g.setSettings ({ true, -40.0f, 20.0f, 1.0f, 50.0f, 10.0f });
+        auto quiet = sine (fs, 1000.0f, 0.001f, (int) fs);   // -60 dBFS
+        runBlocks (g, quiet, 512);
+        check (near (tailDb (quiet, 0.001f), -20.0f, 1.0f), "Gate closes by its range on quiet input", juce::String (tailDb (quiet, 0.001f), 2));
+        Gate g2; g2.prepare (fs, 512, 2);
+        g2.setSettings ({ true, -40.0f, 20.0f, 1.0f, 50.0f, 10.0f });
+        auto loud = sine (fs, 1000.0f, 0.3f, (int) fs);
+        runBlocks (g2, loud, 512);
+        check (near (tailDb (loud, 0.3f), 0.0f, 0.05f), "Gate is open on loud input", juce::String (tailDb (loud, 0.3f), 2));
+    }
+
+    // --- De-esser
+    {
+        DeEsser d; d.prepare (fs, 512, 2);
+        d.setSettings ({ true, 7000.0f, -30.0f, 6.0f, true });
+        auto ess = sine (fs, 7000.0f, 0.3f, (int) fs);
+        runBlocks (d, ess, 512);
+        check (near (tailDb (ess, 0.3f), -6.0f, 1.0f), "De-esser pulls a loud ess by its range", juce::String (tailDb (ess, 0.3f), 2));
+        DeEsser d2; d2.prepare (fs, 512, 2);
+        d2.setSettings ({ true, 7000.0f, -30.0f, 6.0f, true });
+        auto body = sine (fs, 300.0f, 0.3f, (int) fs);
+        runBlocks (d2, body, 512);
+        check (near (tailDb (body, 0.3f), 0.0f, 0.3f), "De-esser leaves the body alone", juce::String (tailDb (body, 0.3f), 2));
+    }
+
+    // --- Saturator: level compensation, harmonics, and a latency-matched dry path
+    {
+        Saturator sat; sat.prepare (fs, 512, 2);
+        sat.setSettings ({ true, 12.0f, 1.0f, 0 });
+        auto s = sine (fs, 1000.0f, 0.25f, (int) fs);
+        runBlocks (sat, s, 512);
+        check (near (tailDb (s, 0.25f), 0.0f, 2.0f), "Saturator stays level-compensated at -12 dBFS", juce::String (tailDb (s, 0.25f), 2));
+
+        // harmonics: compare the processed wave against a pure sine fit -> residual must be clearly non-zero
+        auto ref = sine (fs, 1000.0f, 0.25f, (int) fs);
+        Saturator dry; dry.prepare (fs, 512, 2);
+        dry.setSettings ({ false, 12.0f, 1.0f, 0 });
+        runBlocks (dry, ref, 512);
+        double resid = 0.0, total = 0.0;
+        for (int i = (int) fs / 2; i < (int) fs; ++i) { const double e = s.getSample (0, i) - ref.getSample (0, i); resid += e * e; total += ref.getSample (0, i) * ref.getSample (0, i); }
+        check (resid / total > 0.001, "Saturator adds harmonics", juce::String (10.0 * std::log10 (resid / total), 1) + " dB residual");
+
+        // disabled: output equals input delayed by the reported latency
+        Saturator off; off.prepare (fs, 256, 2);
+        off.setSettings ({ false, 6.0f, 0.5f, 0 });
+        auto in = sine (fs, 500.0f, 0.5f, 8192);
+        auto out = in;
+        runBlocks (off, out, 256);
+        const int lat = off.getLatencySamples();
+        float maxErr = 0.0f;
+        for (int i = 4096; i < 8000; ++i) maxErr = juce::jmax (maxErr, std::abs (out.getSample (0, i) - in.getSample (0, i - lat)));
+        check (maxErr < 0.01f, "Saturator bypass is a clean delay of the reported latency", "latency " + juce::String (lat) + " samples, err " + juce::String (maxErr, 4));
+    }
+
+    // --- Rider
+    {
+        Rider r; r.prepare (fs, 512, 2);
+        r.setSettings ({ true, -20.0f, 6.0f, 2 });
+        auto s = sine (fs, 1000.0f, 0.0316f, (int) fs * 3);   // -30 dBFS peak, ~-33 dB RMS -> wants +6 (range limited)
+        runBlocks (r, s, 512);
+        check (near (r.getCurrentGainDb(), 6.0f, 0.3f), "Rider lifts a quiet track by up to its range", juce::String (r.getCurrentGainDb(), 2));
+        Rider r2; r2.prepare (fs, 512, 2);
+        r2.setSettings ({ true, -20.0f, 6.0f, 2 });
+        auto hot = sine (fs, 1000.0f, 0.5f, (int) fs * 3);    // -6 dBFS peak -> rider pulls down
+        runBlocks (r2, hot, 512);
+        check (near (r2.getCurrentGainDb(), -6.0f, 0.3f), "Rider pulls a hot track down by up to its range", juce::String (r2.getCurrentGainDb(), 2));
+    }
+
+    // --- Peak guard
+    {
+        PeakGuard pg; pg.prepare (fs, 512, 2);
+        pg.setEnabled (true); pg.setCeilingDb (-6.0f);
+        auto s = sine (fs, 1000.0f, 1.0f, (int) fs);
+        runBlocks (pg, s, 512);
+        const float peak = juce::Decibels::gainToDecibels (s.getMagnitude (0, 1000, (int) fs - 1000));
+        check (peak <= -6.0f + 0.05f, "Peak guard holds the ceiling", juce::String (peak, 2));
+        PeakGuard pg2; pg2.prepare (fs, 512, 2);
+        pg2.setEnabled (true); pg2.setCeilingDb (-6.0f);
+        auto quiet = sine (fs, 1000.0f, 0.1f, (int) fs);
+        runBlocks (pg2, quiet, 512);
+        check (near (juce::Decibels::gainToDecibels (quiet.getMagnitude (0, 1000, (int) fs - 1000) / 0.1f), 0.0f, 0.01f), "Peak guard is transparent under the ceiling");
+        check (pg.getLatencySamples() == (int) std::round (fs * PeakGuard::kLookaheadSeconds), "Peak guard reports its look-ahead");
+    }
+
+    // --- Dynamic EQ band
+    {
+        EQEngine eq; eq.prepare (fs, 512, 2);
+        EQBandSettings b; b.enabled = true; b.type = EQType::Bell; b.freqHz = 1000.0f; b.gainDb = 0.0f; b.q = 1.0f; b.dynamic = true; b.thresholdDb = -40.0f; b.rangeDb = -6.0f;
+        eq.setBand (0, b);
+        auto loud = sine (fs, 1000.0f, 0.3f, (int) fs);
+        runBlocks (eq, loud, 512);
+        check (near (tailDb (loud, 0.3f), -6.0f, 0.8f), "Dynamic band cuts when its region is loud", juce::String (tailDb (loud, 0.3f), 2));
+        EQEngine eq2; eq2.prepare (fs, 512, 2);
+        eq2.setBand (0, b);
+        auto quiet = sine (fs, 1000.0f, 0.001f, (int) fs);
+        runBlocks (eq2, quiet, 512);
+        check (near (tailDb (quiet, 0.001f), 0.0f, 0.3f), "Dynamic band rests when its region is quiet", juce::String (tailDb (quiet, 0.001f), 2));
+        check (near (eq.magnitudeDbAt (1000.0f), 0.0f, 0.01f), "Dynamic band static curve stays at its set gain");
+    }
+
+    // --- Balance with edited role targets
+    {
+        std::vector<TrackInfo> tracks;
+        auto mk = [] (int slot, const char* name, Role r, float lufs) { TrackInfo t; t.slot = slot; t.name = name; t.role = r; t.levelLufs = lufs; t.truePeakDb = -8.0f; t.active = true; return t; };
+        tracks.push_back (mk (0, "Vocal", Role::Vocal, -20.0f));
+        tracks.push_back (mk (1, "Beat", Role::Beat, -16.0f));
+        BalanceTargets tg; tg.offsets[(size_t) Role::Beat] = -4.0f;
+        auto plan = computeBalance (tracks, tg);
+        float dv = 0, db = 0;
+        for (auto& m : plan.moves) { if (m.slot == 0) dv = m.deltaDb; if (m.slot == 1) db = m.deltaDb; }
+        check (near ((-16.0f + db) - (-20.0f + dv), -4.0f, 0.05f), "Edited role target is honoured", juce::String ((-16.0f + db) - (-20.0f + dv), 2));
     }
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED", failures, failures == 1 ? "" : "s");

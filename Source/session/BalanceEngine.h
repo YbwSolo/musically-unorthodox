@@ -50,11 +50,17 @@ struct BalanceTargets
     float masterLufs = -18.0f;
     float masterTruePeak = -6.0f;
     float maxMoveDb = 12.0f;
+    std::array<float, (size_t) Role::NumRoles> offsets = defaultOffsets();
+
+    static std::array<float, (size_t) Role::NumRoles> defaultOffsets()
+    {
+        std::array<float, (size_t) Role::NumRoles> o {};
+        for (int r = 0; r < (int) Role::NumRoles; ++r) o[(size_t) r] = defaultRoleOffsetLu ((Role) r);
+        return o;
+    }
+    float offsetFor (Role r) const { return offsets[(size_t) juce::jlimit (0, (int) Role::NumRoles - 1, (int) r)]; }
 };
 
-// Relative loudness target of each role against the lead vocal (0 LU). These are starting points for a
-// trap / R&B / hip-hop balance; the master's absolute target then scales everything together.
-float roleOffsetLu (Role r) noexcept;
 int rolePriority (Role r) noexcept;   // higher = keeps its frequency space
 
 BalancePlan computeBalance (const std::vector<TrackInfo>& tracks, const BalanceTargets& targets);

@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_dsp/juce_dsp.h>
 #include <array>
+#include <atomic>
 #include "../state/ParameterIDs.h"
 
 namespace mu
@@ -12,12 +13,16 @@ struct EQBandSettings
     float freqHz = 1000.0f;
     float gainDb = 0.0f;
     float q = 0.71f;
+    bool dynamic = false;        // band gain moves with the level in its own frequency region
+    float thresholdDb = -30.0f;
+    float rangeDb = -6.0f;       // negative = cuts when loud, positive = boosts when loud
 };
 
 // Normalised biquad coefficients: b0 b1 b2 a1 a2 (a0 == 1).
 using BiquadCoeffs = std::array<float, 5>;
 
-// Six-band minimum-phase parametric EQ with smoothed, allocation-free coefficient updates.
+// Six-band minimum-phase parametric EQ with optional dynamic bands. Coefficient updates are
+// smoothed and allocation-free.
 class EQEngine
 {
 public:
@@ -27,12 +32,14 @@ public:
     void setEnabled (bool on) noexcept { enabled = on; }
     void process (juce::AudioBuffer<float>& buffer) noexcept;
 
-    // UI helpers (use the target settings).
+    // UI helpers (use the target settings; static response, no dynamic movement).
     float magnitudeDbAt (float hz) const;
     float bandMagnitudeDbAt (int band, float hz) const;
     EQBandSettings getBandTarget (int band) const { return bands[(size_t) band].target; }
+    float getBandDynamicOffsetDb (int band) const { return bands[(size_t) band].dynOffsetMeter.load (std::memory_order_relaxed); }
 
     static BiquadCoeffs computeCoefficients (const EQBandSettings& s, double fs) noexcept;
+    static BiquadCoeffs computeBandPass (float hz, float q, double fs) noexcept;
     static float magnitudeDb (const BiquadCoeffs& c, float hz, double fs) noexcept;
     static constexpr int kUpdateInterval = 32;
 
@@ -54,11 +61,16 @@ private:
     {
         EQBandSettings target, current;
         BiquadCoeffs coeffs { 1.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        BiquadCoeffs detCoeffs { 1.0f, 0.0f, 0.0f, 0.0f, 0.0f };
         std::array<Biquad, 2> filters;
+        Biquad detector;
+        float envelope = 0.0f;
+        float dynOffset = 0.0f;
+        std::atomic<float> dynOffsetMeter { 0.0f };
         bool dirty = true;
     };
 
-    void updateBand (Band& b) noexcept;
+    void updateBand (Band& b, float dynOffset) noexcept;
 
     double fs = 48000.0;
     int channels = 2;

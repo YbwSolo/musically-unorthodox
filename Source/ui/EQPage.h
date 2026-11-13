@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../PluginProcessor.h"
+#include "Widgets.h"
 
 namespace mu
 {
@@ -27,7 +28,7 @@ private:
     float dbForY (float y) const;
     int bandAt (juce::Point<float> p) const;
     juce::Rectangle<float> plotArea() const;
-    void setBandParam (int band, const juce::String& id, float value, bool gesture);
+    void setBandParam (const juce::String& id, float value, bool gesture);
 
     MUProcessor& proc;
     int selected = 2, hovered = -1, dragging = -1;
@@ -47,16 +48,15 @@ private:
 
     MUProcessor& proc;
     EQGraph graph;
-    juce::ToggleButton eqOn { "EQ" }, bandOn { "Band on" }, vsOn { "Vocal space" };
-    juce::ComboBox typeBox, vsSpeed;
-    juce::Slider freq, gain, q, vsAmount;
-    juce::Label freqL { {}, "FREQ" }, gainL { {}, "GAIN" }, qL { {}, "Q" }, bandTitle, cleanResult, vsInfo, vsAmountL { {}, "AMOUNT" };
+    juce::ToggleButton eqOn { "EQ on" }, bandOn { "Band on" }, dynOn { "Dynamic" };
+    juce::ComboBox typeBox;
+    juce::Slider freq, gain, q, thr, range;
+    juce::Label bandTitle, cleanResult, dynHint;
     juce::TextButton cleanHarsh { "CLEAN HARSH" }, reset { "RESET EQ" };
     std::array<juce::TextButton, kNumEQBands> bandButtons;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> eqOnAtt, bandOnAtt, vsOnAtt;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAtt, vsSpeedAtt;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> freqAtt, gainAtt, qAtt, vsAmountAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> eqOnAtt, bandOnAtt, dynOnAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> freqAtt, gainAtt, qAtt, thrAtt, rangeAtt;
     int boundBand = -1;
-    bool vsVisible = true;
 };
 }

@@ -163,6 +163,43 @@ BalancePlan SessionBus::getLastPlan() const
     return lastPlan;
 }
 
+void SessionBus::resetAllMeasurements()
+{
+    const juce::ScopedLock sl (lock);
+    for (auto& s : slots)
+        if (s.used.load() && s.client != nullptr) s.client->resetMeasurement();
+}
+
+void SessionBus::startLearn (float seconds, BalanceTargets tg)
+{
+    resetAllMeasurements();
+    const juce::ScopedLock sl (lock);
+    targets = tg;
+    learning = true;
+    learnStartMs = juce::Time::getMillisecondCounterHiRes();
+    learnLengthMs = juce::jmax (5.0f, seconds) * 1000.0;
+    learnMessage = "Listening... play the loudest part of the song.";
+    if (! isTimerRunning()) startTimer (500);
+}
+
+void SessionBus::cancelLearn()
+{
+    const juce::ScopedLock sl (lock);
+    learning = false;
+    learnMessage = "Cancelled.";
+}
+
+LearnState SessionBus::getLearnState() const
+{
+    const juce::ScopedLock sl (lock);
+    LearnState st;
+    st.active = learning;
+    st.message = learnMessage;
+    if (learning)
+        st.progress = (float) juce::jlimit (0.0, 1.0, (juce::Time::getMillisecondCounterHiRes() - learnStartMs) / learnLengthMs);
+    return st;
+}
+
 void SessionBus::timerCallback()
 {
     auto plan = computePlan (targets);
@@ -170,7 +207,38 @@ void SessionBus::timerCallback()
         const juce::ScopedLock sl (lock);
         lastPlan = plan;
     }
-    if (autoBalance && plan.usable)
+
+    bool finishLearn = false;
+    {
+        const juce::ScopedLock sl (lock);
+        if (learning)
+        {
+            const double elapsed = juce::Time::getMillisecondCounterHiRes() - learnStartMs;
+            const int secondsLeft = (int) std::ceil ((learnLengthMs - elapsed) / 1000.0);
+            if (elapsed >= learnLengthMs)
+            {
+                learning = false;
+                finishLearn = true;
+            }
+            else
+                learnMessage = "Listening... " + juce::String (juce::jmax (0, secondsLeft)) + " s left. Keep the song playing.";
+        }
+    }
+    if (finishLearn)
+    {
+        if (plan.usable)
+        {
+            applyPlan (plan, 1.0f);
+            const juce::ScopedLock sl (lock);
+            learnMessage = "Balanced. " + plan.summary;
+        }
+        else
+        {
+            const juce::ScopedLock sl (lock);
+            learnMessage = "Nothing was playing - start playback and try again.";
+        }
+    }
+    else if (autoBalance && plan.usable)
         applyPlan (plan, 0.25f);   // glide towards the plan rather than jumping
 }
 }
