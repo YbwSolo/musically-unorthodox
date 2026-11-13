@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(MusicallyUnorthodox VERSION 0.2.0 LANGUAGES C CXX)
+project(MusicallyUnorthodox VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,6 +7,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
 
 option(MU_BUILD_TESTS "Build the DSP test runner" ON)
+option(MU_LTO "Link-time optimisation (slower builds, faster plugin)" ON)
 
 # JUCE: use a local checkout if JUCE_DIR is given, otherwise fetch it.
 if(DEFINED JUCE_DIR AND EXISTS "${JUCE_DIR}/CMakeLists.txt")
@@ -20,8 +21,11 @@ else()
     FetchContent_MakeAvailable(JUCE)
 endif()
 
+file(GLOB MU_ICONS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Assets/icons/*.svg")
+
 juce_add_binary_data(MUAssets SOURCES
-    Assets/mu_logo_white.png
+    Assets/mu_logo.png
+    ${MU_ICONS}
     Assets/fonts/Anton-Regular.ttf
     Assets/fonts/Inter-Regular.ttf
     Assets/fonts/Inter-SemiBold.ttf)
@@ -45,36 +49,45 @@ juce_add_plugin(MusicallyUnorthodox
     HARDENED_RUNTIME_ENABLED TRUE
     MICROPHONE_PERMISSION_ENABLED TRUE)
 
+set(MU_DSP_SOURCES
+    Source/dsp/LoudnessMeter.cpp
+    Source/dsp/EQEngine.cpp
+    Source/dsp/Compressor.cpp
+    Source/dsp/Gate.cpp
+    Source/dsp/DeEsser.cpp
+    Source/dsp/Smoother.cpp
+    Source/dsp/Saturator.cpp
+    Source/dsp/Rider.cpp
+    Source/dsp/StereoTool.cpp
+    Source/dsp/Maximizer.cpp
+    Source/dsp/VocalSpace.cpp
+    Source/dsp/RoleDetector.cpp
+    Source/analysis/TonalAnalysis.cpp
+    Source/session/BalanceEngine.cpp)
+
 target_sources(MusicallyUnorthodox PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/state/ParameterLayout.cpp
     Source/state/ChainPresets.cpp
     Source/session/SessionBus.cpp
-    Source/session/BalanceEngine.cpp
-    Source/dsp/LoudnessMeter.cpp
     Source/dsp/SpectrumAnalyzer.cpp
-    Source/dsp/EQEngine.cpp
-    Source/dsp/Compressor.cpp
-    Source/dsp/Gate.cpp
-    Source/dsp/DeEsser.cpp
-    Source/dsp/Saturator.cpp
-    Source/dsp/Rider.cpp
-    Source/dsp/PeakGuard.cpp
-    Source/dsp/VocalSpace.cpp
-    Source/dsp/RoleDetector.cpp
+    ${MU_DSP_SOURCES}
     Source/ui/Theme.cpp
+    Source/ui/Icons.cpp
     Source/ui/MULookAndFeel.cpp
+    Source/ui/Widgets.cpp
+    Source/ui/HelpText.cpp
     Source/ui/HeaderBar.cpp
+    Source/ui/MeterRail.cpp
+    Source/ui/InfoBar.cpp
     Source/ui/MixPage.cpp
     Source/ui/EQPage.cpp
-    Source/ui/CompressorPage.cpp
-    Source/ui/ChainPage.cpp
-    Source/ui/LevelsPage.cpp
-    Source/ui/HelpPage.cpp
-    Source/ui/SettingsPage.cpp
-    Source/ui/Widgets.cpp
-    Source/ui/Meters.cpp)
+    Source/ui/DynamicsPage.cpp
+    Source/ui/TonePage.cpp
+    Source/ui/MasterPage.cpp
+    Source/ui/LearnPage.cpp
+    Source/ui/SettingsPanel.cpp)
 
 target_include_directories(MusicallyUnorthodox PRIVATE Source)
 
@@ -92,23 +105,16 @@ target_link_libraries(MusicallyUnorthodox PRIVATE
     juce::juce_dsp
     PUBLIC
     juce::juce_recommended_config_flags
-    juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
+if(MU_LTO)
+    target_link_libraries(MusicallyUnorthodox PUBLIC juce::juce_recommended_lto_flags)
+endif()
 
 if(MU_BUILD_TESTS)
     add_executable(MUTests
         Source/tests/TestMain.cpp
-        Source/dsp/LoudnessMeter.cpp
-        Source/dsp/EQEngine.cpp
-        Source/dsp/Compressor.cpp
-        Source/dsp/Gate.cpp
-        Source/dsp/DeEsser.cpp
-        Source/dsp/Saturator.cpp
-        Source/dsp/Rider.cpp
-        Source/dsp/PeakGuard.cpp
-        Source/dsp/VocalSpace.cpp
-        Source/dsp/RoleDetector.cpp
-        Source/session/BalanceEngine.cpp)
+        Source/dsp/SpectrumAnalyzer.cpp
+        ${MU_DSP_SOURCES})
     target_include_directories(MUTests PRIVATE Source)
     target_compile_definitions(MUTests PRIVATE
         JUCE_STANDALONE_APPLICATION=1
@@ -128,4 +134,11 @@ if(MU_BUILD_TESTS)
     target_include_directories(MUSession PRIVATE Source)
     target_link_libraries(MUSession PRIVATE MusicallyUnorthodox MUAssets juce::juce_audio_utils juce::juce_dsp)
     target_compile_definitions(MUSession PRIVATE JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1)
+endif()
+
+if(MU_BUILD_TESTS)
+    add_executable(MUPreview Source/tests/PreviewHarness.cpp)
+    target_include_directories(MUPreview PRIVATE Source)
+    target_link_libraries(MUPreview PRIVATE MusicallyUnorthodox MUAssets juce::juce_audio_utils juce::juce_dsp)
+    target_compile_definitions(MUPreview PRIVATE JUCE_STANDALONE_APPLICATION=1)
 endif()

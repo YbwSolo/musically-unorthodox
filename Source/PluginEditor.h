@@ -3,13 +3,15 @@
 #include "PluginProcessor.h"
 #include "ui/MULookAndFeel.h"
 #include "ui/HeaderBar.h"
+#include "ui/MeterRail.h"
+#include "ui/InfoBar.h"
 #include "ui/MixPage.h"
 #include "ui/EQPage.h"
-#include "ui/CompressorPage.h"
-#include "ui/ChainPage.h"
-#include "ui/LevelsPage.h"
-#include "ui/HelpPage.h"
-#include "ui/SettingsPage.h"
+#include "ui/DynamicsPage.h"
+#include "ui/TonePage.h"
+#include "ui/MasterPage.h"
+#include "ui/LearnPage.h"
+#include "ui/SettingsPanel.h"
 
 namespace mu
 {
@@ -25,22 +27,25 @@ public:
 private:
     void timerCallback() override;
     void showTab (int t);
+    juce::Component* page (int t);
 
     MUProcessor& proc;
     MULookAndFeel lnf;
-    juce::TooltipWindow tooltips { this, 500 };
+    juce::Component root;              // everything is laid out at the design size and scaled as one piece
+    std::function<void (const juce::String&)> status;
     HeaderBar header;
+    MeterRail rail;
+    InfoBar info;
     MixPage mixPage;
     EQPage eqPage;
-    CompressorPage compPage;
-    ChainPage chainPage;
-    LevelsPage levelsPage;
-    HelpPage helpPage;
-    SettingsPage settingsPage;
-    juce::Label toast;
-    double toastUntil = 0.0;
+    DynamicsPage dynamicsPage;
+    TonePage tonePage;
+    MasterPage masterPage;
+    LearnPage learnPage;
+    SettingsPanel settings;
     int tab = 0;
-    int slow = 0;
-    static constexpr int kBaseW = 1100, kBaseH = 680;
+    float pageAnim = 1.0f;
+    double lastTick = 0.0;
+    static constexpr int kBaseW = 1180, kBaseH = 720;
 };
 }

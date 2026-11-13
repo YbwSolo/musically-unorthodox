@@ -115,7 +115,7 @@ BalancePlan computeBalance (const std::vector<TrackInfo>& tracks, const BalanceT
     s << "Projected master " << juce::String (plan.projectedMasterLufs, 1) << " LUFS";
     if (plan.projectedMasterTruePeak > -60.0f) s << " / " << juce::String (plan.projectedMasterTruePeak, 1) << " dBTP";
     s << " (target " << juce::String (t.masterLufs, 1) << " LUFS, " << juce::String (t.masterTruePeak, 1) << " dBTP).";
-    if (maxAbs >= t.maxMoveDb - 0.01f) s << " Some moves hit the " << juce::String (t.maxMoveDb, 0) << " dB limit - check those tracks' own levels.";
+    if (maxAbs >= t.maxMoveDb - 0.01f) s << " Some moves hit the " << juce::String (juce::roundToInt (t.maxMoveDb)) << " dB limit - check those tracks' own levels.";
     plan.summary = s;
     return plan;
 }

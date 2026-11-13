@@ -1,39 +1,43 @@
 #pragma once
-#include <juce_gui_basics/juce_gui_basics.h>
-#include <juce_audio_processors/juce_audio_processors.h>
-#include "../PluginProcessor.h"
+#include "Widgets.h"
 
 namespace mu
 {
 class HeaderBar : public juce::Component
 {
 public:
-    enum Tab { Mix = 0, EQ, Comp, Chain, Levels, Help, Settings, NumTabs };
+    enum Tab { Mix = 0, EQ, Dynamics, Tone, Master, Learn, NumTabs };
 
     explicit HeaderBar (MUProcessor&);
+    void setTab (int t);
+    void tick (float dt);
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
-    void mouseDown (const juce::MouseEvent&) override;
-    void setTab (int t);
-    int getTab() const { return currentTab; }
-    void refresh();   // called by the editor timer (role, detected role, preset name)
 
     std::function<void (int)> onTabChanged;
-    std::function<void (const juce::String&)> onStatus;   // short message after applying a chain
+    std::function<void (const juce::String&)> onStatus;
+    std::function<void()> onSettings;
 
 private:
-    juce::Rectangle<int> tabRect (int i) const;
+    void showPresetMenu();
+    juce::Rectangle<float> tabBounds (int t) const;
+    int tabAt (juce::Point<int> p) const;
 
     MUProcessor& proc;
     juce::Image logo;
-    juce::ComboBox roleBox, chainBox;
-    juce::ToggleButton bypass { "Bypass" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> roleAtt;
+    int tab = 0, hoverTab = -1;
+    float blockX = 0.0f, blockW = 0.0f;
+    bool blockPlaced = false;
+    juce::Rectangle<int> tabArea;
+    juce::TextButton presetButton;
+    Segmented abSwitch { juce::StringArray { "A", "B" } };
+    IconButton bypassButton { "bypass", "header.bypass" };
+    juce::TextButton settingsButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAtt;
-    juce::Rectangle<int> tabsArea;
-    int currentTab = 0, hoverTab = -1;
-    juce::String detectedText;
+    juce::String shownPreset;
+    int shownAB = -1;
 };
 }

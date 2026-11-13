@@ -40,9 +40,9 @@ void Saturator::prepare (double sampleRate, int maxBlockSize, int numChannels)
     fs = sampleRate;
     channels = juce::jlimit (1, 2, numChannels);
     os = std::make_unique<juce::dsp::Oversampling<float>> ((size_t) 2, 1, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true);
-    osDry = std::make_unique<juce::dsp::Oversampling<float>> ((size_t) 2, 1, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true);
     os->initProcessing ((size_t) maxBlockSize);
-    osDry->initProcessing ((size_t) maxBlockSize);
+    latency = juce::jmax (1, (int) std::round (os->getLatencyInSamples()));
+    for (auto& d : dryDelay) d.assign ((size_t) latency, 0.0f);
     dry.setSize (2, maxBlockSize, false, false, true);
     driveSmooth.reset (fs, 0.05);
     mixSmooth.reset (fs, 0.05);
@@ -52,8 +52,10 @@ void Saturator::prepare (double sampleRate, int maxBlockSize, int numChannels)
 void Saturator::reset()
 {
     if (os) os->reset();
-    if (osDry) osDry->reset();
+    for (auto& d : dryDelay) std::fill (d.begin(), d.end(), 0.0f);
+    dryPos = 0;
     dcState.fill (0.0f); dcPrev.fill (0.0f);
+    wetWasActive = false;
 }
 
 void Saturator::process (juce::AudioBuffer<float>& buffer) noexcept
@@ -66,31 +68,42 @@ void Saturator::process (juce::AudioBuffer<float>& buffer) noexcept
     driveSmooth.setTargetValue (juce::Decibels::decibelsToGain (settings.driveDb));
     const bool wetActive = settings.enabled || mixSmooth.getCurrentValue() > 0.001f;
 
-    // Dry path always goes up and down so the plugin's latency never changes.
-    for (int c = 0; c < ch; ++c) dry.copyFrom (c, 0, buffer, c, 0, n);
-    juce::dsp::AudioBlock<float> dryBlock (dry.getArrayOfWritePointers(), (size_t) ch, 0, (size_t) n);
-    osDry->processSamplesUp (dryBlock);
-    osDry->processSamplesDown (dryBlock);
-
-    juce::dsp::AudioBlock<float> block (buffer.getArrayOfWritePointers(), (size_t) ch, 0, (size_t) n);
-    auto up = os->processSamplesUp (block);
-    if (wetActive)
+    // Dry path: a pure delay of the oversampler's latency, so the plugin's latency never changes
+    // and the oversampler only costs CPU while saturation is actually in use.
+    for (int c = 0; c < ch; ++c)
     {
-        const float drive = driveSmooth.getTargetValue();
-        for (size_t c = 0; c < up.getNumChannels(); ++c)
+        auto& line = dryDelay[(size_t) c];
+        const float* in = buffer.getReadPointer (c);
+        float* out = dry.getWritePointer (c);
+        int pos = dryPos;
+        for (int i = 0; i < n; ++i)
         {
-            auto* d = up.getChannelPointer (c);
-            for (size_t i = 0; i < up.getNumSamples(); ++i) d[i] = shape (d[i], settings.type, drive);
+            out[i] = line[(size_t) pos];
+            line[(size_t) pos] = in[i];
+            pos = pos + 1 == latency ? 0 : pos + 1;
         }
     }
-    os->processSamplesDown (block);
-    driveSmooth.skip (n);
+    dryPos = (dryPos + n) % latency;
+
     if (! wetActive)
     {
         for (int c = 0; c < ch; ++c) buffer.copyFrom (c, 0, dry, c, 0, n);
-        mixSmooth.skip (n);
+        mixSmooth.skip (n); driveSmooth.skip (n);
+        wetWasActive = false;
         return;
     }
+    if (! wetWasActive) { os->reset(); wetWasActive = true; }
+
+    juce::dsp::AudioBlock<float> block (buffer.getArrayOfWritePointers(), (size_t) ch, 0, (size_t) n);
+    auto up = os->processSamplesUp (block);
+    const float drive = driveSmooth.getTargetValue();
+    for (size_t c = 0; c < up.getNumChannels(); ++c)
+    {
+        auto* d = up.getChannelPointer (c);
+        for (size_t i = 0; i < up.getNumSamples(); ++i) d[i] = shape (d[i], settings.type, drive);
+    }
+    os->processSamplesDown (block);
+    driveSmooth.skip (n);
 
     // DC blocker (tube mode is asymmetric) + dry/wet
     const float R = 1.0f - (float) (2.0 * juce::MathConstants<double>::pi * 8.0 / fs);

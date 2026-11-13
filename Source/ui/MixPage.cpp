@@ -1,360 +1,411 @@
 #include "MixPage.h"
-#include "Theme.h"
+#include "../PluginProcessor.h"
+#include "../analysis/TonalAnalysis.h"
 
 namespace mu
 {
-// ---- SessionTable --------------------------------------------------------------------------------
-void SessionTable::update (std::vector<TrackInfo> tracks, const BalancePlan& plan, int ownSlot)
+using namespace theme;
+static constexpr float kLaneLo = -48.0f, kLaneHi = -6.0f;
+
+MixPage::MixPage (MUProcessor& p, std::function<void (const juce::String&)> status) : proc (p), setStatus (std::move (status))
 {
-    rows.clear();
-    std::sort (tracks.begin(), tracks.end(), [] (const TrackInfo& a, const TrackInfo& b)
+    styleButton (learnButton, "Learn and balance", true, "mix.learn");
+    learnButton.onClick = [this]
     {
-        if ((a.role == Role::Master) != (b.role == Role::Master)) return a.role == Role::Master;
+        if (proc.getBus().getLearnState().active) { proc.getBus().cancelLearn(); return; }
+        proc.learnAndBalance (20.0f);
+    };
+    styleButton (balanceButton, "Balance now", false, "mix.balance");
+    balanceButton.onClick = [this]
+    {
+        proc.balanceNow();
+        setStatus (plan.usable ? "Balanced. " + plan.summary : juce::String ("Nothing to balance yet. Play the song so every track can be measured."));
+    };
+    keepBalanced.setButtonText ("Keep balanced");
+    keepBalanced.setToggleState (proc.getBus().isAutoBalance(), juce::dontSendNotification);
+    keepBalanced.onClick = [this] { proc.setAutoBalanceMode (keepBalanced.getToggleState()); proc.getBus().setAutoBalance (keepBalanced.getToggleState(), proc.currentTargets()); };
+    setHelp (keepBalanced, "mix.auto");
+    for (auto* c : std::initializer_list<juce::Component*> { &learnButton, &balanceButton, &keepBalanced }) addAndMakeVisible (c);
+    for (size_t i = 0; i < fixButtons.size(); ++i)
+    {
+        styleButton (fixButtons[i], "Fix", true, "mix.collisions");
+        fixButtons[i].onClick = [this, i]
+        {
+            if (i >= clashes.size()) return;
+            const auto c = clashes[i];
+            proc.getBus().applyMaskingClash (c);
+            setStatus ("Dynamic cut of " + juce::String (c.suggestedCutDb, 1) + " dB at " + hzString (c.freqHz) + " added to \"" + c.nameB + "\". It only acts while that track is loud there.");
+            refreshTimer = 0.0f;
+        };
+        addChildComponent (fixButtons[i]);
+    }
+    refreshData();
+}
+
+void MixPage::refreshData()
+{
+    auto& bus = proc.getBus();
+    auto tracks = bus.collectTracks();
+    plan = bus.getLastPlan();
+    clashes = bus.computeMasking();
+    if (clashes.size() > 4) clashes.resize (4);
+    learn = bus.getLearnState();
+
+    hasMaster = false;
+    const auto targets = proc.isMasterInstance() ? proc.currentTargets() : bus.getTargets();
+    targetLufs = targets.masterLufs; targetPeak = targets.masterTruePeak;
+    mixLufs = -100.0f; mixPeak = -100.0f;
+
+    std::stable_sort (tracks.begin(), tracks.end(), [] (const TrackInfo& a, const TrackInfo& b)
+    {
+        if ((a.role == Role::Master) != (b.role == Role::Master)) return b.role == Role::Master;
         return rolePriority (a.role) > rolePriority (b.role);
     });
+
+    lanes.clear();
     for (auto& t : tracks)
     {
-        Row r; r.t = t; r.own = t.slot == ownSlot;
-        for (auto& m : plan.moves) if (m.slot == t.slot) { r.delta = m.deltaDb; r.note = m.note; }
-        rows.push_back (r);
+        if (t.role == Role::Master) { hasMaster = true; mixLufs = t.levelLufs; mixPeak = t.truePeakDb; continue; }
+        auto& st = laneState[t.slot];
+        st.info = t;
+        float move = 0.0f;
+        for (auto& m : plan.moves) if (m.slot == t.slot) move = m.deltaDb;
+        st.move = move;
+        lanes.push_back (st);
     }
-    repaint();
-}
+    if (! hasMaster && plan.usable) { mixLufs = plan.projectedMasterLufs; }
 
-void SessionTable::paint (juce::Graphics& g)
-{
-    auto r = getLocalBounds();
-    auto header = r.removeFromTop (24);
-    g.setColour (theme::textMute);
-    g.setFont (theme::bodyBold (10.0f));
-    const int wName = juce::jmax (120, r.getWidth() - 430);
-    struct Cols { juce::Rectangle<int> dot, name, role, level, peak, trim, delta; };
-    auto cols = [&] (juce::Rectangle<int> row)
-    {
-        Cols c;
-        c.dot = row.removeFromLeft (18);
-        c.name = row.removeFromLeft (wName);
-        c.role = row.removeFromLeft (120);
-        c.level = row.removeFromLeft (70);
-        c.peak = row.removeFromLeft (70);
-        c.trim = row.removeFromLeft (70);
-        c.delta = row;
-        return c;
-    };
-    auto h = cols (header);
-    g.drawText ("TRACK", h.name, juce::Justification::centredLeft);
-    g.drawText ("ROLE", h.role, juce::Justification::centredLeft);
-    g.drawText ("LUFS", h.level, juce::Justification::centredRight);
-    g.drawText ("PEAK", h.peak, juce::Justification::centredRight);
-    g.drawText ("TRIM", h.trim, juce::Justification::centredRight);
-    g.drawText ("NEXT MOVE", h.delta, juce::Justification::centredRight);
-    g.setColour (theme::line);
-    g.fillRect (r.removeFromTop (1));
-
-    if (rows.empty())
-    {
-        g.setColour (theme::textMute);
-        g.setFont (theme::body (12.5f));
-        g.drawText ("No instances found yet. Add Musically Unorthodox to each track you want balanced.", r.removeFromTop (40), juce::Justification::centredLeft);
-        return;
-    }
-
-    for (auto& row : rows)
-    {
-        auto line = r.removeFromTop (26);
-        if (row.own)
-        {
-            g.setColour (theme::yellow.withAlpha (0.08f));
-            g.fillRect (line);
-            g.setColour (theme::yellow);
-            g.fillRect (line.removeFromLeft (2));
-        }
-        auto c = cols (line);
-        g.setColour (MUProcessor::roleColour (row.t.role));
-        g.fillEllipse (c.dot.withSizeKeepingCentre (7, 7).toFloat());
-        g.setFont (theme::body (12.5f));
-        g.setColour (row.t.active ? theme::text : theme::textMute);
-        g.drawText (row.t.name + (row.own ? "  (this)" : ""), c.name, juce::Justification::centredLeft, true);
-        g.setColour (theme::textDim);
-        g.drawText (roleNames()[(int) row.t.role], c.role, juce::Justification::centredLeft, true);
-        g.setFont (theme::bodyBold (12.0f));
-        g.setColour (row.t.active ? theme::text : theme::textMute);
-        g.drawText (row.t.levelLufs > -90.0f ? juce::String (row.t.levelLufs, 1) : "-", c.level, juce::Justification::centredRight);
-        g.setColour (row.t.truePeakDb > 0.0f ? theme::bad : row.t.truePeakDb > -3.0f ? theme::yellow : theme::textDim);
-        g.drawText (row.t.truePeakDb > -90.0f ? juce::String (row.t.truePeakDb, 1) : "-", c.peak, juce::Justification::centredRight);
-        g.setColour (theme::textDim);
-        g.drawText (row.t.role == Role::Master ? "" : theme::dbString (row.t.trimDb, 1, ""), c.trim, juce::Justification::centredRight);
-        if (row.t.role == Role::Master) g.setColour (theme::textMute);
-        else g.setColour (std::abs (row.delta) < 0.1f ? theme::good : theme::yellow);
-        g.drawText (row.t.role == Role::Master ? "master" : (! row.t.active ? "silent" : std::abs (row.delta) < 0.1f ? "sits right" : theme::dbString (row.delta, 1)), c.delta, juce::Justification::centredRight);
-    }
-}
-
-// ---- MixPage -------------------------------------------------------------------------------------
-MixPage::MixPage (MUProcessor& p) : proc (p)
-{
-    addAndMakeVisible (viewport);
-    viewport.setViewedComponent (&content, false);
-    viewport.setScrollBarsShown (true, false);
-    viewport.setScrollBarThickness (8);
-
-    for (auto* c : { &card1, &card2, &card3, &card4 }) content.addAndMakeVisible (c);
-
-    learnBtn.setComponentID ("primary");
-    learnBtn.setTooltip ("Clears every instance's reading, listens for 20 seconds while you play the loudest section, then moves every track to its target in one go.");
-    learnBtn.onClick = [this] { proc.learnAndBalance (20.0f); refresh(); };
-    balanceBtn.setComponentID ("ghost");
-    balanceBtn.setTooltip ("Apply the current plan right now using what has been measured so far.");
-    balanceBtn.onClick = [this] { proc.balanceNow(); refresh(); };
-    cancelBtn.setComponentID ("ghost");
-    cancelBtn.onClick = [this] { proc.getBus().cancelLearn(); refresh(); };
-    for (auto* b : { &learnBtn, &balanceBtn, &cancelBtn }) content.addAndMakeVisible (b);
-
-    autoBalance.setTooltip ("Keeps re-balancing gently while the song plays. Switch it off once you are happy so you can ride faders by hand.");
-    autoBalance.onClick = [this] { proc.setAutoBalanceMode (autoBalance.getToggleState()); };
-    content.addAndMakeVisible (autoBalance);
-    autoTrim.setTooltip ("The master instance adjusts its own gain so the integrated loudness lands exactly on the target.");
-    content.addAndMakeVisible (autoTrim);
-    autoTrimAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ids::masterAutoTrim, autoTrim);
-    peakGuard.setTooltip ("A transparent 2 ms look-ahead limiter at the ceiling so nothing you hand over has peaks above it. Safety net, not a loudness tool.");
-    content.addAndMakeVisible (peakGuard);
-    peakGuardAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ids::peakGuard, peakGuard);
-
-    content.addAndMakeVisible (progress);
-    status.setFont (theme::body (12.5f));
-    status.setColour (juce::Label::textColourId, theme::textDim);
-    status.setJustificationType (juce::Justification::centredLeft);
-    content.addAndMakeVisible (status);
-
-    makeMaster.setComponentID ("primary");
-    makeMaster.onClick = [this] { proc.setParam (ids::role, (float) Role::Master); refresh(); };
-    content.addAndMakeVisible (makeMaster);
-    resetTrims.setComponentID ("ghost");
-    resetTrims.onClick = [this] { proc.resetTrim(); };
-    content.addAndMakeVisible (resetTrims);
-    content.addAndMakeVisible (acceptMoves);
-    acceptAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ids::autoBalance, acceptMoves);
-
-    // targets
-    content.addAndMakeVisible (targetsPanel);
-    targetLufs = std::make_unique<HSlider> (proc.apvts, ids::targetLufs, "Song loudness (integrated)", 190,
-        "Where the whole song should sit before mastering. -18 LUFS is the standard hand-off; trap and drill often go hotter (-14 to -12).");
-    targetTp = std::make_unique<HSlider> (proc.apvts, ids::targetTruePeak, "True-peak ceiling", 190,
-        "Headroom left for the mastering engineer. -6 dBTP is safe; never above -3.");
-    targetsPanel.addAndMakeVisible (*targetLufs);
-    targetsPanel.addAndMakeVisible (*targetTp);
-    for (int r = (int) Role::Vocal; r < (int) Role::Master; ++r)
-    {
-        auto s = std::make_unique<HSlider> (proc.apvts, ids::roleOffset ((Role) r), roleNames()[r], 120,
-            "How loud this role should be against the lead vocal (0 LU = same loudness).");
-        if ((Role) r == Role::Vocal) s->getSlider().setEnabled (false);
-        targetsPanel.addAndMakeVisible (*s);
-        roleSliders.push_back (std::move (s));
-    }
-    resetTargets.setComponentID ("ghost");
-    resetTargets.onClick = [this]
-    {
-        proc.setParam (ids::targetLufs, -18.0f); proc.setParam (ids::targetTruePeak, -6.0f);
-        for (int r = (int) Role::Vocal; r < (int) Role::Master; ++r) proc.setParam (ids::roleOffset ((Role) r), defaultRoleOffsetLu ((Role) r));
-    };
-    targetsPanel.addAndMakeVisible (resetTargets);
-
-    content.addAndMakeVisible (sessionPanel);
-    sessionPanel.addAndMakeVisible (table);
-    content.addAndMakeVisible (maskingPanel);
-    maskingEmpty.setFont (theme::body (12.5f));
-    maskingEmpty.setColour (juce::Label::textColourId, theme::textMute);
-    maskingEmpty.setText ("Nothing is fighting for the same space right now.", juce::dontSendNotification);
-    maskingPanel.addAndMakeVisible (maskingEmpty);
-    refresh();
-}
-
-void MixPage::setStatus (const juce::String& s)
-{
-    statusText = s;
-    statusUntil = juce::Time::getMillisecondCounterHiRes() + 8000.0;
-    status.setText (s, juce::dontSendNotification);
-}
-
-void MixPage::rebuildMaskingButtons()
-{
-    maskingButtons.clear();
-    for (size_t i = 0; i < clashes.size(); ++i)
-    {
-        auto& c = clashes[i];
-        auto* b = maskingButtons.add (new juce::TextButton());
-        b->setComponentID ("ghost");
-        b->setButtonText ("FIX   " + c.nameB + "  sits on  " + c.nameA + "  around " + theme::hzString (c.freqHz) + "   (" + juce::String (c.suggestedCutDb, 1) + " dB dynamic cut)");
-        b->onClick = [this, i] { if (i < clashes.size()) proc.getBus().applyMaskingClash (clashes[i]); };
-        maskingPanel.addAndMakeVisible (b);
-    }
-    maskingEmpty.setVisible (clashes.empty());
+    for (size_t i = 0; i < fixButtons.size(); ++i) fixButtons[i].setVisible (i < clashes.size());
+    learnButton.setButtonText (learn.active ? "Stop listening" : "Learn and balance");
     resized();
 }
 
-void MixPage::refresh()
+void MixPage::tick (float dt)
 {
-    const bool isMaster = proc.isMasterInstance();
-    auto& bus = proc.getBus();
-    const auto plan = bus.getLastPlan();
-    const auto tracks = bus.collectTracks();
-    const int oldH = table.preferredHeight();
-    table.update (tracks, plan, proc.getSessionSlot());
-    const bool tableGrew = table.preferredHeight() != oldH;
+    refreshTimer -= dt;
+    if (refreshTimer <= 0.0f) { refreshTimer = 0.25f; refreshData(); }
 
-    const auto& l = proc.getLoudness();
-    const float tLufs = proc.apvts.getRawParameterValue (ids::targetLufs)->load();
-    const float tTp = proc.apvts.getRawParameterValue (ids::targetTruePeak)->load();
-    auto near = [] (float v, float t, float tol) { return std::abs (v - t) <= tol ? theme::good : std::abs (v - t) <= tol * 3.0f ? theme::yellow : theme::bad; };
-
-    const auto learn = bus.getLearnState();
-    progress.setProgress (learn.progress, learn.active);
-    learnBtn.setEnabled (! learn.active);
-    cancelBtn.setVisible (learn.active && isMaster);
-    const double now = juce::Time::getMillisecondCounterHiRes();
-    if (learn.active || (learn.message.isNotEmpty() && now > statusUntil))
-        status.setText (learn.message.isNotEmpty() ? learn.message : (plan.usable ? plan.summary : ""), juce::dontSendNotification);
-    else if (now > statusUntil)
-        status.setText (plan.usable ? plan.summary : "Play the song so every instance can listen, then press Learn & Balance.", juce::dontSendNotification);
-
-    if (isMaster)
+    const bool playing = proc.isPlaying();
+    for (auto& lane : lanes)
     {
-        const float integ = l.getIntegrated();
-        card1.set (integ > -90.0f ? juce::String (integ, 1) : "--", "master LUFS now", integ > -90.0f ? near (integ, tLufs, 1.0f) : theme::textDim);
-        const float tp = l.getTruePeakHold();
-        card2.set (tp > -90.0f ? juce::String (tp, 1) : "--", "master true peak", tp > -90.0f ? (tp <= tTp ? theme::good : tp > 0.0f ? theme::bad : theme::yellow) : theme::textDim);
-        card3.set (plan.usable ? juce::String (plan.projectedMasterLufs, 1) : "--", "after balance", plan.usable ? near (plan.projectedMasterLufs, tLufs, 1.0f) : theme::textDim);
-        int heard = 0, total = 0;
-        for (auto& t : tracks) if (t.role != Role::Master) { ++total; if (t.active) ++heard; }
-        const float at = proc.getMasterAutoTrimDb();
-        card4.set (std::abs (at) > 0.05f ? theme::dbString (at) : juce::String (heard) + " / " + juce::String (total),
-                   std::abs (at) > 0.05f ? "master auto trim" : "tracks heard", theme::text);
-        autoBalance.setToggleState (proc.getAutoBalanceMode(), juce::dontSendNotification);
-        auto fresh = bus.computeMasking();
-        bool changed = fresh.size() != clashes.size();
-        for (size_t i = 0; ! changed && i < fresh.size(); ++i) changed = fresh[i].slotB != clashes[i].slotB || std::abs (fresh[i].freqHz - clashes[i].freqHz) > 1.0f;
-        clashes = fresh;
-        if (changed) rebuildMaskingButtons();
+        auto& st = laneState[lane.info.slot];
+        const float target = lane.info.active ? lane.info.levelLufs : -70.0f;
+        st.level = approach (st.level, target, dt, 0.18f);
+        st.appear = juce::jmin (1.0f, st.appear + dt * 4.0f);
+        float peak = -200.0f;
+        if (lane.info.hasBands) for (float v : lane.info.bandsDb) peak = juce::jmax (peak, v);
+        for (int b = 0; b < kAnalysisBands; ++b)
+        {
+            const float v = lane.info.hasBands && lane.info.active ? juce::jlimit (0.0f, 1.0f, (lane.info.bandsDb[(size_t) b] - (peak - 30.0f)) / 30.0f) : 0.0f;
+            st.heat[(size_t) b] = approach (st.heat[(size_t) b], v, dt, 0.25f);
+        }
+        lane.level = st.level; lane.appear = st.appear; lane.heat = st.heat;
     }
-    else
-    {
-        const float lv = l.getIntegrated() > -90.0f ? l.getIntegrated() : l.getShortTerm();
-        card1.set (lv > -90.0f ? juce::String (lv, 1) : "--", "this track LUFS", theme::text);
-        const float trim = proc.getTrimDb();
-        card2.set (theme::dbString (trim), "balance trim applied", std::abs (trim) < 0.05f ? theme::textDim : theme::yellow);
-        float mine = 0.0f; juce::String note = "waiting for master";
-        for (auto& m : plan.moves) if (m.slot == proc.getSessionSlot()) { mine = m.deltaDb; note = m.note; }
-        card3.set (plan.usable ? theme::dbString (mine) : "--", "next move (" + note + ")", std::abs (mine) < 0.1f ? theme::good : theme::yellow);
-        const float tp = l.getTruePeakHold();
-        card4.set (tp > -90.0f ? juce::String (tp, 1) : "--", "this track true peak", tp > -0.3f ? theme::bad : theme::text);
-        const int masterSlot = bus.getMasterSlot();
-        if (masterSlot < 0 && now > statusUntil) status.setText ("No master instance in this session yet. Put one on the stereo out and set its role to Master, or use the button above.", juce::dontSendNotification);
-        if (! maskingButtons.isEmpty()) { maskingButtons.clear(); clashes.clear(); }
-    }
-
-    makeMaster.setVisible (! isMaster && bus.getMasterSlot() < 0);
-    if (lastWasMaster != isMaster || tableGrew) { lastWasMaster = isMaster; resized(); }
+    dialValue = approach (dialValue, mixLufs > -70.0f ? mixLufs : targetLufs - 20.0f, dt, 0.2f);
+    dialPeak = approach (dialPeak, mixPeak, dt, 0.2f);
+    learnProgress = learn.active ? juce::jlimit (0.0f, 1.0f, learnProgress + dt / 20.0f) : approach (learnProgress, 0.0f, dt, 0.15f);
+    if (learn.active && learnProgress < learn.progress - 0.05f) learnProgress = learn.progress;
+    pulse = playing ? std::fmod (pulse + dt, 2.0f) : 0.0f;
+    repaint();
 }
 
-void MixPage::paint (juce::Graphics& g) { g.fillAll (theme::bg); }
+// ---- dial ------------------------------------------------------------------------------------------
+void MixPage::drawDial (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    fillPanel (g, area);
+    auto r = area.reduced (16.0f, 12.0f);
+    g.setFont (bodyBold (13.0f));
+    g.setColour (text);
+    g.drawText ("Mix level", r.removeFromTop (20.0f), juce::Justification::centredLeft);
+
+    const float side = juce::jmin (r.getWidth(), r.getHeight() - 46.0f);
+    const auto box = juce::Rectangle<float> (side, side).withCentre ({ r.getCentreX(), r.getY() + side * 0.5f + 4.0f });
+    const float radius = side * 0.5f - 8.0f;
+    const float a0 = juce::MathConstants<float>::pi * 1.2f, a1 = juce::MathConstants<float>::pi * 2.8f;
+    const float lo = targetLufs - 18.0f, hi = targetLufs + 6.0f;
+    auto angleFor = [&] (float lufs) { return a0 + juce::jlimit (0.0f, 1.0f, (lufs - lo) / (hi - lo)) * (a1 - a0); };
+    const auto c = box.getCentre();
+
+    juce::Path track;
+    track.addCentredArc (c.x, c.y, radius, radius, 0.0f, a0, a1, true);
+    g.setColour (control);
+    g.strokePath (track, juce::PathStrokeType (10.0f, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
+    // the window to aim for: one LU either side of the target
+    juce::Path window;
+    window.addCentredArc (c.x, c.y, radius, radius, 0.0f, angleFor (targetLufs - 1.0f), angleFor (targetLufs + 1.0f), true);
+    g.setColour (yellow.withAlpha (0.28f));
+    g.strokePath (window, juce::PathStrokeType (10.0f));
+
+    const bool measured = mixLufs > -70.0f;
+    const bool onTarget = measured && std::abs (mixLufs - targetLufs) <= 1.0f;
+    if (measured)
+    {
+        juce::Path value;
+        value.addCentredArc (c.x, c.y, radius, radius, 0.0f, a0, angleFor (dialValue), true);
+        g.setColour (mixLufs > targetLufs + 1.0f ? over : (onTarget ? yellow : text));
+        g.strokePath (value, juce::PathStrokeType (10.0f, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
+    }
+    // target tick
+    const float ta = angleFor (targetLufs);
+    juce::Path tick;
+    tick.addRectangle (-1.5f, -radius - 11.0f, 3.0f, 22.0f);
+    g.setColour (yellow);
+    g.fillPath (tick, juce::AffineTransform::rotation (ta).translated (c.x, c.y));
+
+    g.setFont (headline (side * 0.30f));
+    g.setColour (onTarget ? yellow : text);
+    g.drawText (measured ? juce::String (mixLufs, 1) : juce::String ("--"), box.withTrimmedTop (side * 0.22f).withHeight (side * 0.36f), juce::Justification::centred);
+    g.setFont (body (11.0f));
+    g.setColour (textMute);
+    g.drawText (hasMaster ? "LUFS integrated" : "LUFS, estimated", box.withTrimmedTop (side * 0.58f).withHeight (14.0f), juce::Justification::centred);
+
+    auto foot = juce::Rectangle<float> (r.getX(), r.getBottom() - 38.0f, r.getWidth(), 38.0f);
+    auto row = [&] (const juce::String& label, const juce::String& value, bool alarm)
+    {
+        auto line1 = foot.removeFromTop (19.0f);
+        g.setFont (body (12.0f)); g.setColour (textDim);
+        g.drawText (label, line1, juce::Justification::centredLeft);
+        g.setFont (bodyBold (12.0f)); g.setColour (alarm ? over : text);
+        g.drawText (value, line1, juce::Justification::centredRight);
+    };
+    row ("Target for the mix", juce::String (targetLufs, 1) + " LUFS", false);
+    row ("Highest peak", mixPeak > -70.0f ? juce::String (mixPeak, 1) + " dBTP  (keep under " + juce::String (juce::roundToInt (targetPeak)) + ")" : juce::String ("--"), mixPeak > targetPeak + 0.1f);
+}
+
+// ---- lanes -----------------------------------------------------------------------------------------
+void MixPage::drawLanes (juce::Graphics& g)
+{
+    fillPanel (g, lanesArea.toFloat());
+    auto r = lanesArea.reduced (14, 0);
+    auto head = r.removeFromTop (38);
+    g.setFont (bodyBold (13.0f)); g.setColour (text);
+    g.drawText ("Session", head.removeFromLeft (70), juce::Justification::centredLeft);
+    g.setFont (body (12.0f)); g.setColour (textMute);
+    g.drawText (juce::String ((int) lanes.size()) + (lanes.size() == 1 ? " track" : " tracks") + (hasMaster ? " and the master" : ", no master yet"), head, juce::Justification::centredLeft);
+
+    if (lanes.empty())
+    {
+        drawWrapped (g, "Add Musically Unorthodox to each track you want to balance (vocals, beat, 808, drums) and to the Stereo Out with its role set to Master. Each one appears here as a lane.",
+                     r.toFloat().withTrimmedTop (8.0f).withWidth (juce::jmin (520.0f, (float) r.getWidth())), body (12.5f), textDim);
+        return;
+    }
+
+    // column guide
+    const int nameW = 150, heatW = juce::jlimit (150, 260, r.getWidth() / 4), moveW = 92;
+    auto cols = r.removeFromTop (18);
+    g.setFont (body (10.5f)); g.setColour (textMute);
+    g.drawText ("Track", cols.removeFromLeft (nameW), juce::Justification::centredLeft);
+    cols.removeFromLeft (10);
+    g.drawText ("Where its energy is", cols.removeFromLeft (heatW), juce::Justification::centredLeft);
+    cols.removeFromLeft (14);
+    cols.removeFromRight (moveW);
+    g.drawText ("Level and where it should sit", cols, juce::Justification::centredLeft);
+    for (int lufs = -40; lufs <= -10; lufs += 10)
+    {
+        const float x = (float) cols.getX() + (float) cols.getWidth() * ((float) lufs - kLaneLo) / (kLaneHi - kLaneLo);
+        if (x > (float) cols.getX() + 170.0f)
+            g.drawText (juce::String (lufs) + (lufs == -10 ? " LUFS" : ""), juce::Rectangle<float> (x - 30.0f, (float) cols.getY(), 60.0f, (float) cols.getHeight()), juce::Justification::centred);
+    }
+    r.removeFromTop (4);
+
+    const int rowH = juce::jlimit (26, 54, r.getHeight() / (int) lanes.size());
+    const int visible = juce::jmin ((int) lanes.size(), r.getHeight() / rowH);
+    for (int i = 0; i < visible; ++i)
+    {
+        auto& lane = lanes[(size_t) i];
+        auto row = r.removeFromTop (rowH);
+        lane.bounds = row;
+        const bool mine = lane.info.slot == proc.getSessionSlot();
+        const float alpha = lane.appear;
+        if (mine) { g.setColour (raised); g.fillRoundedRectangle (row.toFloat().expanded (6.0f, 0.0f).reduced (0.0f, 1.0f), 4.0f); }
+        g.setColour (line);
+        if (i > 0 && ! mine) g.fillRect (row.getX(), row.getY(), row.getWidth(), 1);
+
+        auto cell = row.reduced (0, juce::jmax (3, (rowH - 30) / 2));
+        // name and role
+        auto name = cell.removeFromLeft (nameW);
+        g.setColour (MUProcessor::roleColour (lane.info.role).withAlpha (alpha));
+        g.fillRect (name.removeFromLeft (3).reduced (0, 2));
+        name.removeFromLeft (9);
+        g.setFont (bodyBold (12.5f)); g.setColour ((lane.info.active ? text : textDim).withAlpha (alpha));
+        g.drawText (lane.info.name, name.removeFromTop (name.getHeight() / 2 + 2), juce::Justification::bottomLeft);
+        g.setFont (body (10.5f)); g.setColour (textMute.withAlpha (alpha));
+        const auto roleName = roleNames()[(int) lane.info.role];
+        g.drawText (lane.info.name.startsWith (roleName) ? juce::String (mine ? "This track" : "") : roleName + (mine ? ", this track" : ""), name, juce::Justification::topLeft);
+        cell.removeFromLeft (10);
+
+        // heat strip
+        auto heat = cell.removeFromLeft (heatW).toFloat().reduced (0.0f, 4.0f);
+        const float cw = heat.getWidth() / (float) kAnalysisBands;
+        for (int b = 0; b < kAnalysisBands; ++b)
+        {
+            const float v = lane.heat[(size_t) b];
+            g.setColour (juce::Colour (0xff1c1c1c).interpolatedWith (yellow, v * v).withAlpha (alpha));
+            g.fillRect (heat.getX() + (float) b * cw, heat.getY(), cw - 1.0f, heat.getHeight());
+        }
+        for (auto& c : clashes)
+            if (c.slotA == lane.info.slot || c.slotB == lane.info.slot)
+            {
+                // bracket the range where this track collides with another
+                const float x = heat.getX() + heat.getWidth() * std::log (c.freqHz / 20.0f) / std::log (1000.0f);
+                g.setColour (c.slotB == lane.info.slot ? over : text);
+                g.drawRect (juce::Rectangle<float> (x - cw * 1.5f, heat.getY() - 2.0f, cw * 3.0f, heat.getHeight() + 4.0f), 1.5f);
+            }
+        cell.removeFromLeft (14);
+
+        // move
+        auto moveCell = cell.removeFromRight (moveW);
+        lane.lockArea = moveCell.removeFromRight (24);
+        const bool locked = ! lane.info.acceptsBalance;
+        icons::draw (g, "link", lane.lockArea.toFloat().reduced (4.0f), locked ? textMute : textDim.withAlpha (0.0f));
+        if (locked)
+        {
+            g.setFont (body (11.5f)); g.setColour (textMute);
+            g.drawText ("Locked", moveCell, juce::Justification::centredRight);
+        }
+        else if (lane.info.active && plan.usable)
+        {
+            const bool fine = std::abs (lane.move) < 0.5f;
+            g.setFont (bodyBold (12.0f)); g.setColour ((fine ? textDim : yellow).withAlpha (alpha));
+            g.drawText (fine ? juce::String ("In place") : dbString (lane.move), moveCell, juce::Justification::centredRight);
+        }
+
+        // level bar with target
+        auto bar = cell.toFloat().reduced (0.0f, 9.0f);
+        auto xFor = [&] (float lufs) { return bar.getX() + juce::jlimit (0.0f, 1.0f, (lufs - kLaneLo) / (kLaneHi - kLaneLo)) * bar.getWidth(); };
+        g.setColour (control);
+        g.fillRoundedRectangle (bar, 3.0f);
+        if (lane.level > kLaneLo)
+        {
+            g.setColour ((lane.info.active ? text : textMute).withAlpha (0.9f * alpha));
+            g.fillRoundedRectangle (bar.withRight (xFor (lane.level)), 3.0f);
+        }
+        if (lane.info.active && plan.usable && ! locked)
+        {
+            const float targetX = xFor (lane.info.levelLufs + lane.move), nowX = xFor (lane.level);
+            g.setColour (yellow);
+            g.fillRect (targetX - 1.5f, bar.getY() - 5.0f, 3.0f, bar.getHeight() + 10.0f);
+            if (std::abs (targetX - nowX) > 6.0f)
+            {
+                const float y = bar.getCentreY(), dir = targetX > nowX ? 1.0f : -1.0f;
+                g.fillRect (juce::jmin (nowX, targetX), y - 1.0f, std::abs (targetX - nowX), 2.0f);
+                juce::Path head2;
+                head2.addTriangle (targetX - dir * 2.0f, y, targetX - dir * 9.0f, y - 5.0f, targetX - dir * 9.0f, y + 5.0f);
+                g.fillPath (head2);
+            }
+        }
+    }
+    if (visible < (int) lanes.size())
+    {
+        g.setFont (body (11.0f)); g.setColour (textMute);
+        g.drawText ("+" + juce::String ((int) lanes.size() - visible) + " more tracks in the session", r.removeFromBottom (14), juce::Justification::centredLeft);
+    }
+}
+
+// ---- collisions ------------------------------------------------------------------------------------
+void MixPage::drawCollisions (juce::Graphics& g)
+{
+    fillPanel (g, collisionArea.toFloat());
+    auto r = collisionArea.reduced (14, 0);
+    auto head = r.removeFromTop (38);
+    icons::draw (g, "collision", head.removeFromLeft (20).toFloat().reduced (1.0f), clashes.empty() ? textDim : yellow);
+    head.removeFromLeft (8);
+    g.setFont (bodyBold (13.0f)); g.setColour (text);
+    g.drawText ("Collisions", head.removeFromLeft (80), juce::Justification::centredLeft);
+    g.setFont (body (12.0f)); g.setColour (textMute);
+    g.drawText (clashes.empty() ? juce::String() : juce::String ((int) clashes.size()) + " found, most serious first", head, juce::Justification::centredLeft);
+
+    if (clashes.empty())
+    {
+        g.setFont (body (12.5f)); g.setColour (textDim);
+        g.drawText (lanes.size() < 2 ? "Collisions show up once two or more tracks are playing." : "No collisions. Every track has room where it matters.", r.removeFromTop (22), juce::Justification::centredLeft);
+        return;
+    }
+    const int rowH = juce::jmin (34, r.getHeight() / (int) clashes.size());
+    for (size_t i = 0; i < clashes.size(); ++i)
+    {
+        const auto& c = clashes[i];
+        auto row = r.removeFromTop (rowH);
+        if (i > 0) { g.setColour (line); g.fillRect (row.getX(), row.getY(), row.getWidth(), 1); }
+        row.removeFromRight (70);
+        g.setFont (bodyBold (12.5f)); g.setColour (text);
+        const juce::String what = "\"" + c.nameB + "\" is covering \"" + c.nameA + "\" around " + hzString (c.freqHz);
+        const int w = juce::jmin (row.getWidth() / 2 + 60, juce::roundToInt (bodyBold (12.5f).getStringWidthFloat (what)) + 16);
+        g.drawText (what, row.removeFromLeft (w), juce::Justification::centredLeft, true);
+        g.setFont (body (12.0f)); g.setColour (textDim);
+        g.drawText ("Fix: dynamic cut of " + juce::String (c.suggestedCutDb, 1) + " dB on \"" + c.nameB + "\"", row, juce::Justification::centredLeft, true);
+    }
+}
+
+void MixPage::paint (juce::Graphics& g)
+{
+    g.fillAll (black);
+    drawDial (g, dialArea.toFloat());
+
+    fillPanel (g, actionArea.toFloat());
+    auto a = actionArea.reduced (16, 0);
+    a.removeFromTop (14 + 36 + 8);
+    // listening progress
+    auto strip = a.removeFromTop (4).toFloat();
+    g.setColour (control); g.fillRoundedRectangle (strip, 2.0f);
+    if (learnProgress > 0.004f) { g.setColour (yellow); g.fillRoundedRectangle (strip.withWidth (strip.getWidth() * learnProgress), 2.0f); }
+    a.removeFromTop (8 + 28 + 10 + 22 + 10);
+    juce::String msg = learn.message;
+    if (msg.isEmpty()) msg = plan.usable ? plan.summary : juce::String ("Play the loudest part of the song, then press Learn and balance. Every track is measured for 20 seconds and set to the level its role needs.");
+    drawWrapped (g, msg, a.toFloat(), body (12.0f), textDim);
+
+    drawLanes (g);
+    drawCollisions (g);
+}
 
 void MixPage::resized()
 {
-    viewport.setBounds (getLocalBounds());
-    const int w = getWidth() - (viewport.isVerticalScrollBarShown() ? 10 : 0);
-    auto r = juce::Rectangle<int> (0, 0, w, 10000).reduced (18, 16);
-    const int startY = r.getY();
-    if (proc.isMasterInstance()) layoutMaster (r); else layoutTrack (r);
-    juce::ignoreUnused (startY);
+    auto r = getLocalBounds().reduced (12);
+    auto left = r.removeFromLeft (290);
+    r.removeFromLeft (10);
+    dialArea = left.removeFromTop (juce::jmin (330, left.getHeight() * 55 / 100));
+    left.removeFromTop (10);
+    actionArea = left;
+    auto a = actionArea.reduced (16, 0);
+    a.removeFromTop (14);
+    learnButton.setBounds (a.removeFromTop (36));
+    a.removeFromTop (8 + 4 + 8);
+    balanceButton.setBounds (a.removeFromTop (28));
+    a.removeFromTop (10);
+    keepBalanced.setBounds (a.removeFromTop (22));
+
+    const int collisionH = 38 + juce::jmax (1, (int) clashes.size()) * 34 + 10;
+    collisionArea = r.removeFromBottom (collisionH);
+    r.removeFromBottom (10);
+    lanesArea = r;
+
+    auto c = collisionArea.reduced (14, 0);
+    c.removeFromTop (38);
+    for (size_t i = 0; i < clashes.size() && i < fixButtons.size(); ++i)
+    {
+        auto row = c.removeFromTop (34);
+        fixButtons[i].setBounds (row.removeFromRight (60).withSizeKeepingCentre (60, 24));
+    }
 }
 
-void MixPage::layoutMaster (juce::Rectangle<int> r)
+void MixPage::mouseDown (const juce::MouseEvent& e)
 {
-    for (auto* c : std::initializer_list<juce::Component*> { &makeMaster, &resetTrims, &acceptMoves }) c->setVisible (false);
-    for (auto* c : std::initializer_list<juce::Component*> { &learnBtn, &balanceBtn, &autoBalance, &autoTrim, &peakGuard, &progress, &targetsPanel, &maskingPanel }) c->setVisible (true);
-
-    auto cards = r.removeFromTop (72);
-    const int cw = (cards.getWidth() - 36) / 4;
-    for (auto* c : { &card1, &card2, &card3, &card4 }) { c->setBounds (cards.removeFromLeft (cw)); cards.removeFromLeft (12); }
-    r.removeFromTop (14);
-
-    auto actions = r.removeFromTop (40);
-    learnBtn.setBounds (actions.removeFromLeft (230));
-    actions.removeFromLeft (10);
-    balanceBtn.setBounds (actions.removeFromLeft (150));
-    actions.removeFromLeft (10);
-    cancelBtn.setBounds (actions.removeFromLeft (100));
-    actions.removeFromLeft (16);
-    auto toggles = actions;
-    autoBalance.setBounds (toggles.removeFromLeft (270).withSizeKeepingCentre (270, 24));
-    r.removeFromTop (6);
-    auto toggles2 = r.removeFromTop (24);
-    toggles2.removeFromLeft (0);
-    autoTrim.setBounds (toggles2.removeFromLeft (230));
-    peakGuard.setBounds (toggles2.removeFromLeft (260));
-    r.removeFromTop (8);
-    progress.setBounds (r.removeFromTop (4));
-    r.removeFromTop (6);
-    status.setBounds (r.removeFromTop (22));
-    r.removeFromTop (12);
-
-    // targets panel: 2 target rows + role grid (2 columns)
-    const int roleRows = (int) (roleSliders.size() + 1) / 2;
-    const int targetsH = 35 + 10 + 2 * 28 + 10 + roleRows * 26 + 10 + 30 + 10;
-    targetsPanel.setBounds (r.removeFromTop (targetsH));
-    {
-        auto c = targetsPanel.getContentArea();
-        targetLufs->setBounds (c.removeFromTop (28));
-        targetTp->setBounds (c.removeFromTop (28));
-        c.removeFromTop (10);
-        auto grid = c.removeFromTop (roleRows * 26);
-        const int colW = grid.getWidth() / 2;
-        for (size_t i = 0; i < roleSliders.size(); ++i)
+    for (auto& lane : lanes)
+        if (lane.bounds.contains (e.getPosition()) && lane.lockArea.expanded (40, 0).contains (e.getPosition()))
         {
-            const int col = (int) i % 2, row = (int) i / 2;
-            roleSliders[i]->setBounds (grid.getX() + col * colW, grid.getY() + row * 26, colW - 12, 26);
+            proc.getBus().setTrackLocked (lane.info.slot, lane.info.acceptsBalance);
+            setStatus (lane.info.acceptsBalance ? "\"" + lane.info.name + "\" is locked: balancing will leave its level alone." : "\"" + lane.info.name + "\" is unlocked and will be balanced with the rest.");
+            refreshTimer = 0.0f;
+            return;
         }
-        c.removeFromTop (10);
-        resetTargets.setBounds (c.removeFromTop (28).removeFromLeft (150));
-    }
-    r.removeFromTop (12);
-
-    sessionPanel.setBounds (r.removeFromTop (35 + table.preferredHeight() + 10));
-    table.setBounds (sessionPanel.getContentArea());
-    r.removeFromTop (12);
-
-    const int maskH = 35 + 10 + (clashes.empty() ? 24 : (int) clashes.size() * 32) + 10;
-    maskingPanel.setBounds (r.removeFromTop (maskH));
-    {
-        auto c = maskingPanel.getContentArea();
-        maskingEmpty.setBounds (c.removeFromTop (24));
-        for (auto* b : maskingButtons) { b->setBounds (c.removeFromTop (28)); c.removeFromTop (4); }
-    }
-    content.setSize (viewport.getWidth() - (viewport.isVerticalScrollBarShown() ? 10 : 0), maskingPanel.getBottom() + 16);
 }
 
-void MixPage::layoutTrack (juce::Rectangle<int> r)
+void MixPage::mouseMove (const juce::MouseEvent& e)
 {
-    for (auto* c : std::initializer_list<juce::Component*> { &learnBtn, &balanceBtn, &cancelBtn, &autoBalance, &autoTrim, &peakGuard, &progress, &targetsPanel, &maskingPanel }) c->setVisible (false);
-    for (auto* c : std::initializer_list<juce::Component*> { &resetTrims, &acceptMoves }) c->setVisible (true);
-
-    auto cards = r.removeFromTop (72);
-    const int cw = (cards.getWidth() - 36) / 4;
-    for (auto* c : { &card1, &card2, &card3, &card4 }) { c->setBounds (cards.removeFromLeft (cw)); cards.removeFromLeft (12); }
-    r.removeFromTop (14);
-
-    auto actions = r.removeFromTop (36);
-    acceptMoves.setBounds (actions.removeFromLeft (260).withSizeKeepingCentre (260, 24));
-    actions.removeFromLeft (10);
-    resetTrims.setBounds (actions.removeFromLeft (140));
-    actions.removeFromLeft (10);
-    makeMaster.setBounds (actions.removeFromLeft (280));
-    r.removeFromTop (8);
-    status.setBounds (r.removeFromTop (22));
-    r.removeFromTop (12);
-
-    sessionPanel.setBounds (r.removeFromTop (35 + table.preferredHeight() + 10));
-    table.setBounds (sessionPanel.getContentArea());
-    content.setSize (viewport.getWidth() - (viewport.isVerticalScrollBarShown() ? 10 : 0), sessionPanel.getBottom() + 16);
+    juce::String key = "mix.lanes";
+    if (dialArea.contains (e.getPosition())) key = "mix.dial";
+    else if (collisionArea.contains (e.getPosition())) key = "mix.collisions";
+    else for (auto& lane : lanes) if (lane.bounds.contains (e.getPosition()) && lane.lockArea.expanded (40, 0).contains (e.getPosition())) key = "mix.lock";
+    getProperties().set ("help", key);
 }
 }

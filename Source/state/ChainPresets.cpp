@@ -5,221 +5,228 @@ namespace mu
 {
 namespace
 {
-    struct BandSpec { bool on; EQType type; float hz; float gain; float q; bool dyn = false; float thr = -30.0f; float range = -6.0f; };
+    enum Style { Clean = 0, Punch, Smooth, Glue };
+    enum Sat { Tape = 0, Tube, Warm };
+    enum Focus { Full = 0, LowMids, Highs };
+    enum Speed { Slow = 0, Normal, Fast };
 
-    void band (std::vector<ParamValue>& v, int b, const BandSpec& s)
+    // Small builder so each preset reads like a channel-strip recipe.
+    struct Chain
     {
-        v.push_back ({ ids::eqBandEnabled (b), s.on ? 1.0f : 0.0f });
-        v.push_back ({ ids::eqBandType (b), (float) s.type });
-        v.push_back ({ ids::eqBandFreq (b), s.hz });
-        v.push_back ({ ids::eqBandGain (b), s.gain });
-        v.push_back ({ ids::eqBandQ (b), s.q });
-        v.push_back ({ ids::eqBandDyn (b), s.dyn ? 1.0f : 0.0f });
-        v.push_back ({ ids::eqBandThr (b), s.thr });
-        v.push_back ({ ids::eqBandRange (b), s.range });
-    }
+        ChainPreset p;
 
-    void gate (std::vector<ParamValue>& v, bool on, float thr, float range, float att, float rel, float hold)
-    {
-        v.push_back ({ ids::gateOn, on ? 1.0f : 0.0f }); v.push_back ({ ids::gateThreshold, thr }); v.push_back ({ ids::gateRange, range });
-        v.push_back ({ ids::gateAttack, att }); v.push_back ({ ids::gateRelease, rel }); v.push_back ({ ids::gateHold, hold });
-    }
+        Chain (const juce::String& category, const juce::String& name, Role role, const juce::String& blurb)
+        {
+            p.category = category; p.name = name; p.role = role; p.blurb = blurb;
+            set (ids::role, (float) role);
+            set (ids::eqEnabled, 1); set (ids::eqAutoGain, 0); set (ids::outputGain, 0);
+            for (int b = 0; b < kNumEQBands; ++b)
+            {
+                set (ids::eqBandEnabled (b), 0); set (ids::eqBandType (b), (float) kDefaultBands[b].type);
+                set (ids::eqBandFreq (b), kDefaultBands[b].freq); set (ids::eqBandGain (b), 0); set (ids::eqBandQ (b), 0.71f);
+                set (ids::eqBandDyn (b), 0); set (ids::eqBandThr (b), -30); set (ids::eqBandRange (b), -6);
+                set (ids::eqBandSlope (b), 0); set (ids::eqBandMode (b), 0);
+            }
+            set (ids::gateOn, 0); set (ids::gateThreshold, -50); set (ids::gateRange, 20); set (ids::gateAttack, 1.5f); set (ids::gateRelease, 120); set (ids::gateHold, 40);
+            set (ids::compEnabled, 0); set (ids::compThreshold, -18); set (ids::compRatio, 3); set (ids::compAttack, 10); set (ids::compRelease, 120);
+            set (ids::compKnee, 6); set (ids::compMakeup, 0); set (ids::compAutoMakeup, 1); set (ids::compMix, 100); set (ids::compStyle, Clean); set (ids::compScHp, 20);
+            set (ids::dsOn, 0); set (ids::dsFreq, 6000); set (ids::dsThreshold, -30); set (ids::dsRange, 6); set (ids::dsMode, 0);
+            set (ids::smOn, 0); set (ids::smDepth, 40); set (ids::smFocus, Full); set (ids::smSpeed, Normal);
+            set (ids::satOn, 0); set (ids::satDrive, 6); set (ids::satMix, 40); set (ids::satType, Tape);
+            set (ids::riderOn, 0); set (ids::riderTarget, -20); set (ids::riderRange, 6); set (ids::riderSpeed, Normal);
+            set (ids::vsEnabled, 0); set (ids::vsAmount, 50); set (ids::vsSpeed, Normal);
+            set (ids::stWidth, 100); set (ids::stMonoBass, 0); set (ids::stMonoFreq, 120);
+            set (ids::peakGuard, 0); set (ids::masterAutoTrim, 0); set (ids::maxGain, 0);
+        }
 
-    void comp (std::vector<ParamValue>& v, bool on, float thr, float ratio, float att, float rel, float knee, float mix = 100.0f)
-    {
-        v.push_back ({ ids::compEnabled, on ? 1.0f : 0.0f }); v.push_back ({ ids::compThreshold, thr }); v.push_back ({ ids::compRatio, ratio });
-        v.push_back ({ ids::compAttack, att }); v.push_back ({ ids::compRelease, rel }); v.push_back ({ ids::compKnee, knee });
-        v.push_back ({ ids::compAutoMakeup, 1.0f }); v.push_back ({ ids::compMakeup, 0.0f }); v.push_back ({ ids::compMix, mix });
-    }
+        void set (const juce::String& id, float v)
+        {
+            for (auto& pv : p.values) if (pv.id == id) { pv.value = v; return; }
+            p.values.push_back ({ id, v });
+        }
 
-    void deess (std::vector<ParamValue>& v, bool on, float hz, float thr, float range, int mode = 0)
-    {
-        v.push_back ({ ids::dsOn, on ? 1.0f : 0.0f }); v.push_back ({ ids::dsFreq, hz }); v.push_back ({ ids::dsThreshold, thr });
-        v.push_back ({ ids::dsRange, range }); v.push_back ({ ids::dsMode, (float) mode });
-    }
-
-    void sat (std::vector<ParamValue>& v, bool on, float drive, float mix, int type)
-    {
-        v.push_back ({ ids::satOn, on ? 1.0f : 0.0f }); v.push_back ({ ids::satDrive, drive }); v.push_back ({ ids::satMix, mix }); v.push_back ({ ids::satType, (float) type });
-    }
-
-    void rider (std::vector<ParamValue>& v, bool on, float target, float range, int speed)
-    {
-        v.push_back ({ ids::riderOn, on ? 1.0f : 0.0f }); v.push_back ({ ids::riderTarget, target }); v.push_back ({ ids::riderRange, range }); v.push_back ({ ids::riderSpeed, (float) speed });
-    }
-
-    void space (std::vector<ParamValue>& v, bool on, float amount, int speed = 1)
-    {
-        v.push_back ({ ids::vsEnabled, on ? 1.0f : 0.0f }); v.push_back ({ ids::vsAmount, amount }); v.push_back ({ ids::vsSpeed, (float) speed });
-    }
-
-    void common (std::vector<ParamValue>& v, Role role)
-    {
-        v.push_back ({ ids::role, (float) role });
-        v.push_back ({ ids::eqEnabled, 1.0f });
-        v.push_back ({ ids::outputGain, 0.0f });
-        v.push_back ({ ids::peakGuard, 0.0f });
-        v.push_back ({ ids::masterAutoTrim, 0.0f });
-    }
+        Chain& filter (int b, EQType type, float hz, float gain, float q, int slope)
+        {
+            set (ids::eqBandEnabled (b), 1); set (ids::eqBandType (b), (float) type); set (ids::eqBandFreq (b), hz);
+            set (ids::eqBandGain (b), gain); set (ids::eqBandQ (b), q); set (ids::eqBandSlope (b), (float) slope);
+            return *this;
+        }
+        Chain& lowCut (float hz, int slope = 1)  { return filter (0, EQType::LowCut, hz, 0, 0.71f, slope); }
+        Chain& highCut (float hz, int slope = 0) { return filter (7, EQType::HighCut, hz, 0, 0.71f, slope); }
+        Chain& bell (int b, float hz, float gain, float q)   { return filter (b, EQType::Bell, hz, gain, q, 0); }
+        Chain& lowShelf (int b, float hz, float gain)        { return filter (b, EQType::LowShelf, hz, gain, 0.71f, 0); }
+        Chain& highShelf (int b, float hz, float gain)       { return filter (b, EQType::HighShelf, hz, gain, 0.71f, 0); }
+        Chain& dyn (int b, float hz, float range, float q, float thr = -28)
+        {
+            filter (b, EQType::Bell, hz, 0, q, 0);
+            set (ids::eqBandDyn (b), 1); set (ids::eqBandThr (b), thr); set (ids::eqBandRange (b), range);
+            return *this;
+        }
+        Chain& gate (float thr, float range, float att = 1.0f, float rel = 140, float hold = 60)
+        {
+            set (ids::gateOn, 1); set (ids::gateThreshold, thr); set (ids::gateRange, range); set (ids::gateAttack, att); set (ids::gateRelease, rel); set (ids::gateHold, hold);
+            return *this;
+        }
+        Chain& comp (Style style, float thr, float ratio, float att, float rel, float knee, float mix = 100, float scHp = 20)
+        {
+            set (ids::compEnabled, 1); set (ids::compStyle, style); set (ids::compThreshold, thr); set (ids::compRatio, ratio);
+            set (ids::compAttack, att); set (ids::compRelease, rel); set (ids::compKnee, knee); set (ids::compMix, mix); set (ids::compScHp, scHp);
+            return *this;
+        }
+        Chain& deEss (float hz, float range, float thr = -30, int wide = 0)
+        {
+            set (ids::dsOn, 1); set (ids::dsFreq, hz); set (ids::dsRange, range); set (ids::dsThreshold, thr); set (ids::dsMode, (float) wide);
+            return *this;
+        }
+        Chain& smooth (float depth, Focus focus = Full, Speed speed = Normal)
+        {
+            set (ids::smOn, 1); set (ids::smDepth, depth); set (ids::smFocus, focus); set (ids::smSpeed, speed);
+            return *this;
+        }
+        Chain& saturate (Sat type, float drive, float mix)
+        {
+            set (ids::satOn, 1); set (ids::satType, type); set (ids::satDrive, drive); set (ids::satMix, mix);
+            return *this;
+        }
+        Chain& ride (float range, Speed speed = Normal, float target = -20)
+        {
+            set (ids::riderOn, 1); set (ids::riderRange, range); set (ids::riderSpeed, speed); set (ids::riderTarget, target);
+            return *this;
+        }
+        Chain& makeSpace (float amount, Speed speed = Normal) { set (ids::vsEnabled, 1); set (ids::vsAmount, amount); set (ids::vsSpeed, speed); return *this; }
+        Chain& stereo (float width, bool monoBass = false, float freq = 120) { set (ids::stWidth, width); set (ids::stMonoBass, monoBass ? 1.0f : 0.0f); set (ids::stMonoFreq, freq); return *this; }
+        Chain& master (int mode, float lufs, float ceiling)
+        {
+            set (ids::masterMode, (float) mode); set (ids::targetLufs, lufs); set (ids::targetTruePeak, ceiling);
+            set (ids::peakGuard, 1); set (ids::masterAutoTrim, 1);
+            return *this;
+        }
+    };
 
     std::vector<ChainPreset> build()
     {
         std::vector<ChainPreset> out;
+        auto add = [&out] (Chain& c) { out.push_back (c.p); };
+        const juce::String V = "Vocals", D = "Drums and bass", I = "Instruments", B = "Beat", M = "Master", U = "Utility";
 
-        {   // 0: clean
-            ChainPreset p { "Clean (everything off)", "Metering and session balance only. Start here if you just want levels.", Role::Auto, {} };
-            auto& v = p.values;
-            common (v, Role::Auto);
-            gate (v, false, -50, 20, 1.5f, 120, 40);
-            for (int b = 0; b < kNumEQBands; ++b) band (v, b, { false, kDefaultBands[b].type, kDefaultBands[b].freq, 0.0f, 0.71f });
-            comp (v, false, -18, 3, 10, 120, 6);
-            deess (v, false, 6000, -30, 6);
-            sat (v, false, 6, 40, 0);
-            rider (v, false, -20, 6, 1);
-            space (v, false, 50);
-            out.push_back (p);
-        }
-        {   // 1: lead vocal - gate, HP, mud control, presence, air, 76-style comp, de-ess, tape, rider
-            ChainPreset p { "MU Lead Vocal", "The studio vocal chain: tight gate, high-pass, dynamic mud and harsh control, presence and air, fast 4:1 compression, de-esser, a touch of tape and a level rider.", Role::Vocal, {} };
-            auto& v = p.values;
-            common (v, Role::Vocal);
-            gate (v, true, -48, 18, 1.0f, 150, 60);
-            band (v, 0, { true, EQType::LowCut, 75, 0, 0.71f });
-            band (v, 1, { true, EQType::Bell, 230, -2.0f, 1.6f, true, -26, -4 });
-            band (v, 2, { true, EQType::Bell, 2200, 2.0f, 0.8f });
-            band (v, 3, { true, EQType::Bell, 4200, -1.0f, 1.4f, true, -24, -4 });
-            band (v, 4, { true, EQType::HighShelf, 10000, 2.0f, 0.71f });
-            band (v, 5, { false, EQType::Bell, 350, 0, 1.0f });
-            comp (v, true, -22, 4, 3, 80, 3);
-            deess (v, true, 5500, -30, 6, 0);
-            sat (v, true, 4, 35, 0);
-            rider (v, true, -19, 6, 1);
-            space (v, false, 50);
-            out.push_back (p);
-        }
-        {   // 2: backing / adlib
-            ChainPreset p { "MU Backing / Adlib", "Thinner and more controlled so it sits behind the lead: higher high-pass, harder compression, more de-ess, brighter top.", Role::BackingVocal, {} };
-            auto& v = p.values;
-            common (v, Role::BackingVocal);
-            gate (v, true, -46, 20, 1.0f, 120, 50);
-            band (v, 0, { true, EQType::LowCut, 130, 0, 0.71f });
-            band (v, 1, { true, EQType::Bell, 300, -3.0f, 1.4f, true, -28, -4 });
-            band (v, 2, { true, EQType::Bell, 1800, -1.5f, 1.2f });
-            band (v, 3, { true, EQType::Bell, 4500, -1.5f, 1.6f, true, -26, -4 });
-            band (v, 4, { true, EQType::HighShelf, 9000, 3.0f, 0.71f });
-            band (v, 5, { false, EQType::Bell, 350, 0, 1.0f });
-            comp (v, true, -24, 6, 2, 70, 2);
-            deess (v, true, 6000, -32, 8, 0);
-            sat (v, true, 3, 25, 0);
-            rider (v, true, -24, 4, 1);
-            space (v, false, 50);
-            out.push_back (p);
-        }
-        {   // 3: 808 / bass
-            ChainPreset p { "MU 808 / Bass", "Sub kept clean, mid mud pulled, harmonics added so it reads on phones, slow compression for a consistent low end, ducks for the vocal.", Role::Bass808, {} };
-            auto& v = p.values;
-            common (v, Role::Bass808);
-            gate (v, false, -60, 20, 1.5f, 120, 40);
-            band (v, 0, { true, EQType::LowCut, 26, 0, 0.71f });
-            band (v, 1, { true, EQType::Bell, 55, 1.5f, 1.0f });
-            band (v, 2, { true, EQType::Bell, 260, -2.0f, 1.2f, true, -24, -3 });
-            band (v, 3, { false, EQType::Bell, 1000, 0, 1.0f });
-            band (v, 4, { false, EQType::Bell, 3000, 0, 1.0f });
-            band (v, 5, { true, EQType::HighCut, 7000, 0, 0.71f });
-            comp (v, true, -20, 4, 25, 160, 6);
-            deess (v, false, 6000, -30, 6);
-            sat (v, true, 7, 40, 2);
-            rider (v, false, -20, 6, 1);
-            space (v, true, 40, 1);
-            out.push_back (p);
-        }
-        {   // 4: kick
-            ChainPreset p { "MU Kick", "Weight at 60, box cut at 400, click at 3k, punchy compression with a slow attack so the transient gets through.", Role::Kick, {} };
-            auto& v = p.values;
-            common (v, Role::Kick);
-            gate (v, false, -60, 20, 1.5f, 120, 40);
-            band (v, 0, { true, EQType::LowCut, 30, 0, 0.71f });
-            band (v, 1, { true, EQType::Bell, 60, 2.0f, 1.2f });
-            band (v, 2, { true, EQType::Bell, 400, -3.0f, 1.5f });
-            band (v, 3, { true, EQType::Bell, 3000, 2.0f, 1.2f });
-            band (v, 4, { false, EQType::Bell, 8000, 0, 1.0f });
-            band (v, 5, { false, EQType::HighCut, 12000, 0, 0.71f });
-            comp (v, true, -16, 4, 20, 60, 4);
-            deess (v, false, 6000, -30, 6);
-            sat (v, true, 3, 25, 2);
-            rider (v, false, -20, 6, 1);
-            space (v, true, 30, 2);
-            out.push_back (p);
-        }
-        {   // 5: drums / percussion bus
-            ChainPreset p { "MU Drums", "Low-mid control, a little top, glue compression, gets out of the way of the vocal in the presence region.", Role::Drums, {} };
-            auto& v = p.values;
-            common (v, Role::Drums);
-            gate (v, false, -60, 20, 1.5f, 120, 40);
-            band (v, 0, { true, EQType::LowCut, 40, 0, 0.71f });
-            band (v, 1, { true, EQType::Bell, 300, -2.0f, 1.2f, true, -24, -3 });
-            band (v, 2, { false, EQType::Bell, 1000, 0, 1.0f });
-            band (v, 3, { true, EQType::Bell, 3500, -1.0f, 1.4f, true, -22, -3 });
-            band (v, 4, { true, EQType::HighShelf, 8000, 1.5f, 0.71f });
-            band (v, 5, { false, EQType::Bell, 12000, 0, 1.0f });
-            comp (v, true, -18, 3, 15, 100, 6);
-            deess (v, false, 6000, -30, 6);
-            sat (v, true, 3, 20, 0);
-            rider (v, false, -20, 6, 1);
-            space (v, true, 50, 1);
-            out.push_back (p);
-        }
-        {   // 6: beat (2-track)
-            ChainPreset p { "MU Beat (2-track)", "For a bought beat or 2-track instrumental: gentle mud and harsh control, light glue, and Vocal Space so the vocal sits on top without turning the beat down.", Role::Beat, {} };
-            auto& v = p.values;
-            common (v, Role::Beat);
-            gate (v, false, -60, 20, 1.5f, 120, 40);
-            band (v, 0, { true, EQType::LowCut, 28, 0, 0.71f });
-            band (v, 1, { true, EQType::Bell, 250, -1.5f, 1.2f, true, -20, -3 });
-            band (v, 2, { false, EQType::Bell, 1000, 0, 1.0f });
-            band (v, 3, { true, EQType::Bell, 2800, -1.0f, 1.2f, true, -20, -3 });
-            band (v, 4, { false, EQType::HighShelf, 10000, 0, 0.71f });
-            band (v, 5, { false, EQType::Bell, 12000, 0, 1.0f });
-            comp (v, true, -16, 2, 30, 200, 8, 70);
-            deess (v, false, 6000, -30, 6);
-            sat (v, false, 4, 30, 0);
-            rider (v, false, -20, 6, 1);
-            space (v, true, 60, 1);
-            out.push_back (p);
-        }
-        {   // 7: melody / keys
-            ChainPreset p { "MU Melody / Keys", "Clears the low end out of the vocal's way, tames low-mid build-up, light compression.", Role::Melody, {} };
-            auto& v = p.values;
-            common (v, Role::Melody);
-            gate (v, false, -60, 20, 1.5f, 120, 40);
-            band (v, 0, { true, EQType::LowCut, 90, 0, 0.71f });
-            band (v, 1, { true, EQType::Bell, 350, -2.0f, 1.2f, true, -26, -3 });
-            band (v, 2, { true, EQType::Bell, 2500, -1.5f, 1.0f, true, -24, -3 });
-            band (v, 3, { false, EQType::Bell, 5000, 0, 1.0f });
-            band (v, 4, { true, EQType::HighShelf, 9000, 1.0f, 0.71f });
-            band (v, 5, { false, EQType::Bell, 12000, 0, 1.0f });
-            comp (v, true, -20, 2.5f, 20, 150, 6);
-            deess (v, false, 6000, -30, 6);
-            sat (v, false, 4, 30, 0);
-            rider (v, false, -20, 6, 1);
-            space (v, true, 55, 1);
-            out.push_back (p);
-        }
-        {   // 8: master prep
-            ChainPreset p { "MU Master Prep", "For the master bus instance: no tone changes, auto trim to the target loudness and the true-peak guard switched on.", Role::Master, {} };
-            auto& v = p.values;
-            common (v, Role::Master);
-            gate (v, false, -60, 20, 1.5f, 120, 40);
-            for (int b = 0; b < kNumEQBands; ++b) band (v, b, { false, kDefaultBands[b].type, kDefaultBands[b].freq, 0.0f, 0.71f });
-            comp (v, false, -18, 1.5f, 30, 300, 10);
-            deess (v, false, 6000, -30, 6);
-            sat (v, false, 2, 20, 0);
-            rider (v, false, -20, 6, 1);
-            space (v, false, 50);
-            v.push_back ({ ids::peakGuard, 1.0f });
-            v.push_back ({ ids::masterAutoTrim, 1.0f });
-            out.push_back (p);
-        }
+        // ------------------------------------------------------------------ utility
+        { Chain c (U, "Clean slate", Role::Auto, "Everything off. Metering and session balance only.");
+          add (c); }
+        { Chain c (U, "Recording clean-up", Role::Vocal, "No tone shaping: low cut, a light gate, gentle de-essing and resonance smoothing. Use it on a raw take before deciding on a sound.");
+          c.lowCut (80, 1).gate (-52, 12, 1.0f, 180, 80).deEss (6500, 4).smooth (30, Full, Normal);
+          add (c); }
+
+        // ------------------------------------------------------------------ vocals
+        { Chain c (V, "Rap vocal - punchy", Role::Vocal, "Upfront and consistent. Low cut at 90 Hz, mud kept in check, presence at 3.5 kHz, fast 4:1 compression that catches 4-6 dB on loud words, de-esser, a little tube grit and a level rider.");
+          c.lowCut (90, 1).dyn (2, 250, -3.5f, 1.4f, -26).bell (4, 3500, 2.0f, 0.9f).dyn (5, 5200, -3.0f, 2.0f, -26).highShelf (6, 10000, 1.5f)
+           .gate (-50, 14).comp (Punch, -22, 4, 3, 60, 3).deEss (6000, 5).saturate (Tube, 3, 30).ride (5, Normal);
+          add (c); }
+        { Chain c (V, "Rap vocal - aggressive", Role::Vocal, "For drill and hard trap deliveries. Hard 8:1 compression with the fastest attack, more upper-mid bite, heavier saturation, and smoothing on the top so it stays loud without hurting.");
+          c.lowCut (100, 1).bell (2, 300, -3.0f, 1.2f).bell (4, 2800, 3.0f, 1.0f).highShelf (6, 9000, 2.0f)
+           .gate (-48, 16, 0.5f, 110, 50).comp (Punch, -24, 8, 1, 40, 2).deEss (6500, 7).smooth (30, Highs, Fast).saturate (Tube, 6, 45).ride (6, Fast);
+          add (c); }
+        { Chain c (V, "Melodic vocal - smooth", Role::Vocal, "For sung hooks and R&B. Slower, levelling compression that keeps the performance natural, wide presence, open air above 11 kHz and resonance smoothing for a polished top end.");
+          c.lowCut (80, 1).dyn (2, 220, -3.0f, 1.3f, -27).bell (4, 3000, 1.5f, 0.8f).highShelf (6, 11000, 3.0f)
+           .gate (-52, 12, 1.5f, 200, 90).comp (Smooth, -22, 3, 12, 120, 8).deEss (7000, 5).smooth (35, Full, Normal).saturate (Tape, 3, 25).ride (6, Normal);
+          add (c); }
+        { Chain c (V, "Melodic vocal - bright pop", Role::Vocal, "Airy and forward. More top end and a firmer 4:1 so every word sits on top of a dense beat.");
+          c.lowCut (95, 1).dyn (2, 240, -3.5f, 1.3f, -27).bell (3, 600, -1.5f, 1.2f).bell (4, 4000, 2.5f, 0.9f).highShelf (6, 12000, 4.0f)
+           .gate (-52, 12, 1.5f, 180, 80).comp (Smooth, -23, 4, 8, 100, 6).deEss (7500, 6).smooth (40, Highs, Normal).saturate (Tape, 2, 20).ride (6, Normal);
+          add (c); }
+        { Chain c (V, "Backing vocals", Role::BackingVocal, "Sits behind the lead: higher low cut, a dip where the lead's words live, firm levelling, extra de-essing and a wider image.");
+          c.lowCut (150, 1).bell (2, 350, -3.0f, 1.2f).bell (4, 2600, -2.0f, 0.8f).highShelf (6, 10000, 3.0f)
+           .comp (Smooth, -24, 5, 5, 90, 6).deEss (6500, 8).smooth (30, Full, Normal).ride (4, Normal, -24).stereo (130);
+          add (c); }
+        { Chain c (V, "Adlibs", Role::BackingVocal, "Thin, bright and out of the way of the main vocal. Low cut at 180 Hz, capped top, crunchy saturation.");
+          c.lowCut (180, 1).bell (2, 400, -3.0f, 1.2f).bell (4, 4000, 2.0f, 1.0f).highShelf (6, 10000, 2.0f).highCut (14000, 0)
+           .comp (Punch, -22, 4, 5, 60, 3).deEss (6000, 6).saturate (Tube, 5, 40).stereo (120);
+          add (c); }
+        { Chain c (V, "Telephone effect", Role::BackingVocal, "The band-limited radio voice for intros and drops. Steep cuts at 400 Hz and 3.5 kHz with heavy tube drive.");
+          c.lowCut (400, 2).bell (4, 1600, 4.0f, 1.0f).highCut (3500, 2).comp (Punch, -24, 8, 2, 60, 2).saturate (Tube, 12, 70);
+          add (c); }
+        { Chain c (V, "Spoken word", Role::Vocal, "For podcasts, interviews and skits. Even, close and clear without sounding processed.");
+          c.lowCut (80, 1).bell (2, 250, -2.0f, 1.2f).bell (4, 4000, 2.0f, 0.9f)
+           .gate (-48, 20, 2.0f, 220, 120).comp (Smooth, -22, 3, 10, 150, 8).deEss (6000, 5).ride (8, Slow);
+          add (c); }
+
+        // ------------------------------------------------------------------ drums and bass
+        { Chain c (D, "Kick - punch", Role::Kick, "Weight at 60 Hz, the cardboard at 400 Hz removed, click at 3.5 kHz, and compression with a slow attack so the hit gets through before it clamps.");
+          c.lowCut (30, 1).bell (1, 60, 2.0f, 1.2f).bell (3, 400, -3.5f, 1.5f).bell (5, 3500, 2.5f, 1.2f)
+           .comp (Punch, -16, 4, 20, 60, 4).saturate (Warm, 3, 25).makeSpace (30, Fast);
+          add (c); }
+        { Chain c (D, "Kick - deep", Role::Kick, "For soft, subby kicks under an 808-led beat. More 50 Hz, less click, capped top.");
+          c.lowCut (28, 1).bell (1, 50, 3.0f, 1.0f).bell (3, 300, -3.0f, 1.3f).highCut (9000, 0).comp (Clean, -16, 3, 25, 80, 6).makeSpace (25, Fast);
+          add (c); }
+        { Chain c (D, "808 - clean sub", Role::Bass808, "Tight and solid. Sub kept mono, boom controlled only when it builds, harmonics added so it is still heard on phones, slow compression for an even low end, and it ducks for the vocal.");
+          c.lowCut (26, 1).bell (1, 55, 1.5f, 1.0f).dyn (2, 260, -3.0f, 1.2f, -24).highCut (6000, 0)
+           .comp (Smooth, -20, 4, 25, 160, 6).saturate (Warm, 5, 30).stereo (100, true, 120).makeSpace (40);
+          add (c); }
+        { Chain c (D, "808 - distorted", Role::Bass808, "Gritty and loud in the mids so it cuts on any speaker. Heavy tube drive, a push at 900 Hz, firm compression to hold the glides.");
+          c.lowCut (28, 1).bell (3, 900, 2.0f, 1.0f).dyn (2, 220, -3.0f, 1.2f, -24).highCut (8000, 0)
+           .comp (Punch, -20, 6, 10, 100, 4).saturate (Tube, 12, 60).stereo (100, true, 120).makeSpace (40);
+          add (c); }
+        { Chain c (D, "Snare and clap", Role::Drums, "Body at 200 Hz, less box, crack at 5 kHz and air on top. Medium attack keeps the snap.");
+          c.lowCut (110, 1).bell (2, 200, 2.0f, 1.2f).bell (3, 500, -2.0f, 1.4f).bell (5, 5000, 3.0f, 1.0f).highShelf (6, 10000, 2.0f)
+           .comp (Punch, -18, 4, 12, 80, 4).saturate (Tape, 3, 25).makeSpace (35, Fast);
+          add (c); }
+        { Chain c (D, "Hi-hats", Role::Drums, "Everything below 300 Hz removed, a little air, and smoothing so fast hat rolls do not get piercing.");
+          c.lowCut (300, 1).highShelf (6, 12000, 1.5f).smooth (35, Highs, Fast).makeSpace (30, Fast);
+          add (c); }
+        { Chain c (D, "Drum bus - glue", Role::Drums, "Makes separate drum hits feel like one kit. Gentle 3:1 with the detector high-passed so the kick does not pump everything, a touch of tape.");
+          c.lowCut (35, 1).dyn (2, 300, -2.0f, 1.2f, -24).highShelf (6, 8000, 1.5f)
+           .comp (Glue, -18, 3, 20, 120, 6, 100, 100).saturate (Tape, 3, 20).makeSpace (50);
+          add (c); }
+        { Chain c (D, "Drum bus - parallel smash", Role::Drums, "Crushes the drums 10:1 and blends 35 % of that back under the clean signal: more weight and excitement, transients intact.");
+          c.lowCut (35, 1).comp (Punch, -28, 10, 2, 50, 2, 35, 80).saturate (Tape, 4, 30).makeSpace (45);
+          add (c); }
+
+        // ------------------------------------------------------------------ instruments
+        { Chain c (I, "Piano and keys", Role::Melody, "Clears the low end out of the bass's way, controls low-mid build-up and leaves a pocket for the vocal.");
+          c.lowCut (90, 1).dyn (2, 300, -2.5f, 1.2f, -26).dyn (4, 2500, -2.0f, 1.0f, -26).highShelf (6, 9000, 1.5f)
+           .comp (Smooth, -20, 2.5f, 20, 150, 8).makeSpace (55);
+          add (c); }
+        { Chain c (I, "Guitar", Role::Melody, "Less boom, more string detail, gentle levelling.");
+          c.lowCut (100, 1).bell (2, 250, -3.0f, 1.2f).bell (5, 5000, 2.0f, 1.0f).comp (Smooth, -20, 3, 15, 120, 6).smooth (25, Highs).makeSpace (50);
+          add (c); }
+        { Chain c (I, "Synth lead", Role::Melody, "Keeps a bright lead exciting without stepping on the vocal: dynamic dip at 3 kHz and smoothing on the top.");
+          c.lowCut (120, 1).dyn (4, 3000, -2.5f, 1.2f, -24).highShelf (6, 10000, 1.0f).comp (Clean, -18, 3, 10, 100, 6).smooth (30, Highs).makeSpace (60);
+          add (c); }
+        { Chain c (I, "Pad and strings", Role::Melody, "Pushed to the back and the sides: low cut at 180 Hz, softened upper mids, capped top and a wider image.");
+          c.lowCut (180, 1).bell (2, 400, -3.0f, 1.0f).bell (4, 3000, -2.0f, 0.8f).highCut (12000, 0).stereo (140).makeSpace (70, Slow);
+          add (c); }
+        { Chain c (I, "Sample clean-up", Role::Melody, "For chopped samples and loops with baked-in problems. Evens out resonances and mud before you build on it.");
+          c.lowCut (40, 1).dyn (2, 280, -3.0f, 1.2f, -26).smooth (40, Full, Normal).makeSpace (55);
+          add (c); }
+        { Chain c (I, "FX and risers", Role::FX, "Low cut at 200 Hz and extra width so effects decorate the mix instead of filling it.");
+          c.lowCut (200, 1).stereo (150).makeSpace (60, Slow);
+          add (c); }
+
+        // ------------------------------------------------------------------ beat
+        { Chain c (B, "Beat - make room for the vocal", Role::Beat, "For a bought or bounced 2-track. Light mud and harshness control, gentle parallel glue, and Vocal Space so the beat steps back only while the vocal is singing.");
+          c.lowCut (28, 1).dyn (2, 250, -2.0f, 1.2f, -22).dyn (4, 2800, -2.0f, 1.2f, -22)
+           .comp (Glue, -16, 2, 30, 200, 8, 70, 120).makeSpace (60);
+          add (c); }
+        { Chain c (B, "Beat - brighten", Role::Beat, "Opens up a dull or muffled instrumental with a low-mid tidy and a top shelf.");
+          c.lowCut (28, 1).bell (2, 250, -2.0f, 1.0f).highShelf (6, 10000, 2.5f).makeSpace (55);
+          add (c); }
+        { Chain c (B, "Beat - tame harshness", Role::Beat, "For over-bright or over-compressed beats. Resonance smoothing on the highs and a dynamic dip at 3.5 kHz.");
+          c.lowCut (28, 1).dyn (4, 3500, -3.0f, 1.4f, -22).smooth (50, Highs, Normal).makeSpace (55);
+          add (c); }
+
+        // ------------------------------------------------------------------ master
+        { Chain c (M, "Mix hand-off", Role::Master, "For sending to a mastering engineer. No tone changes. Trims the mix to -18 LUFS and keeps peaks under -6 dBTP.");
+          c.master (0, -18.0f, -6.0f);
+          add (c); }
+        { Chain c (M, "Streaming master", Role::Master, "A finished master for Spotify, Apple Music and YouTube: -14 LUFS with a -1 dBTP ceiling. Sub rumble removed, 1-2 dB of glue, a touch of tape, mono bass, true-peak limiter.");
+          c.lowCut (25, 1).comp (Glue, -14, 1.5f, 30, 200, 10, 100, 100).saturate (Tape, 2, 15).stereo (100, true, 110).master (1, -14.0f, -1.0f);
+          add (c); }
+        { Chain c (M, "Loud master", Role::Master, "For hip-hop, drill and club releases that need to compete: -9 LUFS with a -2 dBTP ceiling. Firmer glue and light smoothing so it gets loud without getting harsh.");
+          c.lowCut (28, 1).comp (Glue, -14, 2, 30, 180, 8, 100, 100).smooth (20, Full, Normal).saturate (Tape, 3, 20).stereo (100, true, 110).master (2, -9.0f, -2.0f);
+          add (c); }
+        { Chain c (M, "Master - warm and wide", Role::Master, "Streaming level with more tape colour, a gentle low shelf and a slightly wider image above the bass.");
+          c.lowCut (25, 1).lowShelf (1, 110, 1.0f).highShelf (6, 11000, 1.0f).comp (Glue, -14, 1.5f, 30, 220, 10, 100, 100)
+           .saturate (Tape, 4, 30).stereo (112, true, 120).master (1, -14.0f, -1.0f);
+          add (c); }
         return out;
     }
 }
@@ -230,10 +237,17 @@ const std::vector<ChainPreset>& chainPresets()
     return presets;
 }
 
-juce::StringArray chainPresetNames()
+juce::StringArray chainPresetCategories()
 {
-    juce::StringArray names;
-    for (auto& p : chainPresets()) names.add (p.name);
-    return names;
+    juce::StringArray c;
+    for (auto& p : chainPresets()) c.addIfNotAlreadyThere (p.category);
+    return c;
+}
+
+int findChainPreset (const juce::String& name)
+{
+    const auto& all = chainPresets();
+    for (size_t i = 0; i < all.size(); ++i) if (all[i].name == name) return (int) i;
+    return -1;
 }
 }

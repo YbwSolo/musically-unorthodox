@@ -11,7 +11,12 @@
 #include "dsp/DeEsser.h"
 #include "dsp/Saturator.h"
 #include "dsp/Rider.h"
-#include "dsp/PeakGuard.h"
+#include "dsp/Smoother.h"
+#include "dsp/StereoTool.h"
+#include "dsp/Maximizer.h"
+#include "dsp/TruePeak.h"
+#include "dsp/SpectrumAnalyzer.h"
+#include "analysis/TonalAnalysis.h"
 #include "dsp/VocalSpace.h"
 #include "dsp/RoleDetector.h"
 #include "session/BalanceEngine.h"
@@ -91,10 +96,12 @@ int main()
     {
         EQEngine eq;
         eq.prepare (fs, 512, 2);
-        eq.setBand (0, { true, EQType::Bell, 1000.0f, 6.0f, 1.0f });
-        check (near (eq.magnitudeDbAt (1000.0f), 6.0f, 0.05f), "Bell gain at centre", juce::String (eq.magnitudeDbAt (1000.0f), 2));
-        check (near (eq.magnitudeDbAt (50.0f), 0.0f, 0.1f), "Bell gain far below", juce::String (eq.magnitudeDbAt (50.0f), 2));
-        check (near (eq.magnitudeDbAt (18000.0f), 0.0f, 0.15f), "Bell gain far above", juce::String (eq.magnitudeDbAt (18000.0f), 2));
+        const EQBandSettings bell { true, EQType::Bell, 1000.0f, 6.0f, 1.0f };
+        auto resp = [fs] (const EQBandSettings& b, float hz) { return EQEngine::bandResponseDb (b, hz, fs); };
+        eq.setBand (0, bell);
+        check (near (resp (bell, 1000.0f), 6.0f, 0.05f), "Bell gain at centre", juce::String (resp (bell, 1000.0f), 2));
+        check (near (resp (bell, 50.0f), 0.0f, 0.1f), "Bell gain far below", juce::String (resp (bell, 50.0f), 2));
+        check (near (resp (bell, 18000.0f), 0.0f, 0.15f), "Bell gain far above", juce::String (resp (bell, 18000.0f), 2));
 
         // process a 1 kHz sine, measure the steady-state gain
         auto s = sine (fs, 1000.0f, 0.1f, (int) fs);
@@ -107,11 +114,22 @@ int main()
         const float mag = s.getMagnitude (0, (int) fs / 2, (int) fs / 2);
         check (near (juce::Decibels::gainToDecibels (mag / 0.1f), 6.0f, 0.1f), "Bell processed gain", juce::String (juce::Decibels::gainToDecibels (mag / 0.1f), 2));
 
-        eq.setBand (1, { true, EQType::LowCut, 100.0f, 0.0f, 0.71f });
-        check (near (eq.bandMagnitudeDbAt (1, 100.0f), -3.0f, 0.2f), "Low cut -3 dB at cutoff", juce::String (eq.bandMagnitudeDbAt (1, 100.0f), 2));
-        check (eq.bandMagnitudeDbAt (1, 25.0f) < -20.0f, "Low cut slope", juce::String (eq.bandMagnitudeDbAt (1, 25.0f), 2));
-        eq.setBand (2, { true, EQType::HighShelf, 8000.0f, -4.0f, 0.71f });
-        check (near (eq.bandMagnitudeDbAt (2, 19000.0f), -4.0f, 0.3f), "High shelf plateau", juce::String (eq.bandMagnitudeDbAt (2, 19000.0f), 2));
+        EQBandSettings lc { true, EQType::LowCut, 100.0f, 0.0f, 0.71f };
+        check (near (resp (lc, 100.0f), -3.0f, 0.2f), "Low cut -3 dB at cutoff", juce::String (resp (lc, 100.0f), 2));
+        check (near (resp (lc, 25.0f), -24.0f, 1.0f), "Low cut 12 dB/oct slope", juce::String (resp (lc, 25.0f), 2));
+        lc.slope = 1;
+        check (near (resp (lc, 100.0f), -3.0f, 0.3f), "24 dB/oct cut is -3 dB at cutoff", juce::String (resp (lc, 100.0f), 2));
+        check (near (resp (lc, 50.0f), -24.0f, 1.0f), "24 dB/oct cut slope", juce::String (resp (lc, 50.0f), 2));
+        lc.slope = 3;
+        check (near (resp (lc, 100.0f), -3.0f, 0.3f), "48 dB/oct cut is -3 dB at cutoff", juce::String (resp (lc, 100.0f), 2));
+        check (near (resp (lc, 50.0f), -48.0f, 1.5f), "48 dB/oct cut slope", juce::String (resp (lc, 50.0f), 2));
+        EQBandSettings hc { true, EQType::HighCut, 2000.0f, 0.0f, 0.71f }; hc.slope = 1;
+        check (near (resp (hc, 4000.0f), -24.0f, 1.5f), "24 dB/oct high cut slope", juce::String (resp (hc, 4000.0f), 2));
+        const EQBandSettings hs { true, EQType::HighShelf, 8000.0f, -4.0f, 0.71f };
+        check (near (resp (hs, 19000.0f), -4.0f, 0.3f), "High shelf plateau", juce::String (resp (hs, 19000.0f), 2));
+        EQBandSettings off = bell; off.enabled = false;
+        check (resp (off, 1000.0f) == 0.0f, "A disabled band has a flat response");
+        eq.setBand (1, lc);
 
         // NaN safety
         juce::AudioBuffer<float> bad (2, 256);
@@ -323,22 +341,6 @@ int main()
         check (near (r2.getCurrentGainDb(), -6.0f, 0.3f), "Rider pulls a hot track down by up to its range", juce::String (r2.getCurrentGainDb(), 2));
     }
 
-    // --- Peak guard
-    {
-        PeakGuard pg; pg.prepare (fs, 512, 2);
-        pg.setEnabled (true); pg.setCeilingDb (-6.0f);
-        auto s = sine (fs, 1000.0f, 1.0f, (int) fs);
-        runBlocks (pg, s, 512);
-        const float peak = juce::Decibels::gainToDecibels (s.getMagnitude (0, 1000, (int) fs - 1000));
-        check (peak <= -6.0f + 0.05f, "Peak guard holds the ceiling", juce::String (peak, 2));
-        PeakGuard pg2; pg2.prepare (fs, 512, 2);
-        pg2.setEnabled (true); pg2.setCeilingDb (-6.0f);
-        auto quiet = sine (fs, 1000.0f, 0.1f, (int) fs);
-        runBlocks (pg2, quiet, 512);
-        check (near (juce::Decibels::gainToDecibels (quiet.getMagnitude (0, 1000, (int) fs - 1000) / 0.1f), 0.0f, 0.01f), "Peak guard is transparent under the ceiling");
-        check (pg.getLatencySamples() == (int) std::round (fs * PeakGuard::kLookaheadSeconds), "Peak guard reports its look-ahead");
-    }
-
     // --- Dynamic EQ band
     {
         EQEngine eq; eq.prepare (fs, 512, 2);
@@ -352,7 +354,8 @@ int main()
         auto quiet = sine (fs, 1000.0f, 0.001f, (int) fs);
         runBlocks (eq2, quiet, 512);
         check (near (tailDb (quiet, 0.001f), 0.0f, 0.3f), "Dynamic band rests when its region is quiet", juce::String (tailDb (quiet, 0.001f), 2));
-        check (near (eq.magnitudeDbAt (1000.0f), 0.0f, 0.01f), "Dynamic band static curve stays at its set gain");
+        check (near (EQEngine::bandResponseDb (b, 1000.0f, fs), 0.0f, 0.01f), "Dynamic band static curve stays at its set gain");
+        check (near (eq.getBandDynamicOffsetDb (0), -6.0f, 0.5f), "Dynamic band reports its live offset", juce::String (eq.getBandDynamicOffsetDb (0), 2));
     }
 
     // --- Balance with edited role targets
@@ -366,6 +369,338 @@ int main()
         float dv = 0, db = 0;
         for (auto& m : plan.moves) { if (m.slot == 0) dv = m.deltaDb; if (m.slot == 1) db = m.deltaDb; }
         check (near ((-16.0f + db) - (-20.0f + dv), -4.0f, 0.05f), "Edited role target is honoured", juce::String ((-16.0f + db) - (-20.0f + dv), 2));
+    }
+
+
+    // --- deterministic noise for the broadband tests
+    auto noise = [] (int numSamples, float ampl, bool sameBothSides = true)
+    {
+        juce::AudioBuffer<float> b (2, numSamples);
+        juce::Random rng (1234);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float l = (rng.nextFloat() * 2.0f - 1.0f) * ampl;
+            b.setSample (0, i, l);
+            b.setSample (1, i, sameBothSides ? l : (rng.nextFloat() * 2.0f - 1.0f) * ampl);
+        }
+        return b;
+    };
+    auto rmsDb = [] (const juce::AudioBuffer<float>& s, int ch = 0) { return juce::Decibels::gainToDecibels (s.getRMSLevel (ch, s.getNumSamples() / 2, s.getNumSamples() / 2), -120.0f); };
+    // level of one frequency in a buffer (Goertzel-style correlation over the second half)
+    auto toneDb = [fs] (const juce::AudioBuffer<float>& s, float hz, int ch = 0)
+    {
+        double re = 0.0, im = 0.0; const int start = s.getNumSamples() / 2, len = s.getNumSamples() - start;
+        for (int i = 0; i < len; ++i)
+        {
+            const double ph = 2.0 * juce::MathConstants<double>::pi * hz * (double) (start + i) / fs;
+            re += s.getSample (ch, start + i) * std::cos (ph); im += s.getSample (ch, start + i) * std::sin (ph);
+        }
+        return (float) (20.0 * std::log10 (juce::jmax (1.0e-9, 2.0 * std::sqrt (re * re + im * im) / (double) len)));
+    };
+
+    // --- EQ mid/side: a side-only cut leaves mono material alone and cuts what differs between the speakers
+    {
+        EQBandSettings b { true, EQType::Bell, 1000.0f, -12.0f, 1.0f }; b.mode = ChannelMode::Side;
+        EQEngine eq; eq.prepare (fs, 512, 2); eq.setBand (2, b);
+        auto mono = sine (fs, 1000.0f, 0.25f, (int) fs);
+        runBlocks (eq, mono, 512);
+        check (near (tailDb (mono, 0.25f), 0.0f, 0.1f), "Side band leaves centred material untouched", juce::String (tailDb (mono, 0.25f), 2));
+        EQEngine eq2; eq2.prepare (fs, 512, 2); eq2.setBand (2, b);
+        auto side = sine (fs, 1000.0f, 0.25f, (int) fs);
+        side.applyGain (1, 0, side.getNumSamples(), -1.0f);
+        runBlocks (eq2, side, 512);
+        check (near (tailDb (side, 0.25f), -12.0f, 0.3f), "Side band cuts side material", juce::String (tailDb (side, 0.25f), 2));
+        b.mode = ChannelMode::Mid;
+        EQEngine eq3; eq3.prepare (fs, 512, 2); eq3.setBand (2, b);
+        auto side2 = sine (fs, 1000.0f, 0.25f, (int) fs);
+        side2.applyGain (1, 0, side2.getNumSamples(), -1.0f);
+        runBlocks (eq3, side2, 512);
+        check (near (tailDb (side2, 0.25f), 0.0f, 0.1f), "Mid band leaves side material untouched", juce::String (tailDb (side2, 0.25f), 2));
+    }
+
+    // --- EQ auto gain: a big boost should not make the track louder overall
+    {
+        EQEngine eq; eq.prepare (fs, 512, 2);
+        eq.setBand (1, { true, EQType::HighShelf, 1000.0f, 9.0f, 0.71f });
+        eq.setAutoGain (true);
+        auto n = noise ((int) fs * 6, 0.2f);
+        const float before = rmsDb (n);
+        runBlocks (eq, n, 512);
+        check (near (rmsDb (n), before, 1.0f), "Auto gain keeps the level after a +9 dB shelf", juce::String (rmsDb (n) - before, 2) + " dB change, trim " + juce::String (eq.getAutoGainDb(), 2));
+        EQEngine eq2; eq2.prepare (fs, 512, 2);
+        eq2.setBand (1, { true, EQType::HighShelf, 1000.0f, 9.0f, 0.71f });
+        auto n2 = noise ((int) fs * 6, 0.2f);
+        runBlocks (eq2, n2, 512);
+        check (rmsDb (n2) - before > 3.0f, "Without auto gain the same shelf is clearly louder", juce::String (rmsDb (n2) - before, 2));
+    }
+
+    // --- EQ band solo
+    {
+        EQEngine eq; eq.prepare (fs, 512, 2);
+        eq.setBand (3, { true, EQType::Bell, 1000.0f, 3.0f, 2.0f });
+        eq.setSoloBand (3);
+        auto low = sine (fs, 60.0f, 0.25f, (int) fs);
+        runBlocks (eq, low, 512);
+        check (tailDb (low, 0.25f) < -20.0f, "Band solo removes what is outside the band", juce::String (tailDb (low, 0.25f), 2));
+        EQEngine eq2; eq2.prepare (fs, 512, 2);
+        eq2.setBand (3, { true, EQType::Bell, 1000.0f, 3.0f, 2.0f });
+        eq2.setSoloBand (3);
+        auto mid = sine (fs, 1000.0f, 0.25f, (int) fs);
+        runBlocks (eq2, mid, 512);
+        check (tailDb (mid, 0.25f) > -3.0f, "Band solo keeps what is inside the band", juce::String (tailDb (mid, 0.25f), 2));
+    }
+
+    // --- Compressor styles and sidechain high-pass
+    {
+        const char* names[] = { "Clean", "Punch", "Smooth", "Glue" };
+        for (int style = 0; style < 4; ++style)
+        {
+            Compressor c; c.prepare (fs, 512, 2);
+            CompressorSettings st; st.enabled = true; st.thresholdDb = -20.0f; st.ratio = 4.0f; st.attackMs = 5.0f; st.releaseMs = 80.0f; st.kneeDb = 0.0f; st.autoMakeup = false; st.style = (CompStyle) style;
+            c.setSettings (st);
+            auto s = sine (fs, 1000.0f, 1.0f, (int) fs * 2);
+            runBlocks (c, s, 512);
+            // steady sine 20 dB over threshold at 4:1 -> 15 dB down whichever detector is used
+            check (near (c.getGainReductionDb(), -15.0f, 1.5f), (juce::String (names[style]) + " style steady-state reduction").toRawUTF8(), juce::String (c.getGainReductionDb(), 2));
+            bool finite = true;
+            for (int i = 0; i < s.getNumSamples(); ++i) finite = finite && std::isfinite (s.getSample (0, i));
+            check (finite, (juce::String (names[style]) + " style output is finite").toRawUTF8());
+        }
+        Compressor a; a.prepare (fs, 512, 2);
+        CompressorSettings st; st.enabled = true; st.thresholdDb = -20.0f; st.ratio = 4.0f; st.attackMs = 5.0f; st.releaseMs = 80.0f; st.kneeDb = 0.0f; st.autoMakeup = false; st.style = CompStyle::Glue;
+        a.setSettings (st);
+        auto sub = sine (fs, 50.0f, 1.0f, (int) fs * 2);
+        runBlocks (a, sub, 512);
+        const float open = a.getGainReductionDb();
+        Compressor b2; b2.prepare (fs, 512, 2);
+        st.sidechainHpHz = 200.0f; b2.setSettings (st);
+        auto sub2 = sine (fs, 50.0f, 1.0f, (int) fs * 2);
+        runBlocks (b2, sub2, 512);
+        check (open < -12.0f && b2.getGainReductionDb() > -3.0f, "Sidechain high-pass stops bass from driving the compressor", juce::String (open, 1) + " dB without, " + juce::String (b2.getGainReductionDb(), 1) + " dB with");
+        check (a.reductionHistory().get (0) < -10.0f, "Compressor publishes its reduction history", juce::String (a.reductionHistory().get (0), 1));
+    }
+
+    // --- Smooth: pulls down a ringing resonance, leaves even material alone
+    {
+        Smoother sm; sm.prepare (fs, 512, 2);
+        SmootherSettings st; st.enabled = true; st.depth = 0.6f; st.focus = 0; st.speed = 1;
+        sm.setSettings (st);
+        auto n = noise ((int) fs * 4, 0.05f);
+        const auto tone = sine (fs, 3200.0f, 0.2f, (int) fs * 4);
+        for (int c = 0; c < 2; ++c) n.addFrom (c, 0, tone, c, 0, n.getNumSamples());
+        auto untouched = n;
+        runBlocks (sm, n, 512);
+        const float cut = toneDb (n, 3200.0f) - toneDb (untouched, 3200.0f);
+        check (cut < -3.0f, "Smooth pulls down a resonance that sticks out", juce::String (cut, 2) + " dB at 3.2 kHz");
+        const float elsewhere = toneDb (n, 500.0f) - toneDb (untouched, 500.0f);
+        check (std::abs (elsewhere) < 1.5f, "Smooth leaves the rest of the spectrum alone", juce::String (elsewhere, 2) + " dB at 500 Hz");
+
+        Smoother sm2; sm2.prepare (fs, 512, 2); sm2.setSettings (st);
+        auto flat = noise ((int) fs * 4, 0.1f);
+        const float before = rmsDb (flat);
+        runBlocks (sm2, flat, 512);
+        check (near (rmsDb (flat), before, 0.6f), "Smooth is close to transparent on even material", juce::String (rmsDb (flat) - before, 2) + " dB");
+
+        Smoother sm3; sm3.prepare (fs, 512, 2);
+        st.enabled = false; sm3.setSettings (st);
+        auto same = noise (4096, 0.1f); const auto ref = same;
+        runBlocks (sm3, same, 512);
+        float err = 0.0f;
+        for (int i = 0; i < 4096; ++i) err = juce::jmax (err, std::abs (same.getSample (0, i) - ref.getSample (0, i)));
+        check (err == 0.0f, "Smooth switched off is bit-exact");
+    }
+
+    // --- Stereo tool
+    {
+        StereoTool st; st.prepare (fs, 512, 2);
+        st.setSettings ({ 1.0f, false, 120.0f });
+        auto n = noise (8192, 0.2f, false); const auto ref = n;
+        runBlocks (st, n, 512);
+        float err = 0.0f;
+        for (int i = 0; i < 8192; ++i) err = juce::jmax (err, std::abs (n.getSample (1, i) - ref.getSample (1, i)));
+        check (err < 1.0e-5f, "Stereo tool at 100 % is transparent", juce::String (err, 6));
+
+        StereoTool mono; mono.prepare (fs, 512, 2);
+        mono.setSettings ({ 0.0f, false, 120.0f });
+        auto n2 = noise ((int) fs, 0.2f, false);
+        runBlocks (mono, n2, 512);
+        float diff = 0.0f;
+        for (int i = (int) fs / 2; i < (int) fs; ++i) diff = juce::jmax (diff, std::abs (n2.getSample (0, i) - n2.getSample (1, i)));
+        check (diff < 1.0e-4f, "Width 0 % is mono", juce::String (diff, 6));
+
+        auto sideTone = [&] (float hz) { auto s = sine (fs, hz, 0.25f, (int) fs); s.applyGain (1, 0, s.getNumSamples(), -1.0f); return s; };
+        StereoTool mb; mb.prepare (fs, 512, 2); mb.setSettings ({ 1.0f, true, 120.0f });
+        auto low = sideTone (50.0f);
+        runBlocks (mb, low, 512);
+        check (tailDb (low, 0.25f) < -12.0f, "Mono bass removes side information below the corner", juce::String (tailDb (low, 0.25f), 2));
+        StereoTool mb2; mb2.prepare (fs, 512, 2); mb2.setSettings ({ 1.0f, true, 120.0f });
+        auto high = sideTone (2000.0f);
+        runBlocks (mb2, high, 512);
+        check (near (tailDb (high, 0.25f), 0.0f, 0.3f), "Mono bass keeps the stereo image above the corner", juce::String (tailDb (high, 0.25f), 2));
+        StereoTool corr; corr.prepare (fs, 512, 2); corr.setSettings ({ 1.0f, false, 120.0f });
+        auto anti = sideTone (500.0f);
+        runBlocks (corr, anti, 512);
+        check (corr.getCorrelation() < -0.9f, "Correlation meter reads out-of-phase material", juce::String (corr.getCorrelation(), 2));
+    }
+
+    // --- True peak detector: a sine at fs/4 sampled 45 degrees off its crest hides 3 dB between the samples
+    {
+        TruePeakDetector tp;
+        float samplePeak = 0.0f, truePeak = 0.0f;
+        for (int i = 0; i < 4096; ++i)
+        {
+            const float x = std::sin (juce::MathConstants<float>::halfPi * (float) i + juce::MathConstants<float>::pi * 0.25f) * juce::jmin (1.0f, (float) i / 1024.0f);
+            samplePeak = juce::jmax (samplePeak, std::abs (x));
+            truePeak = juce::jmax (truePeak, tp.process (x));
+        }
+        check (near (juce::Decibels::gainToDecibels (samplePeak), -3.01f, 0.1f) && near (juce::Decibels::gainToDecibels (truePeak), 0.0f, 0.35f),
+               "Inter-sample peak detection", "sample " + juce::String (juce::Decibels::gainToDecibels (samplePeak), 2) + " dB, true " + juce::String (juce::Decibels::gainToDecibels (truePeak), 2) + " dBTP");
+    }
+
+    // --- Maximizer
+    {
+        auto measureTp = [&] (const juce::AudioBuffer<float>& s)
+        {
+            LoudnessMeter m; m.prepare (fs, 512, 2);
+            feedInBlocks (m, s, 512);
+            return m.getTruePeakHold();
+        };
+        // 1. hot sine pushed 9 dB into a -1 dBTP ceiling
+        Maximizer mx; mx.prepare (fs, 512, 2);
+        mx.setActive (true); mx.setEnabled (true); mx.setCeilingDb (-1.0f); mx.setGainDb (9.0f);
+        auto s = sine (fs, 997.0f, 0.8f, (int) fs * 2);
+        runBlocks (mx, s, 512);
+        check (measureTp (s) <= -1.0f + 0.05f, "Maximizer holds the true-peak ceiling on a hot sine", juce::String (measureTp (s), 2) + " dBTP");
+        check (mx.getGainReductionDb() < -6.0f, "Maximizer reports its reduction", juce::String (mx.getGainReductionDb(), 2));
+
+        // 2. worst case for inter-sample peaks: fs/4 at 45 degrees, plus drums-like bursts of noise
+        Maximizer mx2; mx2.prepare (fs, 512, 2);
+        mx2.setActive (true); mx2.setEnabled (true); mx2.setCeilingDb (-1.0f); mx2.setGainDb (6.0f);
+        juce::AudioBuffer<float> hard (2, (int) fs * 2);
+        juce::Random rng (99);
+        for (int i = 0; i < hard.getNumSamples(); ++i)
+        {
+            const bool burst = (i / 6000) % 2 == 0;
+            const float v = burst ? (rng.nextFloat() * 2.0f - 1.0f) * 0.9f
+                                  : 0.9f * std::sin (juce::MathConstants<float>::halfPi * (float) i + juce::MathConstants<float>::pi * 0.25f);
+            hard.setSample (0, i, v); hard.setSample (1, i, burst ? (rng.nextFloat() * 2.0f - 1.0f) * 0.9f : v);
+        }
+        runBlocks (mx2, hard, 480);
+        check (measureTp (hard) <= -1.0f + 0.1f, "Maximizer holds the ceiling on bursts and inter-sample peaks", juce::String (measureTp (hard), 2) + " dBTP");
+
+        // 3. under the ceiling it is a clean delay of exactly the reported latency
+        Maximizer mx3; mx3.prepare (fs, 256, 2);
+        mx3.setActive (true); mx3.setEnabled (true); mx3.setCeilingDb (-1.0f); mx3.setGainDb (0.0f);
+        const auto in = sine (fs, 440.0f, 0.3f, 16384);
+        auto out = in;
+        runBlocks (mx3, out, 256);
+        const int lat = mx3.getLatencySamples();
+        float err = 0.0f;
+        for (int i = 4096; i < 16000; ++i) err = juce::jmax (err, std::abs (out.getSample (0, i) - in.getSample (0, i - lat)));
+        check (err < 1.0e-5f, "Maximizer is transparent under the ceiling", "latency " + juce::String (lat) + " samples (" + juce::String (1000.0 * lat / fs, 1) + " ms), err " + juce::String (err, 7));
+
+        // 4. on anything that is not the master it does nothing and adds no delay
+        Maximizer mx4; mx4.prepare (fs, 256, 2);
+        mx4.setActive (false); mx4.setEnabled (true); mx4.setGainDb (12.0f);
+        auto pass = in;
+        runBlocks (mx4, pass, 256);
+        float err2 = 0.0f;
+        for (int i = 0; i < 16384; ++i) err2 = juce::jmax (err2, std::abs (pass.getSample (0, i) - in.getSample (0, i)));
+        check (err2 == 0.0f, "Maximizer is a zero-latency pass-through off the master");
+
+        // 5. loudness actually goes up when driven
+        Maximizer mx5; mx5.prepare (fs, 512, 2);
+        mx5.setActive (true); mx5.setEnabled (true); mx5.setCeilingDb (-1.0f); mx5.setGainDb (8.0f);
+        auto music = noise ((int) fs * 3, 0.25f, false);
+        const float before = rmsDb (music);
+        runBlocks (mx5, music, 512);
+        check (rmsDb (music) - before > 4.0f && measureTp (music) <= -0.9f, "Driving the maximizer raises loudness under the same ceiling",
+               "+" + juce::String (rmsDb (music) - before, 1) + " dB RMS, " + juce::String (measureTp (music), 2) + " dBTP");
+    }
+
+    // --- Mix Brain: tonal analysis
+    {
+        const auto centres = analysisBandCentres();
+        auto target = roleTargetCurve (Role::Vocal);
+        check (analyseTone (target, Role::Vocal).empty(), "A vocal with a normal tonal balance gets no suggestions");
+
+        auto muddy = target;
+        for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 180.0f && centres[(size_t) b] < 420.0f) muddy[(size_t) b] += 8.0f;
+        auto sug = analyseTone (muddy, Role::Vocal);
+        bool foundMud = false;
+        for (auto& s : sug)
+            if (s.kind == Suggestion::Kind::EqBand && s.band.freqHz > 150.0f && s.band.freqHz < 450.0f && (s.band.gainDb < 0.0f || (s.band.dynamic && s.band.rangeDb < 0.0f)))
+                foundMud = true;
+        check (foundMud, "Low-mid build-up on a vocal is found and answered with a cut", sug.empty() ? juce::String ("no suggestions") : sug[0].title + " -> " + sug[0].action);
+        if (! sug.empty()) check (sug[0].why.length() > 40, "Suggestions explain themselves", sug[0].why.substring (0, 70) + "...");
+
+        auto essy = target;
+        for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 5000.0f && centres[(size_t) b] < 9000.0f) essy[(size_t) b] += 9.0f;
+        bool foundEss = false;
+        for (auto& s : analyseTone (essy, Role::Vocal)) if (s.kind == Suggestion::Kind::DeEsser) foundEss = true;
+        check (foundEss, "Excess sibilance on a vocal points to the de-esser");
+
+        auto beat = roleTargetCurve (Role::Beat);
+        { auto bs = analyseTone (beat, Role::Beat); check (bs.empty(), "A balanced beat gets no suggestions", bs.empty() ? juce::String() : bs[0].title + " / " + juce::String (bs[0].amountDb, 1)); }
+        auto dull = beat;
+        for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 7000.0f) dull[(size_t) b] -= 9.0f;
+        bool foundDull = false;
+        for (auto& s : analyseTone (dull, Role::Beat)) if (s.kind == Suggestion::Kind::EqBand && s.band.type == EQType::HighShelf && s.band.gainDb > 0.0f) foundDull = true;
+        check (foundDull, "A dull beat gets a high shelf");
+
+        // analysis must not depend on how loud the track is
+        auto quieter = muddy;
+        for (auto& v : quieter) v -= 17.0f;
+        check (analyseTone (quieter, Role::Vocal).size() == sug.size(), "Analysis is independent of overall level");
+    }
+
+    // --- EQ match
+    {
+        const auto centres = analysisBandCentres();
+        auto mine = roleTargetCurve (Role::Beat);
+        auto ref = mine;
+        for (int b = 0; b < kAnalysisBands; ++b)
+        {
+            const float oct = std::log2 (centres[(size_t) b] / 3000.0f);
+            ref[(size_t) b] += 5.0f * std::exp (-oct * oct * 2.0f);     // reference is brighter in the presence range
+        }
+        auto bands = matchReference (mine, ref, 1.0f);
+        bool ok = false;
+        for (auto& b : bands) if (b.freqHz > 1800.0f && b.freqHz < 5000.0f && b.gainDb > 2.0f) ok = true;
+        check (ok, "EQ match finds the difference from the reference", bands.empty() ? juce::String ("no bands") : juce::String (bands[0].gainDb, 1) + " dB at " + juce::String (bands[0].freqHz, 0) + " Hz");
+        check (bands.size() <= 5, "EQ match uses at most five bands", juce::String ((int) bands.size()));
+        float worst = 0.0f;
+        for (int b = 0; b < kAnalysisBands; ++b)
+        {
+            if (centres[(size_t) b] < 60.0f || centres[(size_t) b] > 14000.0f) continue;
+            float fit = 0.0f;
+            for (auto& band : bands) fit += EQEngine::bandResponseDb (band, centres[(size_t) b], 48000.0);
+            worst = juce::jmax (worst, std::abs ((ref[(size_t) b] - mine[(size_t) b]) - fit));
+        }
+        check (worst < 1.6f, "Matched curve lands within 1.6 dB of the reference", juce::String (worst, 2) + " dB worst band");
+        check (matchReference (mine, mine, 1.0f).empty(), "Matching a track to itself changes nothing");
+        auto half = matchReference (mine, ref, 0.5f);
+        check (! half.empty() && half[0].gainDb < bands[0].gainDb, "Match amount scales the correction");
+    }
+
+    // --- Spectrum analyser
+    {
+        SpectrumAnalyzer an; an.prepare (fs);
+        auto s = sine (fs, 1000.0f, 0.25f, (int) fs * 2);
+        int frames = 0;
+        for (int pos = 0; pos < s.getNumSamples(); pos += 512)
+        {
+            juce::AudioBuffer<float> view (s.getArrayOfWritePointers(), 2, pos, juce::jmin (512, s.getNumSamples() - pos));
+            an.pushBlock (view);
+            frames += an.pump();
+        }
+        int peak = 0;
+        for (int i = 1; i < SpectrumAnalyzer::kDisplayPoints; ++i) if (an.getDisplayDb()[(size_t) i] > an.getDisplayDb()[(size_t) peak]) peak = i;
+        check (near (an.displayPointHz (peak), 1000.0f, 40.0f), "Analyser display peaks at the tone", juce::String (an.displayPointHz (peak), 0) + " Hz");
+        check (frames > 80, "Analyser produces a new frame every 1024 samples", juce::String (frames) + " frames in 2 s");
+        check (an.hasLongTerm(), "Analyser builds its long-term average");
+        an.resetLongTerm();
+        check (! an.hasLongTerm(), "Long-term average can be restarted");
     }
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED", failures, failures == 1 ? "" : "s");

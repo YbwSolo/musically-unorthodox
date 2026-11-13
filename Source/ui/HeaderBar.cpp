@@ -1,146 +1,187 @@
 #include "HeaderBar.h"
-#include "Theme.h"
+#include "../PluginProcessor.h"
 #include "BinaryData.h"
 
 namespace mu
 {
-static const char* kTabNames[HeaderBar::NumTabs] = { "MIX", "EQ", "COMP", "CHAIN", "LEVELS", "HELP", "SETTINGS" };
-static const int kTabWidths[HeaderBar::NumTabs] = { 48, 38, 54, 60, 66, 52, 80 };
+using namespace theme;
+static const char* const kTabNames[] = { "MIX", "EQ", "DYNAMICS", "TONE", "MASTER", "LEARN" };
 
 HeaderBar::HeaderBar (MUProcessor& p) : proc (p)
 {
-    logo = juce::ImageCache::getFromMemory (BinaryData::mu_logo_white_png, BinaryData::mu_logo_white_pngSize);
+    logo = juce::ImageCache::getFromMemory (BinaryData::mu_logo_png, BinaryData::mu_logo_pngSize);
 
-    roleBox.addItemList (roleNames(), 1);
-    roleBox.setTooltip ("What this instance is sitting on. Auto detect listens and guesses; setting it yourself gives the best balance.");
-    addAndMakeVisible (roleBox);
-    roleAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, ids::role, roleBox);
+    styleButton (presetButton, "Presets", false, "header.preset");
+    presetButton.onClick = [this] { showPresetMenu(); };
+    addAndMakeVisible (presetButton);
 
-    chainBox.setTextWhenNothingSelected ("LOAD CHAIN");
-    chainBox.addItemList (chainPresetNames(), 1);
-    chainBox.setTooltip ("Whole-chain starting points built from the MU studio template. Loading one sets the role too.");
-    chainBox.onChange = [this]
+    setHelp (abSwitch, "header.ab");
+    abSwitch.onChange = [this] (int side)
     {
-        const int idx = chainBox.getSelectedItemIndex();
-        if (idx < 0) return;
-        const auto msg = proc.applyChainPreset (idx);
-        if (onStatus) onStatus (msg);
+        if (juce::ModifierKeys::getCurrentModifiers().isShiftDown())
+        {
+            proc.copyToOtherAB();
+            abSwitch.setIndex (proc.getABSlot());
+            if (onStatus) onStatus (juce::String ("Current settings copied to ") + (proc.getABSlot() == 0 ? "B." : "A."));
+        }
+        else if (side != proc.getABSlot())
+        {
+            proc.switchAB();
+            if (onStatus) onStatus (juce::String ("Now hearing ") + (side == 0 ? "A" : "B") + ". Flip back and forth while the song plays; shift-click copies the current settings to the other side.");
+        }
     };
-    addAndMakeVisible (chainBox);
+    addAndMakeVisible (abSwitch);
 
-    addAndMakeVisible (bypass);
-    bypassAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ids::bypass, bypass);
+    bypassButton.setClickingTogglesState (true);
+    bypassAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ids::bypass, bypassButton);
+    addAndMakeVisible (bypassButton);
 
-    setTab (proc.getCurrentTab());
-    refresh();
+    styleButton (settingsButton, "Settings", false, "header.settings");
+    settingsButton.onClick = [this] { if (onSettings) onSettings(); };
+    addAndMakeVisible (settingsButton);
+    setMouseCursor (juce::MouseCursor::NormalCursor);
+}
+
+void HeaderBar::showPresetMenu()
+{
+    juce::PopupMenu menu;
+    menu.setLookAndFeel (&getLookAndFeel());     // menus open in their own window, so hand them the brand look
+    const auto& presets = chainPresets();
+    const auto current = proc.getCurrentPresetName();
+    for (auto& category : chainPresetCategories())
+    {
+        juce::PopupMenu sub;
+        sub.setLookAndFeel (&getLookAndFeel());
+        bool hasCurrent = false;
+        for (size_t i = 0; i < presets.size(); ++i)
+            if (presets[i].category == category)
+            {
+                const bool ticked = presets[i].name == current;
+                hasCurrent = hasCurrent || ticked;
+                sub.addItem ((int) i + 1, presets[i].name, true, ticked);
+            }
+        menu.addSubMenu (category, sub, true, nullptr, hasCurrent);
+    }
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetButton).withMinimumWidth (presetButton.getWidth()),
+        [safe = juce::Component::SafePointer<HeaderBar> (this)] (int result)
+        {
+            if (safe == nullptr || result <= 0) return;
+            const auto& all = chainPresets();
+            const auto note = safe->proc.applyChainPreset (result - 1);
+            if (safe->onStatus) safe->onStatus (all[(size_t) (result - 1)].blurb + " " + note.fromFirstOccurrenceOf ("loaded.", false, false).trim());
+        });
+}
+
+juce::Rectangle<float> HeaderBar::tabBounds (int t) const
+{
+    const auto font = headline (19.0f);
+    float x = (float) tabArea.getX();
+    for (int i = 0; i < NumTabs; ++i)
+    {
+        const float w = font.getStringWidthFloat (kTabNames[i]) + 26.0f;
+        if (i == t) return { x, (float) tabArea.getCentreY() - 15.0f, w, 30.0f };
+        x += w + 2.0f;
+    }
+    return {};
+}
+
+int HeaderBar::tabAt (juce::Point<int> p) const
+{
+    for (int i = 0; i < NumTabs; ++i)
+        if (tabBounds (i).expanded (1.0f, 10.0f).contains (p.toFloat())) return i;
+    return -1;
 }
 
 void HeaderBar::setTab (int t)
 {
-    currentTab = juce::jlimit (0, NumTabs - 1, t);
-    proc.setCurrentTab (currentTab);
+    tab = juce::jlimit (0, NumTabs - 1, t);
+    if (! blockPlaced && ! tabArea.isEmpty())
+    {
+        const auto b = tabBounds (tab);
+        blockX = b.getX(); blockW = b.getWidth(); blockPlaced = true;
+    }
     repaint();
 }
 
-void HeaderBar::refresh()
+void HeaderBar::tick (float dt)
 {
-    const auto guess = proc.getDetectedRole();
-    juce::String t;
-    if ((int) proc.apvts.getRawParameterValue (ids::role)->load() == (int) Role::Auto)
-        t = guess.confidence > 0.0f ? "hearing: " + roleNames()[(int) guess.role].toLowerCase() : "listening...";
-    if (t != detectedText) { detectedText = t; repaint(); }
-    const int preset = proc.getCurrentPresetIndex();
-    if (preset != chainBox.getSelectedItemIndex() && preset >= 0)
-        chainBox.setSelectedItemIndex (preset, juce::dontSendNotification);
-}
+    const auto target = tabBounds (tab);
+    if (! blockPlaced) { blockX = target.getX(); blockW = target.getWidth(); blockPlaced = true; repaint(); }
+    if (std::abs (blockX - target.getX()) > 0.3f || std::abs (blockW - target.getWidth()) > 0.3f)
+    {
+        blockX = approach (blockX, target.getX(), dt, 0.055f);
+        blockW = approach (blockW, target.getWidth(), dt, 0.055f);
+        repaint (tabArea.expanded (4, 0));
+    }
 
-juce::Rectangle<int> HeaderBar::tabRect (int i) const
-{
-    int x = tabsArea.getX();
-    for (int k = 0; k < i; ++k) x += kTabWidths[k];
-    return { x, tabsArea.getY(), kTabWidths[i], tabsArea.getHeight() };
-}
-
-void HeaderBar::mouseMove (const juce::MouseEvent& e)
-{
-    int h = -1;
-    for (int i = 0; i < NumTabs; ++i) if (tabRect (i).contains (e.getPosition())) h = i;
-    if (h != hoverTab) { hoverTab = h; repaint(); }
-}
-
-void HeaderBar::mouseExit (const juce::MouseEvent&) { hoverTab = -1; repaint(); }
-
-void HeaderBar::mouseDown (const juce::MouseEvent& e)
-{
-    for (int i = 0; i < NumTabs; ++i)
-        if (tabRect (i).contains (e.getPosition()))
-        {
-            setTab (i);
-            if (onTabChanged) onTabChanged (i);
-            return;
-        }
+    const auto name = proc.getCurrentPresetName();
+    if (name != shownPreset)
+    {
+        shownPreset = name;
+        presetButton.setButtonText (name.isEmpty() ? "Presets" : name);
+    }
+    if (proc.getABSlot() != shownAB)
+    {
+        shownAB = proc.getABSlot();
+        abSwitch.setIndex (shownAB);
+    }
 }
 
 void HeaderBar::paint (juce::Graphics& g)
 {
-    auto r = getLocalBounds();
-    g.setColour (theme::black);
-    g.fillRect (r);
-    g.setColour (theme::line);
-    g.fillRect (r.removeFromBottom (1));
+    g.fillAll (black);
+    g.setColour (line);
+    g.fillRect (0, getHeight() - 1, getWidth(), 1);
 
-    // logo
-    auto left = getLocalBounds().removeFromLeft (236).reduced (16, 16);
     if (logo.isValid())
     {
-        const float aspect = (float) logo.getWidth() / (float) logo.getHeight();
-        auto area = left.toFloat();
-        auto dst = area.withSizeKeepingCentre (juce::jmin (area.getWidth(), area.getHeight() * aspect), juce::jmin (area.getHeight(), area.getWidth() / aspect));
-        dst.setX (area.getX());
-        g.drawImage (logo, dst, juce::RectanglePlacement::centred);
+        const float h = 34.0f, w = h * (float) logo.getWidth() / (float) logo.getHeight();
+        g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+        g.drawImage (logo, juce::Rectangle<float> (16.0f, ((float) getHeight() - h) * 0.5f, w, h));
     }
 
-    // tabs
+    // the active tab sits on a yellow block that slides between tabs
+    g.setColour (yellow);
+    g.fillRect (juce::Rectangle<float> (blockX, (float) tabArea.getCentreY() - 15.0f, blockW, 30.0f));
+    g.setFont (headline (19.0f));
     for (int i = 0; i < NumTabs; ++i)
     {
-        auto tr = tabRect (i);
-        const bool active = i == currentTab;
-        g.setColour (active ? theme::text : (i == hoverTab ? theme::text.withAlpha (0.85f) : theme::textDim));
-        g.setFont (theme::headline (16.0f));
-        g.drawText (kTabNames[i], tr, juce::Justification::centred);
-        if (active)
-        {
-            g.setColour (theme::yellow);
-            g.fillRect (tr.withTrimmedLeft (8).withTrimmedRight (8).removeFromBottom (3));
-        }
+        const auto b = tabBounds (i);
+        const float overlap = juce::jlimit (0.0f, 1.0f, 1.0f - std::abs ((blockX + blockW * 0.5f) - b.getCentreX()) / (b.getWidth() * 0.6f));
+        g.setColour (overlap > 0.5f ? onYellow : (i == hoverTab ? text : textDim));
+        g.drawText (kTabNames[i], b.translated (0.0f, 1.0f), juce::Justification::centred);
     }
-
-    // detected role hint under the role box
-    if (detectedText.isNotEmpty())
-    {
-        g.setColour (theme::textMute);
-        g.setFont (theme::body (10.5f));
-        g.drawText (detectedText, roleBox.getBounds().translated (0, roleBox.getHeight() + 1).withHeight (13), juce::Justification::centredLeft);
-    }
-    g.setColour (theme::textMute);
-    g.setFont (theme::body (10.5f));
-    g.drawText ("ROLE", roleBox.getBounds().translated (0, -14).withHeight (13), juce::Justification::centredLeft);
-    g.drawText ("CHAIN", chainBox.getBounds().translated (0, -14).withHeight (13), juce::Justification::centredLeft);
 }
 
 void HeaderBar::resized()
 {
-    auto r = getLocalBounds();
-    r.removeFromLeft (236);
-    auto right = r.removeFromRight (436).reduced (12, 0);
-    bypass.setBounds (right.removeFromRight (82).withSizeKeepingCentre (82, 24));
+    auto r = getLocalBounds().reduced (16, 0);
+    const int logoW = juce::roundToInt (34.0f * (logo.isValid() ? (float) logo.getWidth() / (float) logo.getHeight() : 4.9f));
+    r.removeFromLeft (logoW + 28);
+    auto right = r.removeFromRight (392).withSizeKeepingCentre (392, 28);
+    settingsButton.setBounds (right.removeFromRight (76));
     right.removeFromRight (8);
-    roleBox.setBounds (right.removeFromRight (146).withSizeKeepingCentre (146, 26).translated (0, 2));
+    bypassButton.setBounds (right.removeFromRight (28));
     right.removeFromRight (8);
-    chainBox.setBounds (right.removeFromRight (168).withSizeKeepingCentre (168, 26).translated (0, 2));
-
-    int total = 0;
-    for (int w : kTabWidths) total += w;
-    tabsArea = r.withSizeKeepingCentre (juce::jmin (r.getWidth(), total), r.getHeight()).withTrimmedBottom (1);
+    abSwitch.setBounds (right.removeFromRight (56));
+    right.removeFromRight (8);
+    presetButton.setBounds (right);
+    tabArea = r;
+    blockPlaced = false;
 }
+
+void HeaderBar::mouseDown (const juce::MouseEvent& e)
+{
+    const int t = tabAt (e.getPosition());
+    if (t >= 0 && t != tab) { setTab (t); if (onTabChanged) onTabChanged (t); }
+}
+
+void HeaderBar::mouseMove (const juce::MouseEvent& e)
+{
+    const int t = tabAt (e.getPosition());
+    if (t != hoverTab) { hoverTab = t; repaint (tabArea); }
+    setMouseCursor (t >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void HeaderBar::mouseExit (const juce::MouseEvent&) { hoverTab = -1; repaint (tabArea); }
 }

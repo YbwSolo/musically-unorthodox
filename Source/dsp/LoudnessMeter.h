@@ -2,6 +2,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include <array>
 #include <atomic>
+#include "TruePeak.h"
 
 namespace mu
 {
@@ -25,6 +26,7 @@ public:
     float getTruePeakHold() const noexcept { return truePeakHold.load (std::memory_order_relaxed); }
     float getTruePeakCurrent() const noexcept { return truePeakCurrent.load (std::memory_order_relaxed); }
     float getSamplePeakHold() const noexcept { return samplePeakHold.load (std::memory_order_relaxed); }
+    float getChannelPeakDb (int c) const noexcept { return channelPeak[(size_t) (c & 1)].load (std::memory_order_relaxed); }
     float getCrestFactorDb() const noexcept { return crestFactor.load (std::memory_order_relaxed); }
     bool  isActive() const noexcept { return getMomentary() > -55.0f; }
 
@@ -47,8 +49,8 @@ private:
     double subBlockSum = 0.0;    // sum of channel-summed k-weighted squares
 
     std::array<juce::dsp::IIR::Filter<float>, 2> shelf, highPass;
-    juce::AudioBuffer<float> kBuffer, osBuffer;
-    std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;
+    juce::AudioBuffer<float> kBuffer;
+    std::array<TruePeakDetector, 2> tpDetectors;
 
     std::array<float, kSubBlocksShort> ring {};   // mean-square per 100 ms sub-block
     int ringPos = 0;
@@ -60,6 +62,7 @@ private:
     std::atomic<float> momentary { -100.0f }, shortTerm { -100.0f }, integrated { -100.0f };
     std::atomic<float> truePeakHold { -144.0f }, truePeakCurrent { -144.0f }, samplePeakHold { -144.0f };
     std::atomic<float> crestFactor { 0.0f };
+    std::array<std::atomic<float>, 2> channelPeak { -144.0f, -144.0f };
     float blockPeakLin = 0.0f;
     double blockSquares = 0.0;
     int blockCount = 0;

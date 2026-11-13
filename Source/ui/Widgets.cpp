@@ -1,126 +1,208 @@
 #include "Widgets.h"
-#include "Theme.h"
+#include "../PluginProcessor.h"
 
 namespace mu
 {
-// ---- Knob ----------------------------------------------------------------------------------------
-Knob::Knob (juce::AudioProcessorValueTreeState& apvts, const juce::String& paramId, const juce::String& t, const juce::String& tooltip)
-    : title (t)
+using namespace theme;
+
+// ---- Knob ------------------------------------------------------------------------------------------
+Knob::Knob (MUProcessor& p, const juce::String& paramId, const juce::String& l, const juce::String& helpKey) : label (l)
 {
     slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 72, 17);
-    slider.setDoubleClickReturnValue (true, apvts.getParameter (paramId) != nullptr ? apvts.getParameter (paramId)->convertFrom0to1 (apvts.getParameter (paramId)->getDefaultValue()) : 0.0);
-    if (tooltip.isNotEmpty()) slider.setTooltip (tooltip);
+    slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 80, 16);
+    slider.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
+    slider.setMouseDragSensitivity (220);
     addAndMakeVisible (slider);
-    att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, paramId, slider);
+    att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.apvts, paramId, slider);
+    setHelp (*this, helpKey.isNotEmpty() ? helpKey : paramId);
 }
 
 void Knob::resized()
 {
     auto r = getLocalBounds();
-    r.removeFromTop (14);
-    const int side = juce::jmin (r.getWidth(), r.getHeight(), 124);
-    slider.setBounds (r.withWidth (side).withHeight (side).withCentre ({ r.getCentreX(), r.getY() + side / 2 }));
+    r.removeFromTop (15);
+    const int side = juce::jmin (r.getWidth(), r.getHeight() - 16, 64);
+    slider.setBounds (r.withSizeKeepingCentre (juce::jmax (side, 40), side + 16));
 }
 
 void Knob::paint (juce::Graphics& g)
 {
-    g.setColour (slider.isEnabled() ? theme::textDim : theme::textMute);
-    g.setFont (theme::bodyBold (10.0f));
-    g.drawText (title.toUpperCase(), getLocalBounds().removeFromTop (14), juce::Justification::centred);
+    g.setFont (body (11.0f));
+    g.setColour (dimmed ? textMute : textDim);
+    g.drawFittedText (label, getLocalBounds().removeFromTop (14), juce::Justification::centred, 1, 0.85f);
 }
 
-// ---- HSlider -------------------------------------------------------------------------------------
-HSlider::HSlider (juce::AudioProcessorValueTreeState& apvts, const juce::String& paramId, const juce::String& t, int labelWidth, const juce::String& tooltip)
-    : title (t), labelW (labelWidth)
+// ---- ParamToggle -----------------------------------------------------------------------------------
+ParamToggle::ParamToggle (MUProcessor& p, const juce::String& paramId, const juce::String& text, const juce::String& style, const juce::String& helpKey)
 {
-    slider.setSliderStyle (juce::Slider::LinearHorizontal);
-    slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 78, 18);
-    slider.setDoubleClickReturnValue (true, apvts.getParameter (paramId) != nullptr ? apvts.getParameter (paramId)->convertFrom0to1 (apvts.getParameter (paramId)->getDefaultValue()) : 0.0);
-    if (tooltip.isNotEmpty()) slider.setTooltip (tooltip);
-    addAndMakeVisible (slider);
-    att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, paramId, slider);
+    setButtonText (text);
+    getProperties().set ("style", style);
+    att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, paramId, *this);
+    setHelp (*this, helpKey.isNotEmpty() ? helpKey : paramId);
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
 }
 
-void HSlider::resized()
+// ---- Segmented -------------------------------------------------------------------------------------
+Segmented::Segmented (const juce::StringArray& i) : items (i) { setMouseCursor (juce::MouseCursor::PointingHandCursor); }
+
+Segmented::Segmented (MUProcessor& p, const juce::String& paramId, const juce::StringArray& i, const juce::String& helpKey) : Segmented (i)
 {
-    auto r = getLocalBounds();
-    r.removeFromLeft (labelW);
-    slider.setBounds (r);
+    if (auto* param = p.apvts.getParameter (paramId))
+    {
+        att = std::make_unique<juce::ParameterAttachment> (*param, [this] (float v) { setIndex (juce::roundToInt (v), false); });
+        att->sendInitialUpdate();
+        animPos = (float) index;
+    }
+    setHelp (*this, helpKey.isNotEmpty() ? helpKey : paramId);
 }
 
-void HSlider::paint (juce::Graphics& g)
+Segmented::~Segmented() { stopTimer(); }
+
+void Segmented::setIndex (int i, bool notify)
 {
-    g.setColour (slider.isEnabled() ? theme::textDim : theme::textMute);
-    g.setFont (theme::body (12.0f));
-    g.drawText (title, getLocalBounds().removeFromLeft (labelW - 8), juce::Justification::centredLeft, true);
+    i = juce::jlimit (0, juce::jmax (0, items.size() - 1), i);
+    if (i != index)
+    {
+        index = i;
+        if (isShowing()) startTimerHz (60); else animPos = (float) index;
+        repaint();
+    }
+    if (notify)
+    {
+        if (att != nullptr) att->setValueAsCompleteGesture ((float) i);
+        if (onChange) onChange (i);
+    }
 }
 
-// ---- ModulePanel ---------------------------------------------------------------------------------
-ModulePanel::ModulePanel (const juce::String& t, const juce::String& h) : title (t), hint (h) {}
-
-void ModulePanel::bindToggle (juce::AudioProcessorValueTreeState& apvts, const juce::String& paramId)
+void Segmented::timerCallback()
 {
-    toggle = std::make_unique<juce::ToggleButton> ("");
-    addAndMakeVisible (*toggle);
-    att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, paramId, *toggle);
+    animPos = approach (animPos, (float) index, 1.0f / 60.0f, 0.05f);
+    if (std::abs (animPos - (float) index) < 0.005f) { animPos = (float) index; stopTimer(); }
+    repaint();
+}
+
+void Segmented::paint (juce::Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat();
+    g.setColour (control);
+    g.fillRoundedRectangle (r, 5.0f);
+    if (items.isEmpty()) return;
+    const float cw = r.getWidth() / (float) items.size();
+    const auto sel = juce::Rectangle<float> (r.getX() + animPos * cw, r.getY(), cw, r.getHeight()).reduced (2.0f);
+    g.setColour (isEnabled() ? yellow : lineHi);
+    g.fillRoundedRectangle (sel, 4.0f);
+    for (int i = 0; i < items.size(); ++i)
+    {
+        const auto cell = juce::Rectangle<float> (r.getX() + (float) i * cw, r.getY(), cw, r.getHeight());
+        const bool on = std::abs (animPos - (float) i) < 0.5f;
+        const auto colour = on ? onYellow : (i == hover ? text : textDim);
+        if (items[i].startsWith ("icon:"))
+            icons::draw (g, items[i].substring (5), cell.reduced (5.0f, 5.0f), colour);
+        else
+        {
+            g.setColour (colour);
+            g.setFont (on ? bodyBold (12.0f) : body (12.0f));
+            g.drawFittedText (items[i], cell.toNearestInt().reduced (3, 0), juce::Justification::centred, 1, 0.8f);
+        }
+    }
+}
+
+void Segmented::mouseDown (const juce::MouseEvent& e)
+{
+    if (items.isEmpty() || ! isEnabled()) return;
+    setIndex ((int) ((float) e.x / ((float) getWidth() / (float) items.size())), true);
+}
+
+void Segmented::mouseMove (const juce::MouseEvent& e)
+{
+    const int h = items.isEmpty() ? -1 : juce::jlimit (0, items.size() - 1, (int) ((float) e.x / ((float) getWidth() / (float) items.size())));
+    if (h != hover) { hover = h; repaint(); }
+}
+
+void Segmented::mouseExit (const juce::MouseEvent&) { hover = -1; repaint(); }
+
+// ---- Section ---------------------------------------------------------------------------------------
+Section::Section (const juce::String& t) : title (t) { setInterceptsMouseClicks (false, true); }
+
+void Section::setPower (MUProcessor& p, const juce::String& paramId)
+{
+    power = std::make_unique<ParamToggle> (p, paramId, "", "power");
+    power->onStateChange = [this] { repaint(); };
+    addAndMakeVisible (*power);
     resized();
 }
 
-void ModulePanel::paint (juce::Graphics& g)
+void Section::resized()
 {
-    theme::drawPanel (g, getLocalBounds().toFloat());
-    auto head = getLocalBounds().removeFromTop (34).reduced (12, 0);
-    if (toggle) head.removeFromRight (40);
-    theme::drawSectionTitle (g, head, title, hint);
-    g.setColour (theme::line);
-    g.fillRect (getLocalBounds().withTrimmedTop (34).removeFromTop (1).reduced (1, 0));
+    if (power != nullptr) power->setBounds (10, 7, 20, 20);
 }
 
-void ModulePanel::resized()
+void Section::paint (juce::Graphics& g)
 {
-    if (toggle) toggle->setBounds (getLocalBounds().removeFromTop (34).removeFromRight (46).reduced (6, 6));
-}
-
-juce::Rectangle<int> ModulePanel::getContentArea() const
-{
-    return getLocalBounds().withTrimmedTop (35).reduced (12, 10);
-}
-
-// ---- TextBlock -----------------------------------------------------------------------------------
-void TextBlock::setText (const juce::String& t, float px, juce::Colour c) { text = t; size = px; colour = c; repaint(); }
-
-void TextBlock::paint (juce::Graphics& g)
-{
-    juce::AttributedString s;
-    s.setJustification (juce::Justification::topLeft);
-    s.setLineSpacing (3.0f);
-    s.append (text, theme::body (size), colour);
-    juce::TextLayout tl;
-    tl.createLayout (s, (float) getWidth());
-    tl.draw (g, getLocalBounds().toFloat());
-}
-
-int TextBlock::heightForWidth (int width) const
-{
-    juce::AttributedString s;
-    s.setLineSpacing (3.0f);
-    s.append (text, theme::body (size), colour);
-    juce::TextLayout tl;
-    tl.createLayout (s, (float) width);
-    return (int) std::ceil (tl.getHeight()) + 4;
-}
-
-// ---- ProgressStrip -------------------------------------------------------------------------------
-void ProgressStrip::paint (juce::Graphics& g)
-{
-    auto r = getLocalBounds().toFloat();
-    g.setColour (theme::line);
-    g.fillRoundedRectangle (r, 2.0f);
-    if (isActive)
+    fillPanel (g, getLocalBounds().toFloat());
+    auto header = getLocalBounds().removeFromTop (kHeader).reduced (12, 0);
+    if (power != nullptr) header.removeFromLeft (26);
+    g.setFont (bodyBold (13.0f));
+    g.setColour (isOn() ? text : textDim);
+    g.drawText (title, header, juce::Justification::centredLeft);
+    if (readout.isNotEmpty())
     {
-        g.setColour (theme::yellow);
-        g.fillRoundedRectangle (r.withWidth (juce::jmax (4.0f, r.getWidth() * juce::jlimit (0.0f, 1.0f, progress))), 2.0f);
+        g.setFont (body (12.0f));
+        g.setColour (isOn() ? yellow : textMute);
+        g.drawText (readout, header, juce::Justification::centredRight);
+    }
+}
+
+// ---- IconButton ------------------------------------------------------------------------------------
+IconButton::IconButton (const juce::String& iconName, const juce::String& helpKey) : juce::Button (iconName), icon (iconName)
+{
+    if (helpKey.isNotEmpty()) setHelp (*this, helpKey);
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+void IconButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    const auto r = getLocalBounds().toFloat();
+    const bool on = getToggleState();
+    g.setColour (on ? yellow : (highlighted || down) ? control.brighter (0.06f) : control);
+    g.fillRoundedRectangle (r, 5.0f);
+    const float pad = juce::jmax (4.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.24f);
+    icons::draw (g, icon, r.reduced (pad), ! isEnabled() ? textMute : on ? onYellow : highlighted ? theme::text : theme::text.withAlpha (0.8f));
+}
+
+juce::TextButton& styleButton (juce::TextButton& b, const juce::String& text, bool primary, const juce::String& helpKey)
+{
+    b.setButtonText (text);
+    b.getProperties().set ("primary", primary);
+    b.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    if (helpKey.isNotEmpty()) setHelp (b, helpKey);
+    return b;
+}
+
+void layoutRow (juce::Rectangle<int> area, std::initializer_list<juce::Component*> items, int gap)
+{
+    const int n = (int) items.size();
+    if (n == 0) return;
+    const float cell = ((float) area.getWidth() - (float) gap * (float) (n - 1)) / (float) n;
+    int i = 0;
+    for (auto* c : items)
+    {
+        const int x0 = area.getX() + juce::roundToInt ((cell + (float) gap) * (float) i);
+        const int x1 = area.getX() + juce::roundToInt ((cell + (float) gap) * (float) i + cell);
+        if (c != nullptr) c->setBounds (x0, area.getY(), x1 - x0, area.getHeight());
+        ++i;
+    }
+}
+
+void drawReductionBar (juce::Graphics& g, juce::Rectangle<float> r, float reductionDb, float maxDb)
+{
+    g.setColour (control);
+    g.fillRoundedRectangle (r, 2.0f);
+    const float amount = juce::jlimit (0.0f, 1.0f, std::abs (reductionDb) / maxDb);
+    if (amount > 0.005f)
+    {
+        g.setColour (yellow);
+        g.fillRoundedRectangle (r.withHeight (juce::jmax (2.0f, r.getHeight() * amount)), 2.0f);
     }
 }
 }

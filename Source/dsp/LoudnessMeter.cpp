@@ -34,10 +34,6 @@ void LoudnessMeter::prepare (double sampleRate, int maxBlockSize, int numChannel
     channels = juce::jlimit (1, 2, numChannels);
     subBlockLen = juce::jmax (1, (int) std::round (fs * 0.1));
     kBuffer.setSize (2, maxBlockSize, false, false, true);
-    osBuffer.setSize (2, maxBlockSize, false, false, true);
-    oversampler = std::make_unique<juce::dsp::Oversampling<float>> (2, 2,
-        juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, false);
-    oversampler->initProcessing ((size_t) maxBlockSize);
     for (auto& f : shelf)    f.coefficients = makeShelf (fs);
     for (auto& f : highPass) f.coefficients = makeHighPass (fs);
     reset();
@@ -47,7 +43,7 @@ void LoudnessMeter::reset()
 {
     for (auto& f : shelf) f.reset();
     for (auto& f : highPass) f.reset();
-    if (oversampler) oversampler->reset();
+    for (auto& d : tpDetectors) d.reset();
     subBlockPos = 0; subBlockSum = 0.0;
     ring.fill (0.0f); ringPos = 0; ringFilled = 0;
     momentary.store (-100.0f); shortTerm.store (-100.0f);
@@ -75,16 +71,15 @@ void LoudnessMeter::process (const juce::AudioBuffer<float>& buffer)
         peak = juce::jmax (peak, buffer.getMagnitude (c, 0, n));
     samplePeakHold.store (juce::jmax (samplePeakHold.load (std::memory_order_relaxed), juce::Decibels::gainToDecibels (peak, -144.0f)), std::memory_order_relaxed);
 
-    for (int c = 0; c < 2; ++c)
-        osBuffer.copyFrom (c, 0, buffer, juce::jmin (c, ch - 1), 0, n);
-    juce::dsp::AudioBlock<float> osBlock (osBuffer.getArrayOfWritePointers(), 2, 0, (size_t) n);
-    auto up = oversampler->processSamplesUp (osBlock);
-    float tp = 0.0f;
-    for (size_t c = 0; c < up.getNumChannels(); ++c)
+    float tp = peak;
+    for (int c = 0; c < ch; ++c)
     {
-        auto* d = up.getChannelPointer (c);
-        for (size_t i = 0; i < up.getNumSamples(); ++i) tp = juce::jmax (tp, std::abs (d[i]));
+        const float* d = buffer.getReadPointer (c);
+        auto& det = tpDetectors[(size_t) c];
+        for (int i = 0; i < n; ++i) tp = juce::jmax (tp, det.process (d[i]));
+        channelPeak[(size_t) c].store (juce::Decibels::gainToDecibels (buffer.getMagnitude (c, 0, n), -144.0f), std::memory_order_relaxed);
     }
+    if (ch == 1) channelPeak[1].store (channelPeak[0].load (std::memory_order_relaxed), std::memory_order_relaxed);
     const float tpDb = juce::Decibels::gainToDecibels (tp, -144.0f);
     truePeakCurrent.store (tpDb, std::memory_order_relaxed);
     truePeakHold.store (juce::jmax (truePeakHold.load (std::memory_order_relaxed), tpDb), std::memory_order_relaxed);

@@ -76,7 +76,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         p.push_back (std::make_unique<APB> (id (ids::eqBandDyn (b)), n + "dynamic", false));
         p.push_back (std::make_unique<APF> (id (ids::eqBandThr (b)), n + "threshold", range (-60.0f, 0.0f, 0.1f), -30.0f, dbAttr()));
         p.push_back (std::make_unique<APF> (id (ids::eqBandRange (b)), n + "range", range (-18.0f, 18.0f, 0.1f), -6.0f, dbAttr()));
+        p.push_back (std::make_unique<APC> (id (ids::eqBandSlope (b)), n + "slope", juce::StringArray { "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct" }, 0));
+        p.push_back (std::make_unique<APC> (id (ids::eqBandMode (b)), n + "channel", juce::StringArray { "Stereo", "Mid", "Side" }, 0));
     }
+    p.push_back (std::make_unique<APB> (id (ids::eqAutoGain), "EQ auto gain", false));
 
     // ---- compressor
     p.push_back (std::make_unique<APB> (id (ids::compEnabled), "Compressor", false));
@@ -89,6 +92,23 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     p.push_back (std::make_unique<APF> (id (ids::compMakeup), "Makeup", range (-12.0f, 24.0f, 0.1f), 0.0f, dbAttr()));
     p.push_back (std::make_unique<APB> (id (ids::compAutoMakeup), "Auto makeup", true));
     p.push_back (std::make_unique<APF> (id (ids::compMix), "Mix", range (0.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
+    p.push_back (std::make_unique<APC> (id (ids::compStyle), "Compressor style", juce::StringArray { "Clean", "Punch", "Smooth", "Glue" }, 0));
+    p.push_back (std::make_unique<APF> (id (ids::compScHp), "Sidechain high-pass", skewed (20.0f, 500.0f, 120.0f, 1.0f), 20.0f, hzAttr()));
+
+    // ---- smooth (resonance tamer)
+    p.push_back (std::make_unique<APB> (id (ids::smOn), "Smooth", false));
+    p.push_back (std::make_unique<APF> (id (ids::smDepth), "Smooth depth", range (0.0f, 100.0f, 0.1f), 40.0f, pctAttr()));
+    p.push_back (std::make_unique<APC> (id (ids::smFocus), "Smooth focus", juce::StringArray { "Full range", "Low mids", "Harsh highs" }, 0));
+    p.push_back (std::make_unique<APC> (id (ids::smSpeed), "Smooth speed", juce::StringArray { "Slow", "Normal", "Fast" }, 1));
+
+    // ---- stereo
+    p.push_back (std::make_unique<APF> (id (ids::stWidth), "Stereo width", range (0.0f, 200.0f, 0.1f), 100.0f, pctAttr()));
+    p.push_back (std::make_unique<APB> (id (ids::stMonoBass), "Mono bass", false));
+    p.push_back (std::make_unique<APF> (id (ids::stMonoFreq), "Mono bass below", skewed (60.0f, 300.0f, 120.0f, 1.0f), 120.0f, hzAttr()));
+
+    // ---- master
+    p.push_back (std::make_unique<APF> (id (ids::maxGain), "Limiter gain", range (0.0f, 24.0f, 0.1f), 0.0f, dbAttr()));
+    p.push_back (std::make_unique<APC> (id (ids::masterMode), "Master mode", juce::StringArray { "Mix hand-off", "Streaming master", "Loud master", "Custom" }, 0));
 
     // ---- de-esser
     p.push_back (std::make_unique<APB> (id (ids::dsOn), "De-esser", false));

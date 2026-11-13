@@ -127,6 +127,12 @@ void SessionBus::applyPlan (const BalancePlan& plan, float fraction)
         const float cur = s.client->getTrimDb();
         s.client->setTrimDb (cur + (m.newTrimDb - cur) * juce::jlimit (0.0f, 1.0f, fraction));
     }
+    // Everything measured so far describes the old balance. Start again, and give the new levels a few
+    // seconds to be heard before any further move is proposed.
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    resetAtMs = now + 200.0;            // once the trims have finished gliding
+    settleUntilMs = now + 4500.0;
+    if (! isTimerRunning()) startTimer (500);
 }
 
 std::array<float, kAnalysisBands> SessionBus::bandCentres() const
@@ -148,6 +154,14 @@ void SessionBus::applyMaskingClash (const MaskingClash& c)
     if (c.slotB < 0 || c.slotB >= kMaxInstances) return;
     auto& s = slots[(size_t) c.slotB];
     if (s.used.load() && s.client != nullptr) s.client->applyMaskingCut (c.freqHz, c.suggestedCutDb);
+}
+
+void SessionBus::setTrackLocked (int slot, bool locked)
+{
+    const juce::ScopedLock sl (lock);
+    if (slot < 0 || slot >= kMaxInstances) return;
+    auto& s = slots[(size_t) slot];
+    if (s.used.load() && s.client != nullptr) s.client->setAcceptsBalance (! locked);
 }
 
 void SessionBus::setAutoBalance (bool on, BalanceTargets tg)
@@ -200,11 +214,38 @@ LearnState SessionBus::getLearnState() const
     return st;
 }
 
+void SessionBus::setReference (const std::array<float, kAnalysisBands>& bandsDb, const juce::String& sourceName)
+{
+    const juce::ScopedLock sl (lock);
+    referenceBands = bandsDb; referenceName = sourceName; hasReference = true;
+}
+
+bool SessionBus::getReference (std::array<float, kAnalysisBands>& out, juce::String& sourceName) const
+{
+    const juce::ScopedLock sl (lock);
+    if (! hasReference) return false;
+    out = referenceBands; sourceName = referenceName;
+    return true;
+}
+
+void SessionBus::clearReference()
+{
+    const juce::ScopedLock sl (lock);
+    hasReference = false;
+}
+
 void SessionBus::timerCallback()
 {
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+    if (resetAtMs > 0.0 && nowMs >= resetAtMs) { resetAtMs = 0.0; resetAllMeasurements(); }
     auto plan = computePlan (targets);
     {
         const juce::ScopedLock sl (lock);
+        if (nowMs < settleUntilMs)
+        {
+            for (auto& m : plan.moves) { m.newTrimDb -= m.deltaDb; m.deltaDb = 0.0f; }
+            plan.summary = "Balanced. Measuring the result...";
+        }
         lastPlan = plan;
     }
 
@@ -238,7 +279,12 @@ void SessionBus::timerCallback()
             learnMessage = "Nothing was playing - start playback and try again.";
         }
     }
-    else if (autoBalance && plan.usable)
-        applyPlan (plan, 0.25f);   // glide towards the plan rather than jumping
+    else if (autoBalance && plan.usable && nowMs >= settleUntilMs && nowMs - lastAutoApplyMs > 6000.0)
+    {
+        // Keep balanced: every few seconds, once fresh measurements are in, take most of the remaining step.
+        bool worthIt = false;
+        for (auto& m : plan.moves) worthIt = worthIt || std::abs (m.deltaDb) > 0.5f;
+        if (worthIt) { applyPlan (plan, 0.8f); lastAutoApplyMs = nowMs; }
+    }
 }
 }

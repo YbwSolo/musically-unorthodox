@@ -1,64 +1,46 @@
 #pragma once
-#include <juce_gui_basics/juce_gui_basics.h>
-#include "../PluginProcessor.h"
-#include "Meters.h"
 #include "Widgets.h"
+#include "../session/SessionBus.h"
+#include <map>
 
 namespace mu
 {
-class SessionTable : public juce::Component
-{
-public:
-    void update (std::vector<TrackInfo> tracks, const BalancePlan& plan, int ownSlot);
-    void paint (juce::Graphics&) override;
-    int preferredHeight() const { return 30 + (int) juce::jmax ((size_t) 1, rows.size()) * 26 + 10; }
-private:
-    struct Row { TrackInfo t; float delta = 0.0f; juce::String note; bool own = false; };
-    std::vector<Row> rows;
-};
-
 class MixPage : public juce::Component
 {
 public:
-    explicit MixPage (MUProcessor&);
-    void resized() override;
+    MixPage (MUProcessor&, std::function<void (const juce::String&)> status);
+    void tick (float dt);
     void paint (juce::Graphics&) override;
-    void refresh();
-    void setStatus (const juce::String& s);
+    void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
 
 private:
-    class Content : public juce::Component { public: void paint (juce::Graphics&) override {} };
-
-    void rebuildMaskingButtons();
-    void layoutMaster (juce::Rectangle<int> r);
-    void layoutTrack (juce::Rectangle<int> r);
+    struct Lane
+    {
+        TrackInfo info;
+        float level = -70.0f, move = 0.0f, appear = 0.0f;
+        std::array<float, kAnalysisBands> heat {};
+        juce::Rectangle<int> bounds, lockArea;
+    };
+    void refreshData();
+    void drawDial (juce::Graphics&, juce::Rectangle<float>);
+    void drawLanes (juce::Graphics&);
+    void drawCollisions (juce::Graphics&);
 
     MUProcessor& proc;
-    juce::Viewport viewport;
-    Content content;
-
-    Readout card1, card2, card3, card4;
-    juce::TextButton learnBtn { juce::String ("LEARN & BALANCE  ") + juce::String (juce::CharPointer_UTF8 ("\xE2\x86\x92")) }, balanceBtn { "BALANCE NOW" }, cancelBtn { "CANCEL" };
-    juce::TextButton makeMaster { "USE THIS INSTANCE AS MASTER" }, resetTrims { "RESET MY TRIM" };
-    juce::ToggleButton autoBalance { "Auto balance (keeps following the mix)" }, acceptMoves { "Let the master move my level" };
-    juce::ToggleButton autoTrim { "Auto trim master to target" }, peakGuard { "Peak guard (true-peak ceiling)" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> acceptAtt, autoTrimAtt, peakGuardAtt;
-    ProgressStrip progress;
-    juce::Label status;
-
-    ModulePanel targetsPanel { "Targets", "where the whole song should land" };
-    std::unique_ptr<HSlider> targetLufs, targetTp;
-    std::vector<std::unique_ptr<HSlider>> roleSliders;
-    juce::TextButton resetTargets { "RESET TARGETS" };
-
-    ModulePanel sessionPanel { "Session", "every instance in this project" };
-    SessionTable table;
-    ModulePanel maskingPanel { "Masking", "tracks sitting on top of each other" };
-    juce::OwnedArray<juce::TextButton> maskingButtons;
-    juce::Label maskingEmpty;
+    std::function<void (const juce::String&)> setStatus;
+    juce::TextButton learnButton, balanceButton;
+    juce::ToggleButton keepBalanced;
+    std::array<juce::TextButton, 4> fixButtons;
+    std::vector<Lane> lanes;
+    std::map<int, Lane> laneState;
     std::vector<MaskingClash> clashes;
-    bool lastWasMaster = false;
-    juce::String statusText;
-    double statusUntil = 0.0;
+    BalancePlan plan;
+    LearnState learn;
+    juce::Rectangle<int> dialArea, actionArea, lanesArea, collisionArea;
+    float refreshTimer = 0.0f, dialValue = -60.0f, dialPeak = -60.0f, learnProgress = 0.0f, pulse = 0.0f;
+    bool hasMaster = false;
+    float mixLufs = -100.0f, mixPeak = -100.0f, targetLufs = -18.0f, targetPeak = -6.0f;
 };
 }

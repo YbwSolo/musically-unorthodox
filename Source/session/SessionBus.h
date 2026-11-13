@@ -17,6 +17,7 @@ public:
     virtual float getTrimDb() const = 0;
     virtual void setTrimDb (float db) = 0;
     virtual bool acceptsBalance() const = 0;
+    virtual void setAcceptsBalance (bool on) = 0;
     virtual bool fillBandsDb (std::array<float, kAnalysisBands>& out) const = 0;
     virtual void applyMaskingCut (float hz, float db) = 0;
     virtual void setSessionInstanceNumber (int n) = 0;
@@ -66,6 +67,7 @@ public:
     void applyPlan (const BalancePlan& plan, float fraction = 1.0f);
     std::vector<MaskingClash> computeMasking() const;
     void applyMaskingClash (const MaskingClash& c);
+    void setTrackLocked (int slot, bool locked);
 
     void setAutoBalance (bool on, BalanceTargets targets);
     bool isAutoBalance() const { return autoBalance; }
@@ -78,6 +80,12 @@ public:
     BalanceTargets getTargets() const { return targets; }
     BalancePlan getLastPlan() const;
     std::array<float, kAnalysisBands> bandCentres() const;
+
+    // Reference tone, shared by every instance: capture it on a track playing a finished song,
+    // then match it from the master or any other track.
+    void setReference (const std::array<float, kAnalysisBands>& bandsDb, const juce::String& sourceName);
+    bool getReference (std::array<float, kAnalysisBands>& out, juce::String& sourceName) const;
+    void clearReference();
 
     std::function<void()> onSessionChanged;   // UI hook (message thread)
 
@@ -93,5 +101,9 @@ private:
     bool learning = false;
     double learnStartMs = 0.0, learnLengthMs = 0.0;
     juce::String learnMessage;
+    double settleUntilMs = 0.0, lastAutoApplyMs = 0.0, resetAtMs = 0.0;     // after a balance, wait for fresh measurements before judging again
+    bool hasReference = false;
+    std::array<float, kAnalysisBands> referenceBands {};
+    juce::String referenceName;
 };
 }

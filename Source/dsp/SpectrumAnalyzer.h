@@ -11,27 +11,31 @@ namespace mu
 class SpectrumAnalyzer
 {
 public:
-    static constexpr int kFFTOrder = 11;               // 2048
+    static constexpr int kFFTOrder = 12;               // 4096: 11.7 Hz bins at 48 k
+    static constexpr int kHop = 1024;                  // 75 % overlap -> a new frame every 21 ms at 48 k
     static constexpr int kFFTSize = 1 << kFFTOrder;
     static constexpr int kNumBands = 32;               // 1/3-octave-ish bands 20 Hz .. 20 kHz
-    static constexpr int kDisplayPoints = 256;
+    static constexpr int kDisplayPoints = 320;
 
     struct Resonance { float freqHz; float prominenceDb; float q; };
 
     SpectrumAnalyzer();
     void prepare (double sampleRate);
     void reset();
+    void resetLongTerm();                                              // message thread: restart the slow average
     void pushBlock (const juce::AudioBuffer<float>& buffer) noexcept;   // audio thread
 
     // Message thread. Returns true if a new frame was produced.
     bool update();
+    int pump (int maxFrames = 16) { int n = 0; while (n < maxFrames && update()) ++n; return n; }
 
     const std::array<float, kDisplayPoints>& getDisplayDb() const { return displayDb; }
     const std::array<float, kNumBands>& getLongTermBandsDb() const { return longTermDb; }
     float bandCentreHz (int band) const;
     float displayPointHz (int i) const;
     float longTermBandDbAt (float hz) const;
-    bool hasLongTerm() const { return longTermFrames > 20; }
+    bool hasLongTerm() const { return longTermFrames > 40; }
+    int getLongTermFrames() const { return longTermFrames; }
 
     // Finds narrow peaks sticking out of the smoothed long-term spectrum (for "Clean harsh").
     std::vector<Resonance> findResonances (float minHz, float maxHz, float minProminenceDb) const;
@@ -47,11 +51,11 @@ private:
     double fs = 48000.0;
     juce::dsp::FFT fft { kFFTOrder };
     juce::dsp::WindowingFunction<float> window { kFFTSize, juce::dsp::WindowingFunction<float>::hann };
-    juce::AbstractFifo fifo { kFFTSize * 4 };
+    juce::AbstractFifo fifo { kFFTSize * 8 };
     std::vector<float> fifoBuffer;
     std::vector<float> fftData;                        // 2 * kFFTSize
     std::array<float, kFFTSize / 2> binDb {};
-    std::array<float, kDisplayPoints> displayDb {};
+    std::array<float, kDisplayPoints> displayDb {}, rawDb {};
     std::array<float, kNumBands> longTermDb {};
     std::array<float, kNumBands> bandLo {}, bandHi {};
     int longTermFrames = 0;

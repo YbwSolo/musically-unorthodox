@@ -3,7 +3,7 @@
 
 namespace mu
 {
-constexpr int kNumEQBands = 6;
+constexpr int kNumEQBands = 8;
 
 enum class Role : int
 {
@@ -77,6 +77,9 @@ namespace ids
     inline juce::String eqBandDyn     (int b) { return "eqB" + juce::String (b) + "Dyn"; }
     inline juce::String eqBandThr     (int b) { return "eqB" + juce::String (b) + "Thr"; }
     inline juce::String eqBandRange   (int b) { return "eqB" + juce::String (b) + "Range"; }
+    inline juce::String eqBandSlope   (int b) { return "eqB" + juce::String (b) + "Slope"; }   // cut filters: 12/24/36/48 dB/oct
+    inline juce::String eqBandMode    (int b) { return "eqB" + juce::String (b) + "Mode"; }    // stereo / mid / side
+    inline const juce::String eqAutoGain  { "eqAutoGain" };
 
     // Compressor
     inline const juce::String compEnabled    { "compEnabled" };
@@ -88,6 +91,23 @@ namespace ids
     inline const juce::String compMakeup     { "compMakeup" };
     inline const juce::String compAutoMakeup { "compAutoMakeup" };
     inline const juce::String compMix        { "compMix" };
+    inline const juce::String compStyle      { "compStyle" };     // clean / punch / smooth / glue
+    inline const juce::String compScHp       { "compScHp" };      // sidechain high-pass
+
+    // Smooth (resonance tamer)
+    inline const juce::String smOn    { "smOn" };
+    inline const juce::String smDepth { "smDepth" };
+    inline const juce::String smFocus { "smFocus" };
+    inline const juce::String smSpeed { "smSpeed" };
+
+    // Stereo
+    inline const juce::String stWidth    { "stWidth" };
+    inline const juce::String stMonoBass { "stMonoBass" };
+    inline const juce::String stMonoFreq { "stMonoFreq" };
+
+    // Master
+    inline const juce::String maxGain    { "maxGain" };       // drive into the limiter
+    inline const juce::String masterMode { "masterMode" };    // hand-off / streaming / loud / custom
 
     // De-esser
     inline const juce::String dsOn        { "dsOn" };

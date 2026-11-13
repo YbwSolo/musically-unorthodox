@@ -1,6 +1,8 @@
 #pragma once
 #include <juce_dsp/juce_dsp.h>
 #include <cmath>
+#include <vector>
+#include <array>
 
 namespace mu
 {
@@ -22,14 +24,17 @@ public:
     void process (juce::AudioBuffer<float>& buffer) noexcept;
 
     static float shape (float x, int type, float drive) noexcept;
-    int getLatencySamples() const noexcept { return os ? (int) std::round (os->getLatencyInSamples()) : 0; }
+    int getLatencySamples() const noexcept { return latency; }
 
 private:
     double fs = 48000.0;
     int channels = 2;
     SaturatorSettings settings;
-    std::unique_ptr<juce::dsp::Oversampling<float>> os, osDry;   // dry runs through an identical oversampler so both paths share one latency
+    std::unique_ptr<juce::dsp::Oversampling<float>> os;
     juce::AudioBuffer<float> dry;
+    std::array<std::vector<float>, 2> dryDelay;   // dry path = pure delay matching the oversampler's latency
+    int dryPos = 0, latency = 0;
+    bool wetWasActive = false;
     juce::SmoothedValue<float> driveSmooth { 1.0f }, mixSmooth { 0.0f };
     std::array<float, 2> dcState {}, dcPrev {};
 };

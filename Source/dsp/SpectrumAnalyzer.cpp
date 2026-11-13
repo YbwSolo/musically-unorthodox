@@ -5,7 +5,7 @@ namespace mu
 {
 SpectrumAnalyzer::SpectrumAnalyzer()
 {
-    fifoBuffer.resize ((size_t) kFFTSize * 4, 0.0f);
+    fifoBuffer.resize ((size_t) kFFTSize * 8, 0.0f);
     fftData.resize ((size_t) kFFTSize * 2, 0.0f);
     for (int b = 0; b < kNumBands; ++b)
     {
@@ -27,6 +27,12 @@ void SpectrumAnalyzer::reset()
     fifo.reset();
     displayDb.fill (-100.0f);
     longTermDb.fill (-100.0f);
+    longTermBinLinear.fill (0.0f);
+    longTermFrames = 0;
+}
+
+void SpectrumAnalyzer::resetLongTerm()
+{
     longTermBinLinear.fill (0.0f);
     longTermFrames = 0;
 }
@@ -62,8 +68,8 @@ bool SpectrumAnalyzer::update()
     std::fill (fftData.begin(), fftData.end(), 0.0f);
     for (int i = 0; i < size1; ++i) fftData[(size_t) i] = fifoBuffer[(size_t) (start1 + i)];
     for (int i = 0; i < size2; ++i) fftData[(size_t) (size1 + i)] = fifoBuffer[(size_t) (start2 + i)];
-    // Keep 50% overlap: only consume half the frame.
-    fifo.finishedRead (kFFTSize / 2);
+    // 75 % overlap: consume one hop, so frames arrive often enough for a fluid display.
+    fifo.finishedRead (kHop);
 
     window.multiplyWithWindowingTable (fftData.data(), kFFTSize);
     fft.performFrequencyOnlyForwardTransform (fftData.data(), true);
@@ -78,27 +84,46 @@ bool SpectrumAnalyzer::update()
         if (db > -80.0f) active = true;
     }
 
-    // Display curve on a log axis with ballistics (fast up, slow down).
+    // Display curve on a log axis. Below ~200 Hz the points are closer together than the FFT bins, so the
+    // curve is interpolated between bins; higher up each point takes the strongest bin it covers.
+    const float binsPerHz = (float) kFFTSize / (float) fs;
     for (int p = 0; p < kDisplayPoints; ++p)
     {
         const float hz = displayPointHz (p);
         const float hzNext = displayPointHz (juce::jmin (p + 1, kDisplayPoints - 1));
-        const float binF = hz * (float) kFFTSize / (float) fs;
-        const int b0 = juce::jlimit (1, kFFTSize / 2 - 1, (int) binF);
-        const int b1 = juce::jlimit (b0, kFFTSize / 2 - 1, (int) (hzNext * (float) kFFTSize / (float) fs));
-        float v = -120.0f;
-        for (int b = b0; b <= b1; ++b) v = juce::jmax (v, binDb[(size_t) b]);
-        // small tilt (+3 dB/oct) so pink-ish material reads flat
-        v += 3.0f * std::log2 (hz / 1000.0f) * 0.5f;
+        const float binF = juce::jlimit (1.0f, (float) (kFFTSize / 2 - 2), hz * binsPerHz);
+        const float binNext = juce::jlimit (1.0f, (float) (kFFTSize / 2 - 1), hzNext * binsPerHz);
+        float v;
+        if (binNext - binF < 1.0f)
+        {
+            const int b0 = (int) binF;
+            const float t = binF - (float) b0;
+            v = binDb[(size_t) b0] + t * (binDb[(size_t) b0 + 1] - binDb[(size_t) b0]);
+        }
+        else
+        {
+            v = -120.0f;
+            for (int b = (int) binF; b <= (int) binNext; ++b) v = juce::jmax (v, binDb[(size_t) b]);
+        }
+        // +4.5 dB/oct tilt so a balanced mix reads roughly level across the display
+        rawDb[(size_t) p] = v + 4.5f * std::log2 (hz / 1000.0f);
+    }
+    // Light smoothing across neighbouring points, then ballistics (fast up, slow down).
+    for (int p = 0; p < kDisplayPoints; ++p)
+    {
+        const int a = juce::jmax (0, p - 2), b = juce::jmin (kDisplayPoints - 1, p + 2);
+        float sum = 0.0f, wsum = 0.0f;
+        for (int k = a; k <= b; ++k) { const float w = k == p ? 3.0f : (std::abs (k - p) == 1 ? 2.0f : 1.0f); sum += rawDb[(size_t) k] * w; wsum += w; }
+        const float v = sum / wsum;
         float& d = displayDb[(size_t) p];
-        d = v > d ? v * 0.6f + d * 0.4f : v * 0.08f + d * 0.92f;
+        d = v > d ? v * 0.5f + d * 0.5f : v * 0.05f + d * 0.95f;
     }
 
     // Long-term average (linear power domain, slow) only when there is signal.
     if (active)
     {
         ++longTermFrames;
-        const float alpha = longTermFrames < 50 ? 1.0f / (float) longTermFrames : 0.02f;
+        const float alpha = longTermFrames < 250 ? 1.0f / (float) longTermFrames : 0.004f;   // about a 5 s average
         for (int i = 0; i < kFFTSize / 2; ++i)
         {
             const float mag = fftData[(size_t) i] * norm;

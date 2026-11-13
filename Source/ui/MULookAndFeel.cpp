@@ -1,256 +1,296 @@
 #include "MULookAndFeel.h"
 #include "Theme.h"
+#include "Icons.h"
 
 namespace mu
 {
+using namespace theme;
+
 MULookAndFeel::MULookAndFeel()
 {
-    setColour (juce::ResizableWindow::backgroundColourId, theme::bg);
-    setColour (juce::Label::textColourId, theme::text);
-    setColour (juce::Slider::textBoxTextColourId, theme::text);
+    setColour (juce::ResizableWindow::backgroundColourId, black);
+    setColour (juce::Label::textColourId, text);
+    setColour (juce::Slider::textBoxTextColourId, text);
     setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
-    setColour (juce::Slider::textBoxHighlightColourId, theme::yellow.withAlpha (0.4f));
-    setColour (juce::Slider::thumbColourId, theme::yellow);
-    setColour (juce::Slider::trackColourId, theme::yellow);
-    setColour (juce::Slider::backgroundColourId, theme::line);
-    setColour (juce::ComboBox::backgroundColourId, theme::panelHi);
-    setColour (juce::ComboBox::textColourId, theme::text);
-    setColour (juce::ComboBox::outlineColourId, theme::line);
-    setColour (juce::ComboBox::arrowColourId, theme::textDim);
-    setColour (juce::PopupMenu::backgroundColourId, theme::panelHi);
-    setColour (juce::PopupMenu::textColourId, theme::text);
-    setColour (juce::PopupMenu::highlightedBackgroundColourId, theme::yellow);
-    setColour (juce::PopupMenu::highlightedTextColourId, theme::onYellow);
-    setColour (juce::TextButton::buttonColourId, theme::panelHi);
-    setColour (juce::TextButton::buttonOnColourId, theme::yellow);
-    setColour (juce::TextButton::textColourOffId, theme::text);
-    setColour (juce::TextButton::textColourOnId, theme::onYellow);
-    setColour (juce::ToggleButton::textColourId, theme::text);
-    setColour (juce::ToggleButton::tickColourId, theme::yellow);
-    setColour (juce::TextEditor::backgroundColourId, theme::black);
-    setColour (juce::TextEditor::textColourId, theme::text);
-    setColour (juce::TextEditor::outlineColourId, theme::line);
-    setColour (juce::TextEditor::focusedOutlineColourId, theme::yellow);
-    setColour (juce::TextEditor::highlightColourId, theme::yellow.withAlpha (0.35f));
-    setColour (juce::TooltipWindow::backgroundColourId, theme::panelHi);
-    setColour (juce::TooltipWindow::textColourId, theme::text);
-    setColour (juce::TooltipWindow::outlineColourId, theme::lineHi);
-    setColour (juce::ScrollBar::thumbColourId, theme::lineHi);
-    setColour (juce::ScrollBar::trackColourId, juce::Colours::transparentBlack);
-    setColour (juce::CaretComponent::caretColourId, theme::yellow);
+    setColour (juce::Slider::textBoxHighlightColourId, yellow.withAlpha (0.4f));
+    setColour (juce::TextEditor::backgroundColourId, raised);
+    setColour (juce::TextEditor::textColourId, text);
+    setColour (juce::TextEditor::highlightColourId, yellow.withAlpha (0.35f));
+    setColour (juce::TextEditor::highlightedTextColourId, text);
+    setColour (juce::TextEditor::outlineColourId, lineHi);
+    setColour (juce::TextEditor::focusedOutlineColourId, yellow);
+    setColour (juce::CaretComponent::caretColourId, yellow);
+    setColour (juce::ComboBox::textColourId, text);
+    setColour (juce::PopupMenu::backgroundColourId, raised);
+    setColour (juce::PopupMenu::textColourId, text);
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, yellow);
+    setColour (juce::PopupMenu::highlightedTextColourId, onYellow);
+    setColour (juce::ScrollBar::thumbColourId, lineHi);
+    setColour (juce::TooltipWindow::backgroundColourId, raised);
+    setColour (juce::TooltipWindow::textColourId, text);
+    setColour (juce::TooltipWindow::outlineColourId, lineHi);
 }
 
-void MULookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
-                                      float startAngle, float endAngle, juce::Slider& s)
+// ---- sliders ---------------------------------------------------------------------------------------
+void MULookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float startAngle, float endAngle, juce::Slider& s)
 {
-    auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (3.0f);
-    const float size = juce::jmin (bounds.getWidth(), bounds.getHeight());
-    auto r = juce::Rectangle<float> (size, size).withCentre (bounds.getCentre());
-    const float radius = size * 0.5f;
-    const float lineW = juce::jmax (2.0f, size * 0.065f);
-    const float arcR = radius - lineW * 0.5f;
+    const auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
+    const float side = juce::jmin (bounds.getWidth(), bounds.getHeight());
+    const auto centre = bounds.getCentre();
+    const float radius = side * 0.5f - 2.0f;
+    const bool enabled = s.isEnabled();
+    const bool hot = s.isMouseOverOrDragging();
     const float angle = startAngle + pos * (endAngle - startAngle);
-    const bool bipolar = s.getMinimum() < 0.0 && s.getMaximum() > 0.0;
-    const float zeroAngle = bipolar ? startAngle + (float) ((0.0 - s.getMinimum()) / (s.getMaximum() - s.getMinimum())) * (endAngle - startAngle) : startAngle;
-    const bool on = s.isEnabled();
+    const float track = juce::jmax (2.5f, side * 0.07f);
 
-    juce::Path track;
-    track.addCentredArc (r.getCentreX(), r.getCentreY(), arcR, arcR, 0.0f, startAngle, endAngle, true);
-    g.setColour (theme::line);
-    g.strokePath (track, juce::PathStrokeType (lineW, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
+    // value arc: bipolar parameters grow from the centre, everything else from the left
+    const auto range = s.getRange();
+    const bool bipolar = range.getStart() < 0.0 && range.getEnd() > 0.0 && std::abs (range.getStart() + range.getEnd()) < 1.0e-3;
+    const float from = bipolar ? (startAngle + endAngle) * 0.5f : startAngle;
 
-    juce::Path value;
-    value.addCentredArc (r.getCentreX(), r.getCentreY(), arcR, arcR, 0.0f, juce::jmin (zeroAngle, angle), juce::jmax (zeroAngle, angle), true);
-    g.setColour (on ? theme::yellow : theme::textMute);
-    g.strokePath (value, juce::PathStrokeType (lineW, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
+    juce::Path bg;
+    bg.addCentredArc (centre.x, centre.y, radius - track * 0.5f, radius - track * 0.5f, 0.0f, startAngle, endAngle, true);
+    g.setColour (control);
+    g.strokePath (bg, juce::PathStrokeType (track, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-    auto body = r.reduced (lineW * 2.2f);
-    g.setColour (theme::black);
-    g.fillEllipse (body);
-    g.setColour (theme::lineHi);
-    g.drawEllipse (body, 1.0f);
-
-    juce::Path p;
-    const float pLen = body.getWidth() * 0.30f, pW = juce::jmax (2.0f, size * 0.045f);
-    p.addRoundedRectangle (-pW * 0.5f, -body.getWidth() * 0.47f, pW, pLen, pW * 0.5f);
-    p.applyTransform (juce::AffineTransform::rotation (angle).translated (body.getCentreX(), body.getCentreY()));
-    g.setColour (on ? theme::text : theme::textMute);
-    g.fillPath (p);
-}
-
-void MULookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float, float,
-                                      juce::Slider::SliderStyle style, juce::Slider& s)
-{
-    const bool horizontal = style == juce::Slider::LinearHorizontal || style == juce::Slider::LinearBar;
-    auto r = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
-    const float t = 3.0f;
-    juce::Rectangle<float> track = horizontal ? r.withSizeKeepingCentre (r.getWidth(), t) : r.withSizeKeepingCentre (t, r.getHeight());
-    g.setColour (theme::line);
-    g.fillRect (track);
-
-    const bool bipolar = s.getMinimum() < 0.0 && s.getMaximum() > 0.0;
-    float zeroPos = horizontal ? track.getX() : track.getBottom();
-    if (bipolar)
+    if (enabled && std::abs (angle - from) > 0.01f)
     {
-        const float f = (float) ((0.0 - s.getMinimum()) / (s.getMaximum() - s.getMinimum()));
-        zeroPos = horizontal ? track.getX() + f * track.getWidth() : track.getBottom() - f * track.getHeight();
+        juce::Path val;
+        val.addCentredArc (centre.x, centre.y, radius - track * 0.5f, radius - track * 0.5f, 0.0f, juce::jmin (from, angle), juce::jmax (from, angle), true);
+        g.setColour (yellow);
+        g.strokePath (val, juce::PathStrokeType (track, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
-    juce::Rectangle<float> fill = horizontal
-        ? juce::Rectangle<float> (juce::jmin (zeroPos, pos), track.getY(), std::abs (pos - zeroPos), t)
-        : juce::Rectangle<float> (track.getX(), juce::jmin (zeroPos, pos), t, std::abs (pos - zeroPos));
-    g.setColour (s.isEnabled() ? theme::yellow : theme::textMute);
-    g.fillRect (fill);
 
-    const float th = (float) getSliderThumbRadius (s);
-    auto thumb = horizontal ? juce::Rectangle<float> (th * 2, th * 2).withCentre ({ pos, track.getCentreY() })
-                            : juce::Rectangle<float> (th * 2, th * 2).withCentre ({ track.getCentreX(), pos });
-    g.setColour (theme::text);
-    g.fillEllipse (thumb);
-    g.setColour (theme::black);
-    g.fillEllipse (thumb.reduced (th * 0.6f));
+    // cap: a machined disc lit from above
+    const float capR = radius - track - 3.0f;
+    const auto cap = juce::Rectangle<float> (capR * 2.0f, capR * 2.0f).withCentre (centre);
+    g.setColour (juce::Colours::black.withAlpha (0.6f));
+    g.fillEllipse (cap.translated (0.0f, 1.5f).expanded (1.0f));
+    g.setGradientFill (juce::ColourGradient (juce::Colour (hot ? 0xff383838 : 0xff303030), centre.x, cap.getY(), juce::Colour (0xff141414), centre.x, cap.getBottom(), false));
+    g.fillEllipse (cap);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff5a5a5a), centre.x, cap.getY(), juce::Colour (0xff1c1c1c), centre.x, cap.getBottom(), false));
+    g.drawEllipse (cap.reduced (0.5f), 1.0f);
+
+    juce::Path pointer;
+    pointer.addRoundedRectangle (-1.25f, -capR + 3.0f, 2.5f, capR * 0.48f, 1.25f);
+    g.setColour (enabled ? (hot ? yellow : text) : textMute);
+    g.fillPath (pointer, juce::AffineTransform::rotation (angle).translated (centre.x, centre.y));
 }
 
-void MULookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& b, bool highlighted, bool)
+void MULookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float, float, juce::Slider::SliderStyle style, juce::Slider& s)
 {
-    auto r = b.getLocalBounds().toFloat();
-    const float h = juce::jmin (16.0f, r.getHeight() - 4.0f);
-    auto pill = juce::Rectangle<float> (h * 1.9f, h).withY (r.getCentreY() - h * 0.5f).withX (r.getX() + 1.0f);
-    const bool on = b.getToggleState();
-    g.setColour (on ? (b.isEnabled() ? theme::yellow : theme::textMute) : theme::lineHi);
-    g.fillRoundedRectangle (pill, h * 0.5f);
-    auto knob = juce::Rectangle<float> (h - 4.0f, h - 4.0f).withCentre ({ on ? pill.getRight() - h * 0.5f : pill.getX() + h * 0.5f, pill.getCentreY() });
-    g.setColour (on ? theme::black : (highlighted ? theme::text : theme::textDim));
-    g.fillEllipse (knob);
-    g.setColour (b.isEnabled() ? theme::text : theme::textMute);
-    g.setFont (theme::body (12.5f));
-    g.drawText (b.getButtonText(), r.withTrimmedLeft (pill.getRight() - r.getX() + 8.0f).toNearestInt(), juce::Justification::centredLeft, true);
-}
-
-void MULookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool highlighted, bool down)
-{
-    auto r = b.getLocalBounds().toFloat().reduced (0.5f);
-    const auto id = b.getComponentID();
-    const bool on = b.getToggleState();
-    const bool primary = id == "primary" || on;
-    const bool ghost = id == "ghost";
-    juce::Colour fill = primary ? theme::yellow : ghost ? juce::Colours::transparentBlack : theme::panelHi;
-    juce::Colour border = primary ? theme::yellow : ghost ? theme::text.withAlpha (0.7f) : theme::line;
-    if (! b.isEnabled()) { fill = fill.withAlpha (0.35f); border = border.withAlpha (0.35f); }
-    if (highlighted && b.isEnabled()) fill = primary ? fill.brighter (0.08f) : ghost ? theme::text.withAlpha (0.08f) : fill.brighter (0.1f);
-    if (down) fill = fill.darker (0.2f);
-    g.setColour (fill);
-    g.fillRoundedRectangle (r, 2.0f);
-    g.setColour (border);
-    g.drawRoundedRectangle (r, 2.0f, ghost ? 1.5f : 1.0f);
-}
-
-void MULookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool, bool)
-{
-    const auto id = b.getComponentID();
-    const bool primary = id == "primary" || b.getToggleState();
-    g.setFont (getTextButtonFont (b, b.getHeight()));
-    juce::Colour c = primary ? theme::onYellow : theme::text;
-    if (! b.isEnabled()) c = c.withAlpha (0.5f);
-    g.setColour (c);
-    g.drawText (b.getButtonText(), b.getLocalBounds().reduced (6, 0), juce::Justification::centred, true);
-}
-
-void MULookAndFeel::drawComboBox (juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox& c)
-{
-    auto r = juce::Rectangle<float> (0, 0, (float) w, (float) h).reduced (0.5f);
-    g.setColour (c.isEnabled() ? theme::black : theme::panel);
-    g.fillRoundedRectangle (r, 2.0f);
-    g.setColour (theme::lineHi);
-    g.drawRoundedRectangle (r, 2.0f, 1.0f);
-    juce::Path arrow;
-    const float ax = (float) w - 13.0f, ay = (float) h * 0.5f;
-    arrow.addTriangle (ax - 4.0f, ay - 2.0f, ax + 4.0f, ay - 2.0f, ax, ay + 3.0f);
-    g.setColour (theme::yellow);
-    g.fillPath (arrow);
-}
-
-void MULookAndFeel::positionComboBoxText (juce::ComboBox& c, juce::Label& l)
-{
-    l.setBounds (8, 1, c.getWidth() - 28, c.getHeight() - 2);
-    l.setFont (getComboBoxFont (c));
-}
-
-juce::Font MULookAndFeel::getComboBoxFont (juce::ComboBox& c) { return theme::body (juce::jmin (13.0f, (float) c.getHeight() * 0.55f)); }
-juce::Font MULookAndFeel::getLabelFont (juce::Label& l) { return l.getFont(); }
-juce::Font MULookAndFeel::getTextButtonFont (juce::TextButton&, int height) { return theme::bodyBold (juce::jmin (12.5f, (float) height * 0.48f)); }
-juce::Font MULookAndFeel::getPopupMenuFont() { return theme::body (13.0f); }
-
-void MULookAndFeel::drawPopupMenuBackground (juce::Graphics& g, int w, int h)
-{
-    g.setColour (theme::panelHi);
-    g.fillRect (0, 0, w, h);
-    g.setColour (theme::lineHi);
-    g.drawRect (0, 0, w, h, 1);
-}
-
-void MULookAndFeel::drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle<int>& area, bool isSeparator, bool isActive, bool isHighlighted,
-                                       bool isTicked, bool, const juce::String& text, const juce::String&, const juce::Drawable*, const juce::Colour*)
-{
-    if (isSeparator)
+    const bool enabled = s.isEnabled();
+    if (style == juce::Slider::LinearVertical)
     {
-        g.setColour (theme::line);
-        g.fillRect (area.reduced (8, 0).withHeight (1).withY (area.getCentreY()));
+        const float cx = (float) x + (float) w * 0.5f;
+        g.setColour (control);
+        g.fillRoundedRectangle (cx - 2.0f, (float) y, 4.0f, (float) h, 2.0f);
+        g.setColour (enabled ? yellow : textMute);
+        g.fillRoundedRectangle (cx - 2.0f, pos, 4.0f, (float) (y + h) - pos, 2.0f);
+        g.setColour (text);
+        g.fillRoundedRectangle (cx - 9.0f, pos - 3.0f, 18.0f, 6.0f, 3.0f);
         return;
     }
-    auto r = area.reduced (2, 0);
-    if (isHighlighted && isActive) { g.setColour (theme::yellow); g.fillRect (r); }
-    g.setColour (isHighlighted && isActive ? theme::onYellow : isActive ? theme::text : theme::textMute);
-    g.setFont (theme::body (13.0f));
-    auto tr = r.reduced (12, 0);
-    if (isTicked)
-    {
-        g.setColour (isHighlighted ? theme::onYellow : theme::yellow);
-        g.fillEllipse (tr.removeFromLeft (8).withSizeKeepingCentre (6, 6).toFloat());
-        tr.removeFromLeft (6);
-        g.setColour (isHighlighted && isActive ? theme::onYellow : theme::text);
-    }
-    else tr.removeFromLeft (14);
-    g.drawText (text, tr, juce::Justification::centredLeft, true);
+    const float cy = (float) y + (float) h * 0.5f;
+    g.setColour (control);
+    g.fillRoundedRectangle ((float) x, cy - 2.0f, (float) w, 4.0f, 2.0f);
+    g.setColour (enabled ? yellow : textMute);
+    g.fillRoundedRectangle ((float) x, cy - 2.0f, juce::jmax (0.0f, pos - (float) x), 4.0f, 2.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.5f));
+    g.fillEllipse (pos - 7.0f, cy - 6.0f, 14.0f, 14.0f);
+    g.setColour (s.isMouseOverOrDragging() ? yellow : text);
+    g.fillEllipse (pos - 6.5f, cy - 6.5f, 13.0f, 13.0f);
 }
 
 juce::Label* MULookAndFeel::createSliderTextBox (juce::Slider& s)
 {
     auto* l = LookAndFeel_V4::createSliderTextBox (s);
-    l->setFont (theme::bodyBold (11.5f));
+    l->setFont (body (11.5f));
     l->setJustificationType (juce::Justification::centred);
-    l->setColour (juce::Label::textColourId, theme::text);
-    l->setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    l->setColour (juce::Label::textColourId, text);
     l->setColour (juce::Label::outlineColourId, juce::Colours::transparentBlack);
+    l->setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    l->setColour (juce::Label::textWhenEditingColourId, text);
+    l->setColour (juce::Label::backgroundWhenEditingColourId, raised);
+    l->setColour (juce::Label::outlineWhenEditingColourId, yellow);
     return l;
 }
 
-static juce::TextLayout tooltipLayout (const juce::String& text)
+juce::Slider::SliderLayout MULookAndFeel::getSliderLayout (juce::Slider& s)
 {
-    juce::AttributedString s;
-    s.setJustification (juce::Justification::centredLeft);
-    s.append (text, theme::body (12.5f), theme::text);
-    juce::TextLayout tl;
-    tl.createLayoutWithBalancedLineLengths (s, 320.0f);
-    return tl;
+    auto layout = LookAndFeel_V4::getSliderLayout (s);
+    if (s.isRotary() && s.getTextBoxPosition() == juce::Slider::TextBoxBelow)
+    {
+        auto r = s.getLocalBounds();
+        layout.textBoxBounds = r.removeFromBottom (16);
+        layout.sliderBounds = r;
+    }
+    return layout;
 }
 
-juce::Rectangle<int> MULookAndFeel::getTooltipBounds (const juce::String& tipText, juce::Point<int> screenPos, juce::Rectangle<int> parentArea)
+// ---- buttons ---------------------------------------------------------------------------------------
+void MULookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool highlighted, bool down)
 {
-    const juce::TextLayout tl = tooltipLayout (tipText);
-    const int w = (int) (tl.getWidth() + 18.0f), h = (int) (tl.getHeight() + 12.0f);
-    return juce::Rectangle<int> (screenPos.x > parentArea.getCentreX() ? screenPos.x - (w + 12) : screenPos.x + 24,
-                                 screenPos.y > parentArea.getCentreY() ? screenPos.y - (h + 6) : screenPos.y + 6, w, h).constrainedWithin (parentArea);
+    const auto r = b.getLocalBounds().toFloat().reduced (0.5f);
+    const bool primary = (bool) b.getProperties().getWithDefault ("primary", false);
+    const bool on = b.getToggleState();
+    const float radius = 5.0f;
+    if (primary || on)
+    {
+        g.setColour (b.isEnabled() ? (down ? yellow.darker (0.25f) : highlighted ? yellow.brighter (0.25f) : yellow) : control);
+        g.fillRoundedRectangle (r, radius);
+    }
+    else
+    {
+        g.setColour (down ? control.brighter (0.08f) : highlighted ? control : raised);
+        g.fillRoundedRectangle (r, radius);
+        g.setColour (highlighted ? lineHi.brighter (0.2f) : lineHi);
+        g.drawRoundedRectangle (r, radius, 1.0f);
+    }
 }
 
-void MULookAndFeel::drawTooltip (juce::Graphics& g, const juce::String& text, int width, int height)
+void MULookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool, bool)
 {
-    g.setColour (theme::panelHi);
-    g.fillRect (0, 0, width, height);
-    g.setColour (theme::yellow);
-    g.fillRect (0, 0, 3, height);
-    g.setColour (theme::lineHi);
-    g.drawRect (0, 0, width, height, 1);
-    tooltipLayout (text).draw (g, juce::Rectangle<float> (9.0f, 0.0f, (float) width - 12.0f, (float) height));
+    const bool primary = (bool) b.getProperties().getWithDefault ("primary", false);
+    const bool filled = primary || b.getToggleState();
+    g.setFont (getTextButtonFont (b, b.getHeight()));
+    g.setColour (! b.isEnabled() ? textMute : filled ? onYellow : text);
+    g.drawFittedText (b.getButtonText(), b.getLocalBounds().reduced (8, 0), juce::Justification::centred, 1, 0.9f);
+}
+
+juce::Font MULookAndFeel::getTextButtonFont (juce::TextButton&, int) { return bodyBold (12.5f); }
+
+void MULookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& b, bool highlighted, bool)
+{
+    const bool on = b.getToggleState();
+    auto r = b.getLocalBounds().toFloat();
+    const auto style = b.getProperties().getWithDefault ("style", "switch").toString();
+    if (style == "power")
+    {
+        const auto box = r.withSizeKeepingCentre (juce::jmin (r.getWidth(), 20.0f), juce::jmin (r.getHeight(), 20.0f));
+        g.setColour (on ? yellow : (highlighted ? control.brighter (0.1f) : control));
+        g.fillEllipse (box);
+        icons::draw (g, "bypass", box.reduced (4.5f), on ? onYellow : textDim);
+        return;
+    }
+    // pill switch with the label to its right
+    const float sw = 28.0f, sh = 16.0f;
+    const auto pill = juce::Rectangle<float> (r.getX(), r.getCentreY() - sh * 0.5f, sw, sh);
+    g.setColour (on ? yellow : control);
+    g.fillRoundedRectangle (pill, sh * 0.5f);
+    if (! on) { g.setColour (highlighted ? lineHi.brighter (0.2f) : lineHi); g.drawRoundedRectangle (pill.reduced (0.5f), sh * 0.5f, 1.0f); }
+    const float knobX = on ? pill.getRight() - sh + 2.0f : pill.getX() + 2.0f;
+    g.setColour (on ? onYellow : textDim);
+    g.fillEllipse (knobX, pill.getY() + 2.0f, sh - 4.0f, sh - 4.0f);
+    g.setColour (b.isEnabled() ? (on ? text : textDim) : textMute);
+    g.setFont (body (12.5f));
+    g.drawFittedText (b.getButtonText(), r.withTrimmedLeft (sw + 8.0f).toNearestInt(), juce::Justification::centredLeft, 1, 0.9f);
+}
+
+// ---- combo / menus ---------------------------------------------------------------------------------
+void MULookAndFeel::drawComboBox (juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox& c)
+{
+    const auto r = juce::Rectangle<float> (0.0f, 0.0f, (float) w, (float) h).reduced (0.5f);
+    g.setColour (c.isMouseOver (true) ? control : raised);
+    g.fillRoundedRectangle (r, 5.0f);
+    g.setColour (lineHi);
+    g.drawRoundedRectangle (r, 5.0f, 1.0f);
+    juce::Path chevron;
+    const float cx = (float) w - 14.0f, cy = (float) h * 0.5f;
+    chevron.startNewSubPath (cx - 4.0f, cy - 2.0f); chevron.lineTo (cx, cy + 2.0f); chevron.lineTo (cx + 4.0f, cy - 2.0f);
+    g.setColour (textDim);
+    g.strokePath (chevron, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+juce::Font MULookAndFeel::getComboBoxFont (juce::ComboBox&) { return body (12.5f); }
+void MULookAndFeel::positionComboBoxText (juce::ComboBox& c, juce::Label& l)
+{
+    l.setBounds (10, 0, c.getWidth() - 32, c.getHeight());
+    l.setFont (getComboBoxFont (c));
+}
+
+void MULookAndFeel::drawPopupMenuBackground (juce::Graphics& g, int w, int h)
+{
+    g.fillAll (raised);
+    g.setColour (lineHi);
+    g.drawRect (0, 0, w, h, 1);
+}
+
+void MULookAndFeel::drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle<int>& area, bool isSeparator, bool isActive, bool isHighlighted, bool isTicked, bool hasSubMenu,
+                                       const juce::String& label, const juce::String&, const juce::Drawable*, const juce::Colour*)
+{
+    if (isSeparator)
+    {
+        g.setColour (line);
+        g.fillRect (area.reduced (8, 0).withSizeKeepingCentre (area.getWidth() - 16, 1));
+        return;
+    }
+    auto r = area.reduced (4, 1);
+    if (isHighlighted && isActive) { g.setColour (yellow); g.fillRoundedRectangle (r.toFloat(), 4.0f); }
+    const auto colour = ! isActive ? textMute : isHighlighted ? onYellow : text;
+    g.setColour (colour);
+    g.setFont (isTicked ? bodyBold (13.0f) : body (13.0f));
+    auto textArea = r.reduced (10, 0);
+    if (isTicked) { g.fillEllipse ((float) textArea.getX(), (float) textArea.getCentreY() - 2.5f, 5.0f, 5.0f); }
+    textArea.removeFromLeft (12);
+    if (hasSubMenu)
+    {
+        juce::Path chevron;
+        const float cx = (float) r.getRight() - 12.0f, cy = (float) r.getCentreY();
+        chevron.startNewSubPath (cx - 2.0f, cy - 4.0f); chevron.lineTo (cx + 2.0f, cy); chevron.lineTo (cx - 2.0f, cy + 4.0f);
+        g.strokePath (chevron, juce::PathStrokeType (1.5f));
+        textArea.removeFromRight (16);
+    }
+    g.drawFittedText (label, textArea, juce::Justification::centredLeft, 1, 0.9f);
+}
+
+void MULookAndFeel::drawPopupMenuSectionHeader (juce::Graphics& g, const juce::Rectangle<int>& area, const juce::String& name)
+{
+    g.setFont (bodyBold (11.0f));
+    g.setColour (textMute);
+    g.drawFittedText (name, area.reduced (16, 0), juce::Justification::centredLeft, 1);
+}
+
+juce::Font MULookAndFeel::getPopupMenuFont() { return body (13.0f); }
+
+void MULookAndFeel::getIdealPopupMenuItemSize (const juce::String& label, bool isSeparator, int, int& idealWidth, int& idealHeight)
+{
+    if (isSeparator) { idealWidth = 50; idealHeight = 9; return; }
+    idealHeight = 26;
+    idealWidth = juce::roundToInt (body (13.0f).getStringWidthFloat (label)) + 60;
+}
+
+// ---- labels / editors ------------------------------------------------------------------------------
+juce::Font MULookAndFeel::getLabelFont (juce::Label& l) { return l.getFont(); }
+
+void MULookAndFeel::drawLabel (juce::Graphics& g, juce::Label& l)
+{
+    g.fillAll (l.findColour (juce::Label::backgroundColourId));
+    if (! l.isBeingEdited())
+    {
+        g.setColour (l.findColour (juce::Label::textColourId).withMultipliedAlpha (l.isEnabled() ? 1.0f : 0.4f));
+        g.setFont (l.getFont());
+        g.drawFittedText (l.getText(), l.getLocalBounds().reduced (1, 0), l.getJustificationType(), juce::jmax (1, (int) ((float) l.getHeight() / l.getFont().getHeight())), 0.85f);
+    }
+}
+
+void MULookAndFeel::fillTextEditorBackground (juce::Graphics& g, int w, int h, juce::TextEditor&)
+{
+    g.setColour (raised);
+    g.fillRoundedRectangle (0.0f, 0.0f, (float) w, (float) h, 3.0f);
+}
+
+void MULookAndFeel::drawTextEditorOutline (juce::Graphics& g, int w, int h, juce::TextEditor& e)
+{
+    g.setColour (e.hasKeyboardFocus (true) ? yellow : lineHi);
+    g.drawRoundedRectangle (0.5f, 0.5f, (float) w - 1.0f, (float) h - 1.0f, 3.0f, 1.0f);
+}
+
+void MULookAndFeel::drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, int y, int w, int h, bool vertical, int thumbStart, int thumbSize, bool over, bool down)
+{
+    g.setColour (over || down ? textMute : lineHi);
+    if (vertical) g.fillRoundedRectangle ((float) x + (float) w * 0.5f - 2.0f, (float) thumbStart, 4.0f, (float) thumbSize, 2.0f);
+    else          g.fillRoundedRectangle ((float) thumbStart, (float) y + (float) h * 0.5f - 2.0f, (float) thumbSize, 4.0f, 2.0f);
 }
 }
