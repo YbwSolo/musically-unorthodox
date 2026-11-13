@@ -1,0 +1,7 @@
+THIS TRACK
+Name: "Lead vocal 1". Kind of track: Lead vocal. Loudness -23.9 LUFS short-term, -23.8 LUFS integrated, true peak -12.1 dB, crest factor 12.3 dB. Compressor off. EQ flat. Also switched on: nothing. 
+Mix Brain suggestions right now (EQ tab, Analyse button): (1) Beat (2-track) 2 is covering the vocal at 870 Hz. Its Apply button does this: Dynamic cut on "Beat (2-track) 2", -2.0 dB at 870 Hz. (2) Needs presence. Its Apply button does this: Boost +2.2 dB at 3.0 kHz. 
+Preset loaded: Clean slate. Stereo correlation 1.00 (safe in mono). 
+
+THE WHOLE SESSION (Mix tab)
+4 tracks have the plugin on them, 4 playing now: "Lead vocal 1" (Lead vocal, -23.8 LUFS); "Beat (2-track) 2" (Beat (2-track), -24.2 LUFS); "Bass / 808 3" (Bass / 808, -27.7 LUFS); "Master" (Master, -19.1 LUFS); Balance (pressing Balance now on the Mix tab does all of this): "Beat (2-track) 2" should come down 1.9 dB. The whole mix measures -19.1 LUFS with a true peak of -5.1 dB. Collisions (each has a Fix button on the Mix tab): "Beat (2-track) 2" is covering "Lead vocal 1" around 874 Hz; 

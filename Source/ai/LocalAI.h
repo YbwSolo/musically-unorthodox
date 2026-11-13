@@ -1,6 +1,8 @@
 #pragma once
 #include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
+#include <utility>
+#include <vector>
 #include "../state/LocalSettings.h"
 
 namespace mu
@@ -36,7 +38,10 @@ public:
     LocalAI();
     ~LocalAI() override;
     void refresh();                                                        // look for the built-in tutor, then Ollama
-    void ask (const juce::String& systemPrompt, const juce::String& question);
+    // conversation: any number that identifies who is asking. Follow-up questions from the same asker within
+    // ten minutes are sent together with the last two questions and answers, so "why?" makes sense.
+    void ask (const juce::String& systemPrompt, const juce::String& question, int conversation = 0);
+    void forgetConversation();
     void installBuiltIn();                                                 // download the helper and the model
     void cancelInstall();
     void removeBuiltIn();
@@ -44,8 +49,9 @@ public:
 
     // Pure helpers, covered by the tests.
     static juce::String chooseModel (const juce::StringArray& installed, const juce::String& preferred);
-    static juce::String buildRequest (const juce::String& model, const juce::String& systemPrompt, const juce::String& question);
-    static juce::String buildChatRequest (const juce::String& systemPrompt, const juce::String& question);
+    using Earlier = std::vector<std::pair<juce::String, juce::String>>;       // question, answer
+    static juce::String buildRequest (const juce::String& model, const juce::String& systemPrompt, const juce::String& question, const Earlier& earlier = {});
+    static juce::String buildChatRequest (const juce::String& systemPrompt, const juce::String& question, const Earlier& earlier = {});
     static juce::String parseAnswer (const juce::String& json);
     static bool parseTutorFeed (const juce::String& json, TutorPack& out, bool anyModelHost = false);
     static juce::String sha256Of (const juce::File& f);
@@ -81,6 +87,9 @@ private:
     juce::ChildProcess server;       // the helper, when this process started it
     int serverPort = 0;
     juce::File helperPath, modelPath;
+    Earlier history;
+    int historyOwner = 0;
+    juce::int64 historyTime = 0;
     juce::SharedResourcePointer<LocalSettings> settings;
 };
 }

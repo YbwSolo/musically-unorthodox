@@ -87,11 +87,20 @@ void LocalAI::refresh()
     startThread();
 }
 
-void LocalAI::ask (const juce::String& systemPrompt, const juce::String& question)
+void LocalAI::forgetConversation()
+{
+    const juce::ScopedLock sl (lock);
+    history.clear();
+}
+
+void LocalAI::ask (const juce::String& systemPrompt, const juce::String& question, int conversation)
 {
     if (isThreadRunning()) return;
     {
         const juce::ScopedLock sl (lock);
+        const auto now = juce::Time::currentTimeMillis();
+        if (conversation != historyOwner || now - historyTime > 10 * 60 * 1000) history.clear();
+        historyOwner = conversation; historyTime = now;
         pendingSystem = systemPrompt; pendingQuestion = question;
         status.busy = true; status.error.clear();
     }
@@ -339,7 +348,8 @@ bool LocalAI::startServer (int port, bool cpuOnly)
     const int threads = juce::jlimit (2, 8, juce::SystemStats::getNumPhysicalCpus() / 2);
     juce::StringArray args { helperPath.getFullPathName(), "-m", modelPath.getFullPathName(), "--host", "127.0.0.1", "--port", juce::String (port),
                              "-c", "4096", "-np", "1", "-t", juce::String (threads), "-a", kAlias, "--no-webui",
-                             "--sleep-idle-seconds", "240" };       // gives its memory back when nobody is asking
+                             "--sleep-idle-seconds", "240",         // gives its memory back when nobody is asking
+                             "--reasoning", "off" };                // answer directly: no thinking out loud first
     if (cpuOnly) args.addArray ({ "-ngl", "0" });
     args.addTokens (extraArgs, false);
     if (! server.start (args, 0)) return false;
@@ -383,7 +393,15 @@ juce::String LocalAI::chooseModel (const juce::StringArray& installed, const juc
     return {};
 }
 
-juce::String LocalAI::buildRequest (const juce::String& model, const juce::String& systemPrompt, const juce::String& question)
+static juce::Array<juce::var> conversationMessages (const juce::String& systemPrompt, const juce::String& question, const LocalAI::Earlier& earlier)
+{
+    juce::Array<juce::var> messages { message ("system", systemPrompt) };
+    for (auto& turn : earlier) { messages.add (message ("user", turn.first)); messages.add (message ("assistant", turn.second)); }
+    messages.add (message ("user", question));
+    return messages;
+}
+
+juce::String LocalAI::buildRequest (const juce::String& model, const juce::String& systemPrompt, const juce::String& question, const Earlier& earlier)
 {
     auto* options = new juce::DynamicObject();
     options->setProperty ("temperature", 0.2);
@@ -391,19 +409,19 @@ juce::String LocalAI::buildRequest (const juce::String& model, const juce::Strin
     auto* root = new juce::DynamicObject();
     root->setProperty ("model", model);
     root->setProperty ("stream", false);
-    root->setProperty ("messages", juce::Array<juce::var> { message ("system", systemPrompt), message ("user", question) });
+    root->setProperty ("messages", conversationMessages (systemPrompt, question, earlier));
     root->setProperty ("options", juce::var (options));
     return juce::JSON::toString (juce::var (root), true);
 }
 
-juce::String LocalAI::buildChatRequest (const juce::String& systemPrompt, const juce::String& question)
+juce::String LocalAI::buildChatRequest (const juce::String& systemPrompt, const juce::String& question, const Earlier& earlier)
 {
     auto* root = new juce::DynamicObject();
     root->setProperty ("model", kAlias);
     root->setProperty ("stream", false);
     root->setProperty ("temperature", 0.2);
     root->setProperty ("max_tokens", 320);
-    root->setProperty ("messages", juce::Array<juce::var> { message ("system", systemPrompt), message ("user", question) });
+    root->setProperty ("messages", conversationMessages (systemPrompt, question, earlier));
     return juce::JSON::toString (juce::var (root), true);
 }
 
@@ -467,9 +485,10 @@ void LocalAI::doAsk()
     if (! getStatus().available) detect();
     juce::String model, system, question;
     bool builtIn = false;
+    Earlier earlier;
     {
         const juce::ScopedLock sl (lock);
-        model = status.model; system = pendingSystem; question = pendingQuestion; builtIn = status.builtIn;
+        model = status.model; system = pendingSystem; question = pendingQuestion; builtIn = status.builtIn; earlier = history;
     }
     juce::String answer, error;
     if (model.isEmpty()) error = "The AI tutor is not turned on. Open Settings to turn it on.";
@@ -483,7 +502,7 @@ void LocalAI::doAsk()
            #else
             const juce::String headers;       // JUCE's Linux HTTP code (tests only) corrupts a POST that has extra headers
            #endif
-            const auto url = juce::URL ("http://127.0.0.1:" + juce::String (serverPort) + "/v1/chat/completions").withPOSTData (buildChatRequest (system, question));
+            const auto url = juce::URL ("http://127.0.0.1:" + juce::String (serverPort) + "/v1/chat/completions").withPOSTData (buildChatRequest (system, question, earlier));
             if (auto in = url.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inPostData)
                                                      .withConnectionTimeoutMs (240000).withStatusCode (&code).withExtraHeaders (headers)))
                 answer = parseAnswer (in->readEntireStreamAsString());
@@ -493,7 +512,7 @@ void LocalAI::doAsk()
     else
     {
         int code = 0;
-        const auto url = juce::URL (address + "/api/chat").withPOSTData (buildRequest (model, system, question));
+        const auto url = juce::URL (address + "/api/chat").withPOSTData (buildRequest (model, system, question, earlier));
         // No extra headers: Ollama reads the body as JSON whatever the content type says (its own curl examples send none).
         auto in = url.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inPostData)
                                              .withConnectionTimeoutMs (120000).withStatusCode (&code));
@@ -501,6 +520,11 @@ void LocalAI::doAsk()
         if (answer.isEmpty()) error = "The AI tutor did not answer. Check that Ollama is still running.";
     }
     const juce::ScopedLock sl (lock);
+    if (answer.isNotEmpty())
+    {
+        history.push_back ({ question, answer });
+        if (history.size() > 2) history.erase (history.begin());
+    }
     status.busy = false; status.answer = answer; status.error = error; ++status.answerId;
 }
 }

@@ -5,6 +5,7 @@
 #include <juce_events/juce_events.h>
 #include <cstdio>
 #include "PluginProcessor.h"
+#include "ai/TutorKnowledge.h"
 #include "SyntheticStems.h"
 #include <unistd.h>
 
@@ -388,10 +389,36 @@ int main()
         const auto parsedRequest = juce::JSON::parse (request);
         check (parsedRequest.isObject() && ! (bool) parsedRequest.getProperty ("stream", true) && parsedRequest["messages"].size() == 2, "Tutor request is valid JSON with streaming off");
 
-        const auto prompt = vocal->tutorPrompt();
+        const auto prompt = vocal->tutorPrompt ("Why does my vocal sound muddy?");
+        const auto trackNotes = vocal->tutorTrackNotes();
         const auto dumpTo = juce::SystemStats::getEnvironmentVariable ("MU_DUMP_TUTOR_PROMPT", {});
-        if (dumpTo.isNotEmpty()) juce::File (dumpTo).replaceWithText (prompt);
-        check (prompt.contains ("Lead vocal") && prompt.contains ("LUFS") && prompt.length() > 600, "Tutor is told about this track", juce::String (prompt.length()) + " characters");
+        if (dumpTo.isNotEmpty()) juce::File (dumpTo).replaceWithText (trackNotes);
+        check (trackNotes.contains ("Lead vocal") && trackNotes.contains ("LUFS") && trackNotes.contains ("THE WHOLE SESSION") && trackNotes.contains ("tracks have the plugin"),
+               "Tutor is told about this track and the session around it", juce::String (trackNotes.length()) + " characters");
+        check (prompt.contains ("NOTES FOR THIS QUESTION") && prompt.contains ("Mud is a build-up") && prompt.lastIndexOf ("NOTES FOR THIS QUESTION") < prompt.lastIndexOf ("THIS TRACK\n"),
+               "Tutor is handed the guide notes that match the question");
+        {
+            // the right note must come first for the questions students actually ask
+            const std::pair<const char*, const char*> expect[] = {
+                { "Why does my vocal sound muddy?", "Muddy sound" },                 { "My S sounds are really sharp", "Sharp S sounds" },
+                { "The beat is drowning out my vocal", "Vocal gets lost in the beat" }, { "my 808 disappears on phone speakers", "Bass or 808 missing on small speakers" },
+                { "How loud should my song be for Spotify?", "How loud a finished song should be" }, { "the mix is pumping", "Pumping and over-compression" },
+                { "how do I add reverb", "Reverb and delay" },                       { "my kick and 808 are fighting", "Kick and 808 fighting" },
+                { "how do I make my drums punchier", "Punchier drums" },             { "can't hear my vocal over the beat", "Vocal gets lost in the beat" },
+                { "what should I do first, I'm a beginner", "Where to start" },      { "my adlibs are too loud", "Backing vocals and adlibs" } };
+            juce::String wrong;
+            for (auto& e : expect)
+            {
+                const auto titles = tutor::noteTitlesFor (e.first);
+                if (titles.isEmpty() || titles[0] != e.second) wrong << e.first << " -> " << (titles.isEmpty() ? juce::String ("nothing") : titles[0]) << "; ";
+            }
+            check (wrong.isEmpty(), "The guide finds the right note for common questions", wrong);
+            const auto knee = tutor::noteTitlesFor ("what does the knee do?");
+            check (knee.contains ("Knee (Dynamics tab)"), "The guide finds the plugin's own help for a named control", knee.joinIntoString (", "));
+            check (tutor::notesFor ("hello there").isEmpty() && tutor::numMixingNotes() >= 30, "The guide stays out of the way when nothing matches");
+            const auto request = LocalAI::buildChatRequest ("sys", "why?", { { "what is mud?", "Too much 200 to 400 Hz." } });
+            check (juce::JSON::parse (request)["messages"].size() == 4, "A follow-up question is sent with the exchange before it");
+        }
 
         const auto address = juce::SystemStats::getEnvironmentVariable ("MU_TEST_AI_URL", {});
         if (address.isNotEmpty())

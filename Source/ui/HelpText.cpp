@@ -3,7 +3,7 @@
 
 namespace mu
 {
-static const std::map<juce::String, HelpEntry>& table()
+const std::map<juce::String, HelpEntry>& helpTable()
 {
     static const std::map<juce::String, HelpEntry> t = {
         // ---- header
@@ -120,7 +120,7 @@ static const std::map<juce::String, HelpEntry>& table()
 
 HelpEntry helpFor (const juce::String& key)
 {
-    const auto& t = table();
+    const auto& t = helpTable();
     auto it = t.find (key);
     if (it != t.end()) return it->second;
     return {};

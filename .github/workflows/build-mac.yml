@@ -52,7 +52,7 @@ jobs:
         run: |
           BIN="$(find build -type f -name MUTutorCheck -perm +111 | head -1)"
           echo "Using $BIN"
-          "$BIN" "file://$PWD/dist" Source/tests/sample_tutor_prompt.txt
+          "$BIN" "file://$PWD/dist" Source/tests/sample_track_notes.txt
 
       - name: Upload installer
         uses: actions/upload-artifact@v4

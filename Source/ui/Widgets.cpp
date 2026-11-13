@@ -3,6 +3,8 @@
 
 namespace mu
 {
+void setHelp (juce::Component& c, const juce::String& key) { c.getProperties().set ("help", key); }
+
 using namespace theme;
 
 // ---- Knob ------------------------------------------------------------------------------------------
