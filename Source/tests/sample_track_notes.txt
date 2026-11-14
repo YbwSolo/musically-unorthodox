@@ -4,4 +4,4 @@ Suggestions right now (EQ tab, Analyse button): (1) Beat (2-track) 2 is covering
 Preset loaded: Clean slate. Stereo correlation 1.00 (safe in mono). 
 
 THE WHOLE SESSION (Mix tab)
-4 tracks have the plugin on them, 4 playing now: "Lead vocal 1" (Lead vocal, -23.7 LUFS); "Beat (2-track) 2" (Beat (2-track), -24.1 LUFS); "Bass / 808 3" (Bass / 808, -26.8 LUFS); "Master" (Master, -18.8 LUFS); Balance (pressing Balance now on the Mix tab does all of this): "Beat (2-track) 2" should come down 2.1 dB. The whole mix measures -18.8 LUFS with a true peak of -4.8 dB. Collisions (each has a Fix button on the Mix tab): "Beat (2-track) 2" is covering "Lead vocal 1" around 874 Hz; 
+4 tracks have the plugin on them, 4 playing now: "Lead vocal 1" (Lead vocal, -23.7 LUFS); "Beat (2-track) 2" (Beat (2-track), -24.1 LUFS); "Bass / 808 3" (Bass / 808, -26.9 LUFS); "Master" (Master, -18.8 LUFS); Balance (pressing Balance now on the Mix tab does all of this): "Beat (2-track) 2" should come down 2.0 dB. The whole mix measures -18.8 LUFS with a true peak of -4.9 dB. Collisions (each has a Fix button on the Mix tab): "Beat (2-track) 2" is covering "Lead vocal 1" around 874 Hz; 

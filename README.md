@@ -107,10 +107,36 @@ A rack of nine tools, each with its own switch, a live picture of what it is doi
   **Timed to tempo** on, the pre-delay is a 64th note and the decay is one, two or four beats. **Fit to this
   track** chooses the space, length, tone and ducking from what the track is, the tempo and how bright it is, and
   says why; kick, 808 and finished beats are left dry.
-- **Harmony** adds up to three voices on other notes of the key (third, fifth, octave, choir).
-- **Shift** moves the whole voice up or down, as a layer or on its own, with control of the size of the voice.
-- **Phone** is the voice through a small speaker. **Lo-fi** is sample-rate and bit reduction with tape wobble.
-  **Motion** is chorus, flanger and phaser. **Chop** gates the sound in time with the beat.
+- **Harmony** adds up to four voices that sing the same words on other notes. Three ways to use it:
+  **Voicing** picks a ready-made set; **Voices** is a table of four voices, each with its own interval (counted in
+  notes of the key), level, pan, delay, size and detune; **Chords** makes those voices sing the notes of a
+  sixteen-slot chord grid that is locked to the song (click notes to build each chord, or **Fill from key** for a
+  common progression), each voice taking the chord note nearest to where it belongs and staying put when the
+  next chord has its note too. **Voice leading** lets a voice hold its note while it still makes a third, fifth,
+  sixth or octave with the tune instead of always moving in parallel. **Choir** turns every voice into three
+  singers. Where the host sends MIDI to an effect (the Windows VST3 and standalone), keys held on a keyboard
+  replace the grid.
+- **Shift** moves the voice. **Shift** is one copy up or down, as a layer or on its own, with control of the size
+  of the voice. **Wide** is two copies moved the same distance opposite ways, one each side: a few cents is the
+  classic thickener. **Robot** holds everything on one note. Fine tuning in cents and a drive on the moved voice.
+- **Phone** is the voice through one of five devices, each with its own band, resonances, distortion and noise:
+  small speaker, telephone (300 to 3400 Hz, lopsided overdrive, line hiss), megaphone (two horn resonances, hard
+  clipping), radio (an automatic gain that breathes, static, fading reception) and walkie-talkie (a burst of
+  noise as each phrase ends). The noise is only there while the track is sounding.
+- **Lo-fi** is a chain of small modules, each off at zero: Drive (saturation), Wobble (wow and flutter), Crush
+  (lower rate and coarser steps), Wear (the level sagging and dropping out), Tone (the top rolled off) and Noise
+  (vinyl ticks and rumble, or tape hiss that differs on each side).
+- **Motion** sweeps something up and down: Chorus, Flanger, Phaser, Filter, Pan or Volume. What does the sweeping
+  is a sine, triangle, ramp, square, or a **curve you draw** across sixteen points in the display, from sixteen
+  flat steps to a smooth line. It runs freely or is **timed to the tempo** and locked to the song.
+- **Chop** cuts the sound in time with the beat: an even **Pulse**, or a sixteen-step **Pattern** where every step
+  has its own level, with gate length, swing and a pattern length from 2 to 16 steps.
+
+**The order.** Doubler, Harmony and Shift work side by side on the clean voice, because they have to hear it to
+follow its pitch. The other six run one after another in the order the rail shows them; drag one up or down to
+change it (Reverb before Chop chops the reverb; Chop before Reverb lets the tail fill the gaps). The change is
+made in a few milliseconds of silence so it cannot click. The order is one stored number, so it travels with the
+song, with A/B and with your chain presets; the built-in chains and sounds use the standard order.
 
 A mono track can load the plugin as **Mono > Stereo**, which is what lets a mono vocal have wide effects.
 
@@ -200,6 +226,13 @@ output level. On Windows the presets are in `%APPDATA%\Musically Unorthodox\Pres
 - Tune: hard tune lands on the note, Flex leaves close notes alone, Keep slides leaves a sliding voice nearer to
   what was sung and still tunes the note it lands on, the correction one note needed is not carried on to the
   next, and the pulse-locked slicing is compared with the old slicing on a clean and on a rough voice.
+- FX tools (build 17): Phone's bands and resonances per device, noise that is only there while the track sounds,
+  the walkie-talkie's burst, the radio's levelling; each Lo-fi module on its own; Motion's shapes and drawn
+  curve, tempo lock, equal-power pan, the filter's range, no click from a curve that jumps, and no jump in the
+  chorus as its second copy goes round (there was one, once a cycle, up to build 16); Chop's pattern, gate and
+  swing, locked to the song; Harmony voices on their own intervals, levels and sides, chord notes, voice
+  leading, choir; Shift's Wide (plus and minus the same cents) and Robot (one note from a sliding voice); and
+  the order of the six in-line tools, all 720 of them.
 - Vocal compressor: a thump before a word (the size measured on real takes) does not push the word down.
 - Tone: a recording 11 dB dull from 2 kHz up gets a presence and air lift sized to the gap and inside its
   ceiling; boom under a voice does not make the analysis brighten it; bass in a beat is not treated as covering
@@ -262,10 +295,16 @@ is brighter, lighter in the low mids and more even than in build 12; they do not
 - No external sidechain input: instances share information through the session instead.
 - Analyse on the EQ tab is a rule-based comparison against role tone curves and the other tracks. It is not a
   trained model. The AI tutor (Mix Brain tab) is separate, optional, and only explains; it never changes settings.
-- Harmony is still three voices chosen by a voicing. There is no per-voice editor, MIDI or piano-roll control,
-  voice leading or snapshots yet. Shift, Phone, Lo-fi, Motion and Chop are as they were in build 11.
+- MIDI control of Harmony does not work in Logic. Logic never sends MIDI to an Audio Unit effect; that takes a
+  second, "MIDI-controlled effect" version of the plugin, which has not been built. On a Mac the chords come
+  from the grid. The MIDI path exists and is tested, and is switched on in the Windows VST3 and standalone.
+- Harmony's chord grid holds pitch classes (which notes), not octaves or timing inside a slot: it is a chord
+  track, not a full piano roll with note lengths. There are no harmony snapshots.
+- The Motion curve has sixteen fixed points, not free breakpoints, and one curve, not one per target.
+- None of the rebuilt FX tools has been heard by a person yet. Their tests measure what they do, not how they
+  sound.
 - Pitch shifting down by an octave measures no better with the new slicing than with the old.
-- Windows is new and has not been run in a real Windows music program yet. It builds, its 218 sound tests pass
+- Windows is new and has not been run in a real Windows music program yet. It builds, its sound tests pass
   on a Windows machine and the installer is made, but nobody has opened it in a host. On Windows there is no
   Audio Unit (that is a Mac format), an update is fetched as a new installer instead of installing itself, the
   built-in AI tutor is not included (Mix Brain works there only through Ollama), and the installer is not
