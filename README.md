@@ -203,15 +203,17 @@ Master tabs do not have per-tool presets of your own yet; a whole-chain preset c
 Two lab tools run recordings through the plugin outside a host, for measuring (and listening): `MUVoiceLab` (one
 tool at a time) and `MUMixLab` (a voice and a backing track through real instances, then Learn and balance).
 
-### Checked on real recordings (build 13)
+### Checked on real recordings (build 15)
 
 Five sessions recorded at the studio (raw vocal and beat for each: four male rap and melodic takes on different
-mics and in different rooms, one female vocal) were run through build 12 and build 13 with `MUMixLab`: a vocal
+mics and in different rooms, one female vocal) were run through build 12 and build 15 with `MUMixLab`: a vocal
 preset, Learn and balance, then Analyse with every suggestion applied. The recordings are not in this
 repository. What was measured on the busiest 40 seconds of each (the five takes are in the same order in every
-cell, and all three columns are measured against the build 13 curve):
+cell, and all three columns are measured against the build 15 curve). Builds 13 and 14 were never released: the
+build machine was too slow for the tutor check on those runs. The listening pack made for the studio calls this
+build 13:
 
-| | as recorded | build 12 | build 13 |
+| | as recorded | build 12 | build 15 |
 |---|---|---|---|
 | Distance of the voice's tone from the finished-vocal curve, 125 Hz to 8 kHz (dB) | 4.7, 2.7, 6.3, 6.8, 3.8 | 3.5, 2.9, 4.0, 4.9, 2.5 | 1.9, 2.9, 2.5, 4.2, 1.6 |
 | Low-mid weight: 200 to 500 Hz against 1 to 4 kHz (dB) | +6.9, +2.9, +3.6, -0.3, +9.0 | +6.8, +2.4, +5.1, +2.6, +7.4 | +5.7, +2.5, +2.9, +0.8, +6.0 |
@@ -238,7 +240,7 @@ Build 12 left two of the five voices heavier in the low mids, against their pres
   from the scoop into it, the correction for one note carried into the next, and Keep slides held the correction
   off for a fifth of a second after the voice had landed. Held notes whose centre ends within 15 cents of the
   key, natural settings, three sung takes: as sung 33 / 32 / 95 %, build 12 46 / 30 / 56 % (it made the third
-  take worse), build 13 55 / 42 / 90 %. Hard tune: 99 / 100 / 100 %.
+  take worse), build 15 55 / 42 / 90 %. Hard tune: 99 / 100 / 100 %.
 
 The finished-vocal curve is reasoned from published speech spectra and normal mixing practice. It was not
 measured from finished vocal stems, and it is the thing most worth checking by ear.

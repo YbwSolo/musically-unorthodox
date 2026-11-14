@@ -13,6 +13,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 30        # the installer script reads the release notes from the last commit that has them
 
       - name: Install CMake and Ninja
         run: brew install cmake ninja || true

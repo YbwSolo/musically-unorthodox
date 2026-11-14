@@ -79,8 +79,12 @@ MODELS = [
      "sha256": "13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983", "bytes": 3013027808,
      "minMemoryGb": 16, "appleSilicon": True},
 ]
+# The notes shown in the plugin's update prompt come from the commit that says what is new. A later commit that
+# only touches the build (a check, a script) must not replace them, so look back for the last one that has them.
 try:
-    body = subprocess.run(["git", "log", "-1", "--pretty=%B"], capture_output=True, text=True).stdout
+    bodies = subprocess.run(["git", "log", "-30", "--pretty=%B%x00"], capture_output=True, text=True).stdout.split("\x00")
+    bodies = [b.strip() for b in bodies if b.strip()]
+    body = next((b for b in bodies if "What is new in this build" in b), bodies[0] if bodies else "")
 except Exception:
     body = ""
 notes = "\n".join([l for l in body.splitlines() if not l.startswith(("Co-Authored-By", "Claude-Session"))][:24]).strip()
