@@ -15,7 +15,11 @@ Every push to `main` builds the AU, VST3 and standalone on a Mac runner, runs th
 and attaches a double-click `.pkg` to a Release on the repo page. Install that `.pkg` once on each Mac and restart
 Logic. If macOS says it can't be opened: right-click the .pkg > Open > Open (it is not notarised).
 
-After that the plugin updates itself. When a newer build exists an **Update ready** button appears in the header;
+**Windows:** each release also carries `MusicallyUnorthodox-Windows-Setup.exe` (VST3 and a standalone app, 64-bit).
+Close your music software, run it, and rescan plugins. It is not signed, so Windows asks first: More info > Run
+anyway. On Windows the Update button fetches the new installer for you to run.
+
+After that the plugin updates itself on a Mac. When a newer build exists an **Update ready** button appears in the header;
 Settings > Install update downloads it, checks it against its checksum and replaces the plugin in place. It loads
 the next time the host is opened. Nothing to download by hand.
 
@@ -168,16 +172,17 @@ that and no download is needed.
 
 ## Presets of your own
 
-The **Presets** button (whole chain) and the preset strip of every tool on the Tune and FX tabs have a **My presets**
-section: Save as, Save changes, Rename, Delete, Import, Export. A star after a preset's name means a control has
+The **Presets** button (whole chain), the preset strip of every tool on the Tune and FX tabs, and the strip at the
+top of the EQ, Dynamics, Tone and Master tabs have a **My presets** section: Save as, Save changes, Rename, Delete, Import, Export. A star after a preset's name means a control has
 moved since it was loaded. Each preset is one JSON file with the extension `.mupreset`, kept outside any song in
 `~/Library/Application Support/Musically Unorthodox/Presets/<chain or tool>/`, so it is there in every project and
 can be sent to someone else. The file carries a format version, stores values in real units (dB, ms, Hz), and is
 written to a temporary file and swapped in, so a crash never leaves half a preset. On loading, a file from a newer
 format is refused, controls this build does not have are skipped and reported, values are brought inside each
-control's range, and a tool's preset can only move that tool's controls. A whole-chain preset also remembers how
-loud the track was, and moves its thresholds when loaded on a quieter or louder one. The EQ, Dynamics, Tone and
-Master tabs do not have per-tool presets of your own yet; a whole-chain preset covers them.
+control's range, and a tool's preset can only move that tool's controls. A whole-chain preset, and a preset
+of the EQ, Dynamics or Tone tab, also remembers how loud the track was, and moves its thresholds when loaded on a
+quieter or louder one. A tab's preset holds that tab and nothing else: never the role, the balance trim or the
+output level. On Windows the presets are in `%APPDATA%\Musically Unorthodox\Presets\`.
 
 ## Sound quality: what is measured
 
@@ -260,7 +265,11 @@ is brighter, lighter in the low mids and more even than in build 12; they do not
 - Harmony is still three voices chosen by a voicing. There is no per-voice editor, MIDI or piano-roll control,
   voice leading or snapshots yet. Shift, Phone, Lo-fi, Motion and Chop are as they were in build 11.
 - Pitch shifting down by an octave measures no better with the new slicing than with the old.
-- Mac only (AU, VST3, Standalone). There is no Windows build.
+- Windows is new and has not been run in a real Windows music program yet. It builds, its 218 sound tests pass
+  on a Windows machine and the installer is made, but nobody has opened it in a host. On Windows there is no
+  Audio Unit (that is a Mac format), an update is fetched as a new installer instead of installing itself, the
+  built-in AI tutor is not included (Mix Brain works there only through Ollama), and the installer is not
+  signed, so Windows asks before running it.
 - It cannot change the settings of other plugins; it sits after them and corrects the result.
 - Tune works on one voice at a time, not on chords or a full beat. The Graph view moves the pitch of notes; it
   does not move them in time, and it has to hear a part once before it can show it (there is no ARA link to the

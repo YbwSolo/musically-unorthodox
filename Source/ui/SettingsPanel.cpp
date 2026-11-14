@@ -25,7 +25,11 @@ SettingsPanel::SettingsPanel (MUProcessor& p) : proc (p), takePart (p, ids::auto
     resetButton.onClick = [this] { proc.resetMeters(); };
     styleButton (checkButton, "Check for updates", false);
     checkButton.onClick = [this] { proc.getUpdater().checkNow(); };
+   #if JUCE_WINDOWS
+    styleButton (installButton, "Get the update", true);        // on Windows the new installer is fetched for the user to run
+   #else
     styleButton (installButton, "Install update", true);
+   #endif
     installButton.onClick = [this] { proc.getUpdater().installNow(); };
     styleButton (aiButton, "Turn on AI tutor", false);
     aiButton.onClick = [this]

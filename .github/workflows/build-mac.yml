@@ -1,4 +1,4 @@
-name: Build macOS plugin
+name: Build plugin (Mac and Windows)
 
 on:
   push:
@@ -84,10 +84,32 @@ jobs:
           tag_name: build-${{ github.run_number }}
           name: Musically Unorthodox build ${{ github.run_number }}
           body: |
-            Download the .pkg, double-click it, click through the installer. Then restart Logic.
+            Mac: download the .pkg, double-click it, click through the installer. Then restart Logic.
             If macOS says it can't be opened: right-click the .pkg > Open > Open.
+
+            Windows (VST3 and standalone, added a few minutes after the Mac files): download
+            MusicallyUnorthodox-Windows-Setup.exe and run it with your music software closed.
+            Windows may say it does not recognise the publisher: choose More info > Run anyway.
           make_latest: true
           files: |
             dist/*.pkg
             dist/*.zip
             dist/latest.json
+
+  # The Windows version: VST3 and standalone. It runs after the Mac release exists and adds its installer to it,
+  # so the Mac update feed is never missing from the newest release.
+  windows:
+    needs: build
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build, test and package
+        shell: pwsh
+        run: ./scripts/build_windows.ps1 -BuildNumber ${{ github.run_number }}
+
+      - name: Add the Windows installer to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          files: dist/*.exe
