@@ -216,6 +216,29 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     p.push_back (std::make_unique<APF> (id (ids::hmMix), "Harmony level", range (0.0f, 100.0f, 0.1f), 45.0f, pctAttr()));
     p.push_back (std::make_unique<APF> (id (ids::hmWidth), "Harmony width", range (0.0f, 100.0f, 0.1f), 80.0f, pctAttr()));
     p.push_back (std::make_unique<APF> (id (ids::hmHumanise), "Harmony humanise", range (0.0f, 100.0f, 0.1f), 40.0f, pctAttr()));
+    p.push_back (std::make_unique<APC> (id (ids::hmMode), "Harmony mode", juce::StringArray { "Voicing", "Voices", "Chords" }, 0));
+    p.push_back (std::make_unique<APB> (id (ids::hmLeading), "Harmony voice leading", false));
+    p.push_back (std::make_unique<APF> (id (ids::hmChoir), "Harmony choir", range (0.0f, 100.0f, 0.1f), 0.0f, pctAttr()));
+    {
+        // four voices set one by one. As they come: a third and a fifth above, either side; a fourth below and an octave above, waiting to be switched on.
+        static const int steps[4] = { 2, 4, -3, 7 };
+        static const float level[4] = { 100.0f, 90.0f, 80.0f, 60.0f }, pan[4] = { -60.0f, 60.0f, -25.0f, 25.0f }, delay[4] = { 0.0f, 6.0f, 12.0f, 18.0f };
+        for (int v = 0; v < 4; ++v)
+        {
+            const auto name = "Harmony voice " + juce::String (v + 1);
+            p.push_back (std::make_unique<APB> (id (ids::hmVoiceOn (v)), name, v < 2));
+            p.push_back (std::make_unique<juce::AudioParameterInt> (id (ids::hmVoiceSteps (v)), name + " interval", -14, 14, steps[v]));
+            p.push_back (std::make_unique<APF> (id (ids::hmVoiceLevel (v)), name + " level", range (0.0f, 100.0f, 0.1f), level[v], pctAttr()));
+            p.push_back (std::make_unique<APF> (id (ids::hmVoicePan (v)), name + " pan", range (-100.0f, 100.0f, 1.0f), pan[v]));
+            p.push_back (std::make_unique<APF> (id (ids::hmVoiceDelay (v)), name + " delay", range (0.0f, 60.0f, 0.1f), delay[v], msAttr()));
+            p.push_back (std::make_unique<APF> (id (ids::hmVoiceSize (v)), name + " size", range (-100.0f, 100.0f, 1.0f), 0.0f));
+            p.push_back (std::make_unique<APF> (id (ids::hmVoiceDetune (v)), name + " detune", range (-50.0f, 50.0f, 0.1f), 0.0f));
+        }
+        for (int slot = 0; slot < 16; ++slot)
+            p.push_back (std::make_unique<juce::AudioParameterInt> (id (ids::hmChord (slot)), "Harmony chord " + juce::String (slot + 1), 0, 4095, 0, juce::AudioParameterIntAttributes().withAutomatable (false)));
+        p.push_back (std::make_unique<juce::AudioParameterInt> (id (ids::hmChordCount), "Harmony chords in the loop", 1, 16, 4));
+        p.push_back (std::make_unique<APC> (id (ids::hmChordLength), "Harmony chord length", juce::StringArray { "2 bars", "1 bar", "Half a bar", "1 beat" }, 1));
+    }
 
     // ---- shift
     p.push_back (std::make_unique<APB> (id (ids::psOn), "Shift", false));
@@ -227,6 +250,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
             return n == 0 ? juce::String ("natural") : juce::String (std::abs (n)) + (n < 0 ? " % bigger" : " % smaller");
         })));
     p.push_back (std::make_unique<APF> (id (ids::psMix), "Shift mix", range (0.0f, 100.0f, 0.1f), 40.0f, pctAttr()));
+    p.push_back (std::make_unique<APC> (id (ids::psMode), "Shift mode", juce::StringArray { "Shift", "Wide", "Robot" }, 0));
+    p.push_back (std::make_unique<APF> (id (ids::psFine), "Shift fine", range (-100.0f, 100.0f, 0.1f), 0.0f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return juce::String (v, 1) + " cents"; })));
+    p.push_back (std::make_unique<APF> (id (ids::psDrive), "Shift drive", range (0.0f, 100.0f, 0.1f), 0.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::psWidth), "Shift width", range (0.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
 
     // ---- phone
     p.push_back (std::make_unique<APB> (id (ids::phOn), "Phone", false));

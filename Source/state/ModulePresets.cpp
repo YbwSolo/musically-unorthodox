@@ -38,11 +38,32 @@ ModulePreset reverb (const juce::String& name, const juce::String& blurb, int ty
 }
 ModulePreset harmony (const juce::String& name, const juce::String& blurb, int voicing, float mix, float width, float humanise = 40)
 {
-    return { "harmony", name, blurb, { { ids::hmOn, 1 }, { ids::hmVoicing, (float) voicing }, { ids::hmMix, mix }, { ids::hmWidth, width }, { ids::hmHumanise, humanise } } };
+    return { "harmony", name, blurb, { { ids::hmOn, 1 }, { ids::hmMode, 0 }, { ids::hmVoicing, (float) voicing }, { ids::hmMix, mix }, { ids::hmWidth, width }, { ids::hmHumanise, humanise },
+                                       { ids::hmLeading, 0 }, { ids::hmChoir, 0 } } };
 }
-ModulePreset shift (const juce::String& name, const juce::String& blurb, float semis, float character, float mix)
+// One voice of a hand-built harmony: steps of the scale from the lead, level, pan (-100..100), delay in ms, size (-100..100), detune in cents
+struct Part { int steps; float level, pan, delay, size, detune; };
+// mode: 1 = the voices keep their intervals, 2 = they sing the notes of the chord grid
+ModulePreset voices (const juce::String& name, const juce::String& blurb, int mode, float mix, float width, float humanise, bool leading, float choir, std::vector<Part> parts)
 {
-    return { "shift", name, blurb, { { ids::psOn, 1 }, { ids::psSemis, semis }, { ids::psCharacter, character }, { ids::psMix, mix } } };
+    ModulePreset p { "harmony", name, blurb, { { ids::hmOn, 1 }, { ids::hmMode, (float) mode }, { ids::hmMix, mix }, { ids::hmWidth, width }, { ids::hmHumanise, humanise },
+                                               { ids::hmLeading, leading ? 1.0f : 0.0f }, { ids::hmChoir, choir } } };
+    for (int v = 0; v < 4; ++v)
+    {
+        const bool used = v < (int) parts.size();
+        const Part part = used ? parts[(size_t) v] : Part { 2, 80, 0, 0, 0, 0 };
+        p.values.push_back ({ ids::hmVoiceOn (v), used ? 1.0f : 0.0f });
+        if (! used) continue;        // a voice that is switched off keeps whatever it was set to
+        p.values.push_back ({ ids::hmVoiceSteps (v), (float) part.steps }); p.values.push_back ({ ids::hmVoiceLevel (v), part.level }); p.values.push_back ({ ids::hmVoicePan (v), part.pan });
+        p.values.push_back ({ ids::hmVoiceDelay (v), part.delay }); p.values.push_back ({ ids::hmVoiceSize (v), part.size }); p.values.push_back ({ ids::hmVoiceDetune (v), part.detune });
+    }
+    return p;
+}
+// mode: 0 shift, 1 wide (two copies moved opposite ways, left and right), 2 robot (held on one note)
+ModulePreset shift (const juce::String& name, const juce::String& blurb, float semis, float character, float mix, int mode = 0, float fine = 0, float drive = 0, float width = 100)
+{
+    return { "shift", name, blurb, { { ids::psOn, 1 }, { ids::psSemis, semis }, { ids::psCharacter, character }, { ids::psMix, mix },
+                                     { ids::psMode, (float) mode }, { ids::psFine, fine }, { ids::psDrive, drive }, { ids::psWidth, width } } };
 }
 // mode: 0 small speaker, 1 telephone, 2 megaphone, 3 radio, 4 walkie-talkie
 ModulePreset phone (const juce::String& name, const juce::String& blurb, float width, float drive, float amount = 100, int mode = 0, float noise = 0)
@@ -186,6 +207,22 @@ const std::vector<ModulePreset>& modulePresets()
         harmony ("Choir", "A third, a fifth and a low octave together.", 6, 50, 100),
         harmony ("Quiet bed", "A chord of voices tucked far under the lead: felt more than heard.", 2, 22, 100),
         harmony ("Big hook", "The full choir pushed up for a hook that should sound huge.", 6, 66, 100),
+        // voices set one by one                                                       mode mix width human lead choir   steps level pan delay size detune
+        voices ("Third, voice-led", "A third above that holds its note when the tune moves a step and it still fits, the way a singer would.", 1, 40, 60, 40, true, 0, { { 2, 100, 40, 0, 0, 0 } }),
+        voices ("Close trio", "A third and a fifth above either side, and a fourth below in the middle, moving like three singers.", 1, 42, 100, 45, true, 0,
+                { { 2, 100, -60, 0, 0, 0 }, { 4, 85, 60, 6, 0, 0 }, { -3, 80, 0, 12, -10, 0 } }),
+        voices ("Wide four-part", "Four voices spread across the stereo field: two above, one below, an octave on top kept quiet.", 1, 44, 100, 45, true, 0,
+                { { 2, 100, -80, 0, 0, 0 }, { 4, 90, 80, 6, 0, 0 }, { -3, 85, -30, 12, -8, 0 }, { 7, 45, 30, 18, 10, 0 } }),
+        voices ("Octaves either side", "The same line an octave down on the left and an octave up on the right.", 1, 40, 100, 30, false, 0, { { -7, 100, -70, 0, -15, 0 }, { 7, 60, 70, 8, 10, 0 } }),
+        voices ("Low men", "Three bigger, darker voices under the lead: a fourth, a sixth and an octave below.", 1, 46, 80, 50, true, 40,
+                { { -3, 100, -50, 0, -35, 0 }, { -5, 90, 50, 8, -40, 0 }, { -7, 80, 0, 14, -45, 0 } }),
+        voices ("Choir", "Four parts, each one three singers: a real stack behind the lead.", 1, 50, 100, 60, true, 100,
+                { { 2, 100, -70, 0, 0, 0 }, { 4, 95, 70, 5, 0, 0 }, { -3, 95, -25, 10, -12, 0 }, { 7, 55, 25, 15, 12, 0 } }),
+        voices ("Whisper stack", "Two smaller, slightly out-of-tune voices that arrive late: airy and loose.", 1, 34, 100, 70, false, 30, { { 2, 100, -65, 20, 25, 8 }, { 4, 90, 65, 35, 30, -8 } }),
+        voices ("Chord singers", "Three voices that sing the notes of the chord grid and move as little as they can from chord to chord. Draw the chords, or use Fill from key.", 2, 44, 100, 45, true, 0,
+                { { 2, 100, -60, 0, 0, 0 }, { 4, 90, 60, 6, 0, 0 }, { -3, 85, 0, 12, -8, 0 } }),
+        voices ("Chord choir", "The chord singers, three to a part.", 2, 50, 100, 60, true, 100,
+                { { 2, 100, -70, 0, 0, 0 }, { 4, 95, 70, 5, 0, 0 }, { -3, 95, -25, 10, -12, 0 }, { 7, 55, 25, 15, 12, 0 } }),
 
         // ---- Shift
         shift ("Demon layer", "An octave down and darker, layered under the real voice.", -12, -25, 40),
@@ -197,6 +234,14 @@ const std::vector<ModulePreset>& modulePresets()
         shift ("Helium", "Same notes, much smaller voice.", 0, 50, 100),
         shift ("Giant", "Same notes, much bigger voice.", 0, -60, 100),
         shift ("Fifth layer", "A copy a fifth higher under the lead, a hollow, eerie double.", 7, 0, 30),
+        // wide: two copies moved opposite ways, one each side                          semis char mix mode fine drive width
+        shift ("Wide thickener", "Two copies nine cents either way, left and right: the voice gets wider and thicker without sounding doubled.", 0, 0, 45, 1, 9, 0, 100),
+        shift ("Super wide", "The same with fifteen cents and more of it: an obvious chorus-like spread.", 0, 0, 60, 1, 15, 0, 100),
+        shift ("Octaves, left and right", "An octave down on one side and an octave up on the other, under the lead.", 12, 0, 35, 1, 0, 0, 100),
+        // robot: held on one note
+        shift ("Robot", "Everything on one note, the key note of the song: a talking machine.", 0, 0, 100, 2, 0, 20),
+        shift ("Low robot", "The robot an octave down, bigger and with some grit.", -12, -20, 100, 2, 0, 45),
+        shift ("Driven low layer", "An octave down with saturation, layered under the voice for weight that cuts through.", -12, -10, 35, 0, 0, 60),
 
         // ---- Phone
         phone ("Telephone", "A call on a land line: 300 to 3400 Hz, a little crunch, and the hiss of the line.", 40, 30, 100, 1, 25),

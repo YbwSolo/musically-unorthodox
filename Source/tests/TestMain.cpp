@@ -1347,6 +1347,102 @@ int main()
                "Chop opens on each sixteenth and closes halfway to the next", "open " + juce::String (on, 3) + ", closed " + juce::String (offLevel, 4));
     }
     {
+        // --- build 17: Harmony as separate voices, chords, voice leading and choir; Shift's modes
+        check (PitchFX::stepNote (60, 2, 0, 1, 0xFFF) == 64 && PitchFX::stepNote (60, 4, 0, 1, 0xFFF) == 67 && PitchFX::stepNote (60, 7, 0, 1, 0xFFF) == 72 && PitchFX::stepNote (60, -3, 0, 1, 0xFFF) == 55
+               && PitchFX::stepNote (60, -7, 0, 1, 0xFFF) == 48 && PitchFX::stepNote (57, 2, 9, 2, 0xFFF) == 60 && PitchFX::stepNote (60, 2, 0, 0, 0xFFF) == 64 && PitchFX::stepNote (60, -2, 0, 0, 0xFFF) == 57
+               && PitchFX::stepNote (60, 9, 0, 0, 0xFFF) == 76 && PitchFX::stepNote (60, 0, 0, 1, 0xFFF) == 60,
+               "A voice's interval is counted in notes of the key: two up from C in C major is E, three down is G, seven up is the octave");
+        check (PitchFX::ledNote (67, 64, 60) == 67 && PitchFX::ledNote (64, 65, 62) == 65 && PitchFX::ledNote (-1, 65, 62) == 65 && PitchFX::ledNote (72, 64, 60) == 64 && PitchFX::ledNote (60, 64, 60) == 64,
+               "Voice leading: a voice stays on its note while it still makes a third, fifth, sixth or octave with the tune, and moves when it does not");
+        {
+            const int cMajor = (1 << 0) | (1 << 4) | (1 << 7);
+            const int taken[] = { 64 };
+            check (PitchFX::chordNote (cMajor, 65, -1, nullptr, 0) == 64 && PitchFX::chordNote (cMajor, 65, 67, nullptr, 0) == 67 && PitchFX::chordNote (cMajor, 65, -1, taken, 1) == 67
+                   && PitchFX::chordNote (0, 65, 64, nullptr, 0) == 65 && PitchFX::chordNote (cMajor, 71, 60, nullptr, 0) == 72,
+                   "Chords: a voice takes the chord note nearest to where it belongs, stays on its note when the new chord has it too, and leaves a note another voice has");
+        }
+        auto run = [&] (PitchFXSettings st, juce::AudioBuffer<float> in)
+        {
+            PitchFX fx; fx.prepare (fs, 256, 2); st.key = 0; st.scale = 1; fx.setSettings (st);
+            inBlocks (in, 256, [&fx] (juce::AudioBuffer<float>& b) { fx.process (b); });
+            return in;
+        };
+        const int from = (int) fs;
+        auto level = [&] (const juce::AudioBuffer<float>& b, float note) { return amountAt (b, 0, hzOf (note), from) + amountAt (b, 1, hzOf (note), from); };
+        const auto lead = voiceTone (hzOf (60.0f), 2.0f, 2);
+        {
+            // two voices set by hand: a third above on the left, a fourth below on the right
+            PitchFXSettings st; st.harmonyOn = true; st.harmonyMode = 1; st.harmonyMix = 0.6f; st.harmonyWidth = 1.0f; st.humanise = 0.0f;
+            st.voice[0] = { true, 2, 1.0f, -1.0f, 0.0f, 0.0f, 0.0f }; st.voice[1] = { true, -3, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f };
+            const auto sung = run (st, lead);
+            const float c4 = level (sung, 60.0f), e4 = level (sung, 64.0f), g3 = level (sung, 55.0f), d4 = level (sung, 62.0f);       // D is in neither voice
+            const float eLeft = amountAt (sung, 0, hzOf (64.0f), from), eRight = amountAt (sung, 1, hzOf (64.0f), from), gLeft = amountAt (sung, 0, hzOf (55.0f), from), gRight = amountAt (sung, 1, hzOf (55.0f), from);
+            check (e4 > c4 * 0.08f && g3 > c4 * 0.08f && d4 < e4 * 0.2f && eLeft > eRight * 4.0f && gRight > gLeft * 4.0f,
+                   "Harmony voices set one by one sing their own intervals in their own places: a third above on the left, a fourth below on the right",
+                   "E " + juce::String (juce::Decibels::gainToDecibels (e4 / c4), 1) + " dB and low G " + juce::String (juce::Decibels::gainToDecibels (g3 / c4), 1) + " dB against the lead");
+            // one voice louder than the other, by its own level
+            st.voice[1].level = 0.25f;
+            const auto quieter = run (st, lead);
+            check (std::abs (juce::Decibels::gainToDecibels (level (quieter, 55.0f) / g3) + 12.0f) < 2.0f && std::abs (juce::Decibels::gainToDecibels (level (quieter, 64.0f) / e4)) < 1.0f,
+                   "Each harmony voice has its own level", "the fourth below at a quarter: " + juce::String (juce::Decibels::gainToDecibels (level (quieter, 55.0f) / g3), 1) + " dB");
+            // Chords: the same third-above voice, with F major in the grid, sings F (in the chord) and not E (not in it)
+            PitchFXSettings ch = st; ch.harmonyMode = 2; ch.voice[1].on = false; ch.chordMask = (1 << 5) | (1 << 9) | (1 << 0);
+            const auto inChord = run (ch, lead);
+            check (level (inChord, 65.0f) > c4 * 0.08f && level (inChord, 64.0f) < level (inChord, 65.0f) * 0.2f, "In Chords mode a voice sings a note of the chord: over F major, the third above C becomes an F",
+                   "F " + juce::String (juce::Decibels::gainToDecibels (level (inChord, 65.0f) / c4), 1) + " dB, E " + juce::String (juce::Decibels::gainToDecibels (level (inChord, 64.0f) / c4), 1) + " dB against the lead");
+            // Choir: three singers to a part. The part gets wider and is no longer one steady tone, at about the same loudness.
+            PitchFXSettings one = st; one.voice[1].on = false; one.voice[0].pan = 0.0f;
+            PitchFXSettings many = one; many.choir = 1.0f;
+            auto harmonyOnly = [&] (const juce::AudioBuffer<float>& b, double& sides)
+            {
+                double sum = 0.0; sides = 0.0;
+                for (int i = from; i < b.getNumSamples(); ++i)
+                {
+                    const double l = b.getSample (0, i) - lead.getSample (0, i), r = b.getSample (1, i) - lead.getSample (1, i);
+                    sum += l * l + r * r; sides += (l - r) * (l - r);
+                }
+                return sum;
+            };
+            double soloSides = 0.0, choirSides = 0.0;
+            const double solo = harmonyOnly (run (one, lead), soloSides), choir = harmonyOnly (run (many, lead), choirSides);
+            check (std::abs (10.0 * std::log10 (choir / solo)) < 4.0 && choirSides > solo * 0.05 && soloSides < solo * 0.01, "Choir makes each part three singers: wider, and about as loud as it was",
+                   juce::String (10.0 * std::log10 (choir / solo), 1) + " dB against one singer; " + juce::String (100.0 * choirSides / choir, 0) + " % of it is difference between the sides");
+        }
+        {
+            // Shift, Wide: two copies nine cents either way, one each side
+            PitchFXSettings st; st.shiftOn = true; st.shiftMode = 1; st.semitones = 0.0f; st.fineCents = 9.0f; st.shiftMix = 1.0f; st.shiftWidth = 1.0f;
+            const auto wide = run (st, lead);
+            juce::AudioBuffer<float> rightOnly (1, wide.getNumSamples()); rightOnly.copyFrom (0, 0, wide, 1, 0, wide.getNumSamples());
+            const float up = (meanOf (trackNotes (wide, 1.0f)) - 60.0f) * 100.0f, down = (meanOf (trackNotes (rightOnly, 1.0f)) - 60.0f) * 100.0f;
+            check (std::abs (up - 9.0f) < 3.0f && std::abs (down + 9.0f) < 3.0f, "Shift on Wide puts a copy a few cents sharp on one side and one as flat on the other",
+                   juce::String (up, 1) + " cents on the left, " + juce::String (down, 1) + " on the right");
+            // Robot: a voice that slides from G3 up to D4 comes out on one note, the key note
+            PitchFXSettings robot; robot.shiftOn = true; robot.shiftMode = 2; robot.semitones = 0.0f; robot.shiftMix = 1.0f;
+            juce::AudioBuffer<float> slide (2, (int) (fs * 3.0));
+            double phase = 0.0;
+            for (int i = 0; i < slide.getNumSamples(); ++i)
+            {
+                const double note = 55.0 + 7.0 * (double) i / slide.getNumSamples();
+                phase += juce::MathConstants<double>::twoPi * 440.0 * std::pow (2.0, (note - 69.0) / 12.0) / fs;
+                float v = 0.0f; for (int k = 1; k <= 8; ++k) v += (float) std::sin (phase * k) / (float) k;
+                slide.setSample (0, i, 0.2f * v); slide.setSample (1, i, 0.2f * v);
+            }
+            const auto flat = trackNotes (run (robot, slide), 1.0f);
+            check (std::abs (meanOf (flat) - 48.0f) < 0.1f && spanOf (flat) < 0.4f, "Shift on Robot holds a sliding voice on the key note",
+                   "sung from G3 to D4, heard at " + juce::String (meanOf (flat), 2) + " (48 is the C below), moving " + juce::String (spanOf (flat) * 100.0f, 0) + " cents in all");
+        }
+        {
+            // how heavy the biggest Harmony is: four parts, three singers each
+            PitchFXSettings st; st.harmonyOn = true; st.harmonyMode = 1; st.choir = 1.0f; st.harmonyMix = 0.5f;
+            for (int v = 0; v < 4; ++v) st.voice[(size_t) v] = { true, v == 0 ? 2 : v == 1 ? 4 : v == 2 ? -3 : 7, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+            const auto long10 = voiceTone (hzOf (60.0f), 10.0f, 2);
+            const double start = juce::Time::getMillisecondCounterHiRes();
+            run (st, long10);
+            const double took = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
+            check (took < 2.5, "Four harmony parts with a full choir run many times faster than real time", "10 seconds of sound in " + juce::String (took, 2) + " s on this machine");
+        }
+    }
+    {
         // --- build 17: the Phone devices and their noise
         auto band = [&] (const juce::AudioBuffer<float>& b, int from, int len) { return juce::Decibels::gainToDecibels (b.getRMSLevel (0, from, len), -140.0f); };
         {

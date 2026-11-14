@@ -19,6 +19,7 @@ public:
     void mouseMove (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
 
 private:
     struct ModuleUI
@@ -38,7 +39,14 @@ private:
     // drawing in the display: Motion's curve (sixteen points) and Chop's pattern (sixteen steps)
     juce::Rectangle<float> motionPlot() const, chopPlot() const;
     bool drawAt (juce::Point<int> where, bool firstTouch);
-    int drawKind = 0;              // 0 nothing, 1 motion curve, 2 chop pattern
+    int drawKind = 0;              // 0 nothing, 1 motion curve, 2 chop pattern, 3 a cell of Harmony's voice table, 4 Harmony's chord grid
+    // Harmony: the table of four voices (on, interval, level, pan, delay, size, detune) and the chord grid
+    juce::Rectangle<float> harmonyLeft() const, harmonyTable() const, voiceCell (int voice, int column) const, chordCell (int slot, int note) const;
+    juce::String voiceParam (int voice, int column) const;
+    static juce::String intervalName (int steps);
+    int cellVoice = -1, cellColumn = -1, shownHarmonyMode = -1;
+    float cellStart = 0.0f;
+    bool chordPaint = true;
     int drawLast = -1; float drawLastValue = 0.0f;       // so a fast drag fills in the points it skipped
     bool drawClearing = false;     // chop: a click on a lit step clears it, and a drag from there clears more
     bool dragging = false;
@@ -69,9 +77,9 @@ private:
     Segmented rvType; ParamToggle rvAuto; Segmented rvLength; ParamToggle rvFreeze; juce::TextButton rvFit; Knob rvMix, rvDecay, rvPre, rvTone, rvDuck, rvLowCut, rvWidth;
     Knob rvSize, rvDiffusion, rvEarly, rvLowDecay, rvModDepth, rvModRate, rvShimmer;
     // harmony
-    Segmented hmVoicing; Knob hmMix, hmWidth, hmHumanise;
+    Segmented hmMode, hmVoicing; ParamToggle hmLeading; Choice hmChordLength; juce::TextButton hmFill, hmClear; Knob hmMix, hmWidth, hmHumanise, hmChoir, hmChordCount;
     // shift
-    Knob psSemis, psCharacter, psMix;
+    Segmented psMode; Knob psSemis, psCharacter, psMix, psFine, psDrive, psWidth;
     // phone
     Segmented phMode; Knob phAmount, phTone, phDrive, phNoise;
     // lo-fi

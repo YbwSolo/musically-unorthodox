@@ -78,7 +78,15 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
     const juce::String getName() const override { return "Musically Unorthodox"; }
+    // MIDI reaches the plugin only where the format allows an effect to have it: VST3 and the standalone app on
+    // Windows. An Audio Unit effect in Logic is never sent MIDI, so on a Mac the chords come from the grid.
+   #if JUCE_WINDOWS
+    bool acceptsMidi() const override { return true; }
+   #else
     bool acceptsMidi() const override { return false; }
+   #endif
+    int getChordSlotNow() const { return chordSlotNow.load (std::memory_order_relaxed); }       // which chord of the grid is playing
+    int getMidiChord() const { return midiChordNow.load (std::memory_order_relaxed); }           // the notes held on a keyboard, as twelve bits
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override
@@ -241,6 +249,11 @@ public:
     // Fits the EQ to this voice: takes what the EQ is doing now back out of what was measured, works out what a
     // finished vocal still needs, and adds that to the EQ. Returns what it did, in words.
     juce::String fitTone();
+    // Harmony's chord grid: fills it with a common progression in the key set on the Tune tab, or clears it
+    static juce::StringArray chordProgressionNames (bool minor);
+    juce::String fillChords (int progression);
+    juce::String clearChords();
+    static juce::String chordName (int mask);          // "Gm", "Bb", "F#dim"; empty for anything that is not a plain triad
     int mergeEqBand (EQBandSettings band, bool& addedToExisting);
     float eqResponseDbAt (float hz) const;          // what the fixed part of the EQ does at one frequency
     bool isEqUntouched() const;
@@ -385,6 +398,11 @@ private:
     AF pRvSize = nullptr, pRvDiffusion = nullptr, pRvModDepth = nullptr, pRvModRate = nullptr, pRvLowDecay = nullptr, pRvEarly = nullptr, pRvFreeze = nullptr, pRvShimmer = nullptr;
     AF pDlStyle = nullptr, pDlPattern = nullptr, pDlDrive = nullptr, pDlWobble = nullptr, pDlLowCut = nullptr;
     AF pFxOrder = nullptr;
+    AF pPsMode = nullptr, pPsFine = nullptr, pPsDrive = nullptr, pPsWidth = nullptr, pHmMode = nullptr, pHmLeading = nullptr, pHmChoir = nullptr, pHmChordCount = nullptr, pHmChordLength = nullptr;
+    std::array<AF, 4> pHmVOn {}, pHmVSteps {}, pHmVLevel {}, pHmVPan {}, pHmVDelay {}, pHmVSize {}, pHmVDetune {};
+    std::array<AF, 16> pHmChord {};
+    std::array<juce::uint8, 128> midiHeld {};          // audio thread: which keys are down, where the host sends MIDI to an effect
+    std::atomic<int> chordSlotNow { 0 }, midiChordNow { 0 };
     int fxOrderNow = 0;                        // audio thread: the order in force
     fxorder::Order fxOrderList = fxorder::decode (0);
     float fxOrderGain = 1.0f;                  // dips to nothing for a moment while the order changes, so it cannot click

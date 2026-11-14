@@ -40,6 +40,14 @@ MUProcessor::MUProcessor()
     pRvLowDecay = p (ids::rvLowDecay); pRvEarly = p (ids::rvEarly); pRvFreeze = p (ids::rvFreeze); pRvShimmer = p (ids::rvShimmer);
     pDlStyle = p (ids::dlStyle); pDlPattern = p (ids::dlPattern); pDlDrive = p (ids::dlDrive); pDlWobble = p (ids::dlWobble); pDlLowCut = p (ids::dlLowCut);
     pFxOrder = p (ids::fxOrder);
+    pPsMode = p (ids::psMode); pPsFine = p (ids::psFine); pPsDrive = p (ids::psDrive); pPsWidth = p (ids::psWidth);
+    pHmMode = p (ids::hmMode); pHmLeading = p (ids::hmLeading); pHmChoir = p (ids::hmChoir); pHmChordCount = p (ids::hmChordCount); pHmChordLength = p (ids::hmChordLength);
+    for (int v = 0; v < 4; ++v)
+    {
+        pHmVOn[(size_t) v] = p (ids::hmVoiceOn (v)); pHmVSteps[(size_t) v] = p (ids::hmVoiceSteps (v)); pHmVLevel[(size_t) v] = p (ids::hmVoiceLevel (v)); pHmVPan[(size_t) v] = p (ids::hmVoicePan (v));
+        pHmVDelay[(size_t) v] = p (ids::hmVoiceDelay (v)); pHmVSize[(size_t) v] = p (ids::hmVoiceSize (v)); pHmVDetune[(size_t) v] = p (ids::hmVoiceDetune (v));
+    }
+    for (int slot = 0; slot < 16; ++slot) pHmChord[(size_t) slot] = p (ids::hmChord (slot));
     pPsOn = p (ids::psOn); pPsSemis = p (ids::psSemis); pPsCharacter = p (ids::psCharacter); pPsMix = p (ids::psMix);
     pPhOn = p (ids::phOn); pPhAmount = p (ids::phAmount); pPhTone = p (ids::phTone); pPhDrive = p (ids::phDrive);
     pLfOn = p (ids::lfOn); pLfCrush = p (ids::lfCrush); pLfWobble = p (ids::lfWobble); pLfMix = p (ids::lfMix);
@@ -221,6 +229,14 @@ void MUProcessor::pullParameters()
     pf.shiftOn = pPsOn->load() > 0.5f; pf.semitones = pPsSemis->load(); pf.character = pPsCharacter->load() * 0.01f; pf.shiftMix = pPsMix->load() * 0.01f;
     pf.harmonyOn = pHmOn->load() > 0.5f; pf.voicing = (int) pHmVoicing->load(); pf.harmonyMix = pHmMix->load() * 0.01f; pf.harmonyWidth = pHmWidth->load() * 0.01f;
     pf.key = tn.key; pf.scale = tn.scale; pf.noteMask = tn.noteMask; pf.humanise = pHmHumanise->load() * 0.01f;
+    pf.shiftMode = (int) pPsMode->load(); pf.fineCents = pPsFine->load(); pf.shiftDrive = pPsDrive->load() * 0.01f; pf.shiftWidth = pPsWidth->load() * 0.01f;
+    pf.harmonyMode = (int) pHmMode->load(); pf.leading = pHmLeading->load() > 0.5f; pf.choir = pHmChoir->load() * 0.01f;
+    for (int v = 0; v < 4; ++v)
+    {
+        auto& voice = pf.voice[(size_t) v];
+        voice.on = pHmVOn[(size_t) v]->load() > 0.5f; voice.steps = juce::roundToInt (pHmVSteps[(size_t) v]->load()); voice.level = pHmVLevel[(size_t) v]->load() * 0.01f;
+        voice.pan = pHmVPan[(size_t) v]->load() * 0.01f; voice.delayMs = pHmVDelay[(size_t) v]->load(); voice.size = pHmVSize[(size_t) v]->load() * 0.01f; voice.detuneCents = pHmVDetune[(size_t) v]->load();
+    }
     pitchFx.setSettings (pf);
 
     PhoneSettings ph;
@@ -250,7 +266,7 @@ void MUProcessor::pullParameters()
     maximizer.setCeilingDb (pTargetTp->load());
 }
 
-void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
@@ -279,6 +295,31 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     if (haveTime) hostSeconds.store (seconds, std::memory_order_relaxed);
     tuner.setTimeline (playing && haveTime, seconds);
     chop.setTimeline (playing && haveBeats, quarterNotes);
+    {
+        // Harmony in Chords mode: the chord for this moment. Keys held on a MIDI keyboard come first (where the
+        // host sends MIDI to an effect); otherwise it is the chord the song has reached in the grid.
+        for (const auto meta : midi)
+        {
+            const auto message = meta.getMessage();
+            if (message.isNoteOn()) midiHeld[(size_t) message.getNoteNumber()] = 1;
+            else if (message.isNoteOff()) midiHeld[(size_t) message.getNoteNumber()] = 0;
+            else if (message.isAllNotesOff() || message.isAllSoundOff()) midiHeld.fill (0);
+        }
+        int held = 0;
+        for (int note = 0; note < 128; ++note) if (midiHeld[(size_t) note] != 0) held |= 1 << (note % 12);
+        midiChordNow.store (held, std::memory_order_relaxed);
+        static const double slotBeats[4] = { 8.0, 4.0, 2.0, 1.0 };
+        const int count = juce::jlimit (1, 16, juce::roundToInt (pHmChordCount->load()));
+        int slot = chordSlotNow.load (std::memory_order_relaxed);
+        if (playing && haveBeats)
+        {
+            slot = (int) std::floor (quarterNotes / slotBeats[juce::jlimit (0, 3, (int) pHmChordLength->load())]) % count;
+            if (slot < 0) slot += count;
+        }
+        slot = juce::jlimit (0, count - 1, slot);
+        chordSlotNow.store (slot, std::memory_order_relaxed);
+        pitchFx.setChord (held != 0 ? held : juce::roundToInt (pHmChord[(size_t) slot]->load()) & 0xFFF);
+    }
     motion.setTimeline (playing && haveBeats, quarterNotes);
 
     pullParameters();
@@ -1623,6 +1664,65 @@ juce::String MUProcessor::fitToneIfUntouched()
     return said.startsWith ("EQ fitted") ? said : juce::String();
 }
 
+// ---- Harmony: the chord grid ----------------------------------------------------------------------
+namespace
+{
+const int kMajorScale[7] = { 0, 2, 4, 5, 7, 9, 11 }, kMinorScale[7] = { 0, 2, 3, 5, 7, 8, 10 };
+// each progression is four chords, given as the step of the scale each one is built on (0 = the key note)
+const int kMajorProgressions[5][4] = { { 0, 4, 5, 3 }, { 0, 5, 3, 4 }, { 5, 3, 0, 4 }, { 0, 3, 4, 3 }, { 1, 4, 0, 0 } };
+const int kMinorProgressions[5][4] = { { 0, 5, 2, 6 }, { 0, 6, 5, 6 }, { 0, 3, 5, 4 }, { 5, 6, 0, 0 }, { 0, 3, 0, 4 } };
+}
+
+juce::StringArray MUProcessor::chordProgressionNames (bool minor)
+{
+    return minor ? juce::StringArray { "i - VI - III - VII (the trap and pop minor loop)", "i - VII - VI - VII", "i - iv - VI - v", "VI - VII - i - i", "i - iv - i - v" }
+                 : juce::StringArray { "I - V - vi - IV (the four-chord song)", "I - vi - IV - V", "vi - IV - I - V", "I - IV - V - IV", "ii - V - I - I" };
+}
+
+juce::String MUProcessor::chordName (int mask)
+{
+    static const char* const names[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    mask &= 0xFFF;
+    for (int root = 0; root < 12; ++root)
+    {
+        auto has = [&] (int semis) { return ((mask >> ((root + semis) % 12)) & 1) != 0; };
+        auto only = [&] (int a, int b) { return mask == ((1 << root) | (1 << ((root + a) % 12)) | (1 << ((root + b) % 12))); };
+        if (! has (0)) continue;
+        if (only (4, 7)) return names[root];
+        if (only (3, 7)) return juce::String (names[root]) + "m";
+        if (only (3, 6)) return juce::String (names[root]) + "dim";
+    }
+    return {};
+}
+
+juce::String MUProcessor::fillChords (int progression)
+{
+    const int scale = (int) getParam (ids::tuneScale), key = juce::jlimit (0, 11, (int) getParam (ids::tuneKey));
+    if (scale != 1 && scale != 2 && scale != 3 && scale != 4)
+        return "Choose Major or Minor on the Tune tab first (Find key on the Mix tab does it for you), so the chords can be built from the key.";
+    const bool minor = scale == 2 || scale == 4;
+    const int* notes = minor ? kMinorScale : kMajorScale;
+    const int* chosen = (minor ? kMinorProgressions : kMajorProgressions)[juce::jlimit (0, 4, progression)];
+    juce::StringArray said;
+    for (int slot = 0; slot < 16; ++slot)
+    {
+        int mask = 0;
+        if (slot < 4)
+            for (int third = 0; third < 3; ++third) mask |= 1 << ((key + notes[(chosen[slot] + 2 * third) % 7]) % 12);       // three notes of the scale, every other one
+        setParam (ids::hmChord (slot), (float) mask);
+        if (slot < 4) said.add (chordName (mask));
+    }
+    setParam (ids::hmChordCount, 4.0f);
+    setParam (ids::hmMode, 2.0f);
+    return "Chords set: " + said.joinIntoString (", ") + ", one after another. Harmony is in Chords mode: the voices now sing notes of these chords. Click notes in the grid to change them.";
+}
+
+juce::String MUProcessor::clearChords()
+{
+    for (int slot = 0; slot < 16; ++slot) setParam (ids::hmChord (slot), 0.0f);
+    return "Chords cleared. With no chord in a slot the voices go back to their intervals in the key.";
+}
+
 // ---- Presets of your own --------------------------------------------------------------------------
 // Which controls a preset holds. The whole chain is everything that shapes the sound (the same set A/B switches:
 // not the role, the bypass, the balance trim or the song's key). A tool's preset holds that tool's controls.
@@ -1653,6 +1753,16 @@ std::vector<juce::String> MUProcessor::scopeParams (const juce::String& scope) c
         if (preset.module == scope)
             for (auto& v : preset.values)
                 if (v.id != kRootOnly && std::find (ids.begin(), ids.end(), v.id) == ids.end()) ids.push_back (v.id);
+    // a tool's own preset holds every control of the tool, including the ones no built-in preset touches
+    auto also = [&ids] (const juce::String& id) { if (std::find (ids.begin(), ids.end(), id) == ids.end()) ids.push_back (id); };
+    if (scope == "harmony")
+    {
+        for (auto& id : { ids::hmMode, ids::hmLeading, ids::hmChoir, ids::hmChordCount, ids::hmChordLength }) also (id);
+        for (int v = 0; v < 4; ++v)
+            for (auto& id : { ids::hmVoiceOn (v), ids::hmVoiceSteps (v), ids::hmVoiceLevel (v), ids::hmVoicePan (v), ids::hmVoiceDelay (v), ids::hmVoiceSize (v), ids::hmVoiceDetune (v) }) also (id);
+        for (int slot = 0; slot < 16; ++slot) also (ids::hmChord (slot));
+    }
+    if (scope == "shift") for (auto& id : { ids::psMode, ids::psFine, ids::psDrive, ids::psWidth }) also (id);
     return ids;
 }
 

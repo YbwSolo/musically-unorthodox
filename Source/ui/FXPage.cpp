@@ -34,9 +34,15 @@ FXPage::FXPage (MUProcessor& p, std::function<void (const juce::String&)> status
       rvSize (p, ids::rvSize, "Size", ids::rvSize), rvDiffusion (p, ids::rvDiffusion, "Diffusion", ids::rvDiffusion), rvEarly (p, ids::rvEarly, "Early", ids::rvEarly),
       rvLowDecay (p, ids::rvLowDecay, "Low decay", ids::rvLowDecay), rvModDepth (p, ids::rvModDepth, "Movement", ids::rvModDepth), rvModRate (p, ids::rvModRate, "Move rate", ids::rvModRate),
       rvShimmer (p, ids::rvShimmer, "Shimmer", ids::rvShimmer),
+      hmMode (p, ids::hmMode, PitchFX::harmonyModeNames(), ids::hmMode),
       hmVoicing (p, ids::hmVoicing, { "Third up", "Fifth up", "Third + fifth", "Octave up", "Octave down", "Third below", "Choir" }, ids::hmVoicing),
+      hmLeading (p, ids::hmLeading, "Voice leading", "switch", ids::hmLeading),
+      hmChordLength (p, ids::hmChordLength, { "2 bars each", "1 bar each", "Half a bar each", "1 beat each" }, ids::hmChordLength),
       hmMix (p, ids::hmMix, "Level", ids::hmMix), hmWidth (p, ids::hmWidth, "Width", ids::hmWidth), hmHumanise (p, ids::hmHumanise, "Humanise", ids::hmHumanise),
+      hmChoir (p, ids::hmChoir, "Choir", ids::hmChoir), hmChordCount (p, ids::hmChordCount, "Chords", ids::hmChordCount),
+      psMode (p, ids::psMode, PitchFX::shiftModeNames(), ids::psMode),
       psSemis (p, ids::psSemis, "Pitch", ids::psSemis), psCharacter (p, ids::psCharacter, "Voice size", ids::psCharacter), psMix (p, ids::psMix, "Mix", ids::psMix),
+      psFine (p, ids::psFine, "Fine", ids::psFine), psDrive (p, ids::psDrive, "Drive", ids::psDrive), psWidth (p, ids::psWidth, "Width", ids::psWidth),
       phMode (p, ids::phMode, Phone::modeNames(), ids::phMode),
       phAmount (p, ids::phAmount, "Amount", ids::phAmount), phTone (p, ids::phTone, "Width", ids::phTone), phDrive (p, ids::phDrive, "Drive", ids::phDrive), phNoise (p, ids::phNoise, "Noise", ids::phNoise),
       lfNoiseType (p, ids::lfNoiseType, LoFi::noiseNames(), ids::lfNoiseType),
@@ -56,6 +62,20 @@ FXPage::FXPage (MUProcessor& p, std::function<void (const juce::String&)> status
         addAndMakeVisible (t);
     }
     styleButton (rvFit, "Fit to this track", true, "rv.fit");
+    styleButton (hmFill, "Fill from key", false, "hm.fill");
+    hmFill.onClick = [this]
+    {
+        const int scale = (int) proc.getParam (ids::tuneScale);
+        if (scale < 1 || scale > 4) { setStatus (proc.fillChords (0)); return; }
+        juce::PopupMenu menu;
+        menu.setLookAndFeel (&getLookAndFeel());
+        const auto names = MUProcessor::chordProgressionNames (scale == 2 || scale == 4);
+        for (int i = 0; i < names.size(); ++i) menu.addItem (i + 1, names[i]);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&hmFill),
+                            [safe = juce::Component::SafePointer<FXPage> (this)] (int chosen) { if (safe != nullptr && chosen > 0) { safe->setStatus (safe->proc.fillChords (chosen - 1)); safe->repaint(); } });
+    };
+    styleButton (hmClear, "Clear", false, "hm.clear");
+    hmClear.onClick = [this] { setStatus (proc.clearChords()); repaint(); };
     rvFit.onClick = [this] { setStatus (proc.fitReverb()); };
 
     // the order matches fxModules(): doubler, delay, reverb, harmony, shift, phone, lo-fi, motion, chop
@@ -64,8 +84,8 @@ FXPage::FXPage (MUProcessor& p, std::function<void (const juce::String&)> status
         { { &dlSync, &dlNote, &dlPattern, &dlStyle }, { 158, 130, 250, 814 }, { &dlMix, &dlTime, &dlFeedback, &dlTone, &dlWidth, &dlDuck }, { &dlDrive, &dlWobble, &dlLowCut } },
         { { &rvType, &rvAuto, &rvLength, &rvFreeze, &rvFit }, { 814, 158, 220, 96, 140 }, { &rvMix, &rvDecay, &rvPre, &rvWidth, &rvTone, &rvDuck, &rvLowCut },
           { &rvSize, &rvDiffusion, &rvEarly, &rvLowDecay, &rvModDepth, &rvModRate, &rvShimmer } },
-        { { &hmVoicing }, { 760 }, { &hmMix, &hmWidth, &hmHumanise }, {} },
-        { {}, {}, { &psSemis, &psCharacter, &psMix }, {} },
+        { { &hmMode, &hmLeading, &hmChordLength, &hmFill, &hmClear, &hmVoicing }, { 270, 140, 140, 118, 62, 760 }, { &hmMix, &hmWidth, &hmHumanise, &hmChoir, &hmChordCount }, {} },
+        { { &psMode }, { 300 }, { &psSemis, &psFine, &psCharacter, &psDrive, &psWidth, &psMix }, {} },
         { { &phMode }, { 640 }, { &phAmount, &phTone, &phDrive, &phNoise }, {} },
         { { &lfNoiseType }, { 190 }, { &lfDrive, &lfWobble, &lfCrush, &lfWear, &lfTone, &lfNoise, &lfMix }, {} },
         { { &mdType, &mdSync, &mdNote, &mdShape }, { 520, 158, 110, 560 }, { &mdRate, &mdDepth, &mdMix, &mdSmooth }, {} },
@@ -115,6 +135,12 @@ void FXPage::select (int index)
         for (auto* c : ui[m].top) c->setVisible (show);
         for (auto* k : ui[m].knobs) k->setVisible (show);
         for (auto* k : ui[m].more) k->setVisible (show && showMore);
+    }
+    {
+        const int harmonyMode = (int) proc.getParam (ids::hmMode);
+        shownHarmonyMode = harmonyMode;
+        hmVoicing.setVisible (selected == 3 && harmonyMode == 0);
+        for (auto* c : std::initializer_list<juce::Component*> { &hmChordLength, &hmFill, &hmClear }) c->setVisible (selected == 3 && harmonyMode == 2);
     }
     moreButton.setVisible (! ui[(size_t) selected].more.empty());
     moreButton.setButtonText (showMore ? "Fewer controls" : "More controls");
@@ -178,6 +204,17 @@ void FXPage::tick (float dt)
     const int echoStyle = (int) proc.getParam (ids::dlStyle), echoPattern = (int) proc.getParam (ids::dlPattern);
     dlDrive.setDimmed (echoStyle != 1 && echoStyle != 2);          // only Tape and Analog saturate
     {
+        // Harmony shows the controls of the mode it is in
+        const int harmonyMode = (int) proc.getParam (ids::hmMode);
+        if (harmonyMode != shownHarmonyMode || hmVoicing.isVisible() != (selected == 3 && harmonyMode == 0))
+        {
+            shownHarmonyMode = harmonyMode;
+            hmVoicing.setVisible (selected == 3 && harmonyMode == 0);
+            for (auto* c : std::initializer_list<juce::Component*> { &hmChordLength, &hmFill, &hmClear }) c->setVisible (selected == 3 && harmonyMode == 2);
+            resized(); repaint();
+        }
+        hmChordCount.setDimmed (harmonyMode != 2);
+        psWidth.setDimmed ((int) proc.getParam (ids::psMode) != 1);
         const bool timedMotion = proc.getParam (ids::mdSync) > 0.5f, drawn = (int) proc.getParam (ids::mdShape) == 5, pattern = (int) proc.getParam (ids::chMode) == 1;
         mdRate.setDimmed (timedMotion); mdNote.setAlpha (timedMotion ? 1.0f : 0.35f); mdSmooth.setDimmed (! drawn);
         chGate.setDimmed (! pattern); chSwing.setDimmed (! pattern); chLength.setDimmed (! pattern);
@@ -476,13 +513,129 @@ void FXPage::drawReverb (juce::Graphics& g, juce::Rectangle<float> r)
     }
 }
 
+juce::String FXPage::intervalName (int steps)
+{
+    static const char* const names[] = { "Unison", "2nd", "3rd", "4th", "5th", "6th", "7th", "Octave", "9th", "10th", "11th", "12th", "13th", "14th", "2 octaves" };
+    const int count = juce::jlimit (0, 14, std::abs (steps));
+    return count == 0 ? juce::String (names[0]) : juce::String (names[count]) + (steps > 0 ? " up" : " down");
+}
+
+juce::Rectangle<float> FXPage::harmonyLeft() const  { return well.toFloat().reduced (1.0f).withTrimmedTop (24.0f).withTrimmedRight (490.0f); }
+juce::Rectangle<float> FXPage::harmonyTable() const { return well.toFloat().reduced (1.0f).withTrimmedTop (24.0f).removeFromRight (482.0f).reduced (8.0f, 6.0f); }
+
+// columns: 0 on, 1 interval, 2 level, 3 pan, 4 delay, 5 size, 6 detune
+juce::Rectangle<float> FXPage::voiceCell (int voice, int column) const
+{
+    const auto table = harmonyTable();
+    static const float widths[] = { 30.0f, 104.0f, 62.0f, 62.0f, 62.0f, 62.0f, 62.0f };
+    const float rowH = juce::jmin (46.0f, (table.getHeight() - 20.0f) / 4.0f);
+    float x = table.getX();
+    for (int c = 0; c < column; ++c) x += widths[c] + 4.0f;
+    return { x, table.getY() + 20.0f + rowH * (float) voice, widths[juce::jlimit (0, 6, column)], rowH - 6.0f };
+}
+
+juce::String FXPage::voiceParam (int voice, int column) const
+{
+    switch (column)
+    {
+        case 0:  return ids::hmVoiceOn (voice);      case 1:  return ids::hmVoiceSteps (voice);  case 2:  return ids::hmVoiceLevel (voice);
+        case 3:  return ids::hmVoicePan (voice);     case 4:  return ids::hmVoiceDelay (voice);  case 5:  return ids::hmVoiceSize (voice);
+        default: return ids::hmVoiceDetune (voice);
+    }
+}
+
+// the chord grid: one column a chord, twelve rows for the notes C (bottom) to B (top)
+juce::Rectangle<float> FXPage::chordCell (int slot, int note) const
+{
+    const auto grid = harmonyLeft().reduced (8.0f, 6.0f).withTrimmedLeft (26.0f).withTrimmedTop (18.0f);
+    const float w = grid.getWidth() / 16.0f, hgt = grid.getHeight() / 12.0f;
+    return { grid.getX() + w * (float) slot, grid.getBottom() - hgt * (float) (note + 1), w, hgt };
+}
+
 void FXPage::drawHarmony (juce::Graphics& g, juce::Rectangle<float> r)
 {
     drawWell (g, r);
     const bool on = proc.getParam (ids::hmOn) > 0.5f;
     const int key = (int) proc.getParam (ids::tuneKey), sc = (int) proc.getParam (ids::tuneScale), mask = (int) proc.getParam (ids::tuneNotes), voicing = (int) proc.getParam (ids::hmVoicing);
+    const int harmonyMode = (int) proc.getParam (ids::hmMode);
+    static const char* const noteNames[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    if (harmonyMode != 0)
+    {
+        // ---- the table of voices, on the right in both of the hand-built modes
+        const auto table = harmonyTable();
+        static const char* const heads[] = { "", "Interval", "Level", "Pan", "Delay", "Size", "Detune" };
+        g.setFont (body (10.5f)); g.setColour (textMute);
+        for (int c = 1; c < 7; ++c) g.drawText (heads[c], voiceCell (0, c).withY (table.getY()).withHeight (16.0f), juce::Justification::centredLeft);
+        for (int v = 0; v < 4; ++v)
+        {
+            const bool voiceOn = proc.getParam (ids::hmVoiceOn (v)) > 0.5f, lit = on && voiceOn;
+            const auto power = voiceCell (v, 0);
+            g.setColour (voiceOn ? (on ? yellow : textDim) : control); g.fillEllipse (power.withSizeKeepingCentre (18.0f, 18.0f));
+            g.setColour (voiceOn ? onYellow : textMute); g.setFont (bodyBold (10.5f)); g.drawText (juce::String (v + 1), power.withSizeKeepingCentre (18.0f, 18.0f), juce::Justification::centred);
+            for (int c = 1; c < 7; ++c)
+            {
+                const auto cell = voiceCell (v, c);
+                g.setColour (control); g.fillRoundedRectangle (cell, 4.0f);
+                const auto id = voiceParam (v, c);
+                const float value = proc.getParam (id);
+                juce::String shown;
+                if (c == 1) shown = intervalName (juce::roundToInt (value));
+                else
+                {
+                    // a bar from the left for things that start at nothing, from the middle for things that go both ways
+                    const bool bothWays = c == 3 || c == 5 || c == 6;
+                    const float top = c == 4 ? 60.0f : c == 6 ? 50.0f : 100.0f;
+                    const float amount = juce::jlimit (-1.0f, 1.0f, value / top);
+                    auto bar = cell.reduced (2.0f);
+                    if (bothWays) bar = amount >= 0.0f ? bar.withTrimmedLeft (bar.getWidth() * 0.5f).withWidth (bar.getWidth() * 0.5f * amount)
+                                                       : bar.withTrimmedLeft (bar.getWidth() * 0.5f * (1.0f + amount)).withWidth (bar.getWidth() * 0.5f * -amount);
+                    else bar = bar.withWidth (bar.getWidth() * juce::jmax (0.0f, amount));
+                    g.setColour (lit ? yellow.withAlpha (0.3f) : lineHi); g.fillRoundedRectangle (bar, 3.0f);
+                    shown = c == 2 ? juce::String (juce::roundToInt (value)) + " %" : c == 3 ? (std::abs (value) < 0.5f ? juce::String ("Centre") : juce::String (juce::roundToInt (std::abs (value))) + (value < 0.0f ? " L" : " R"))
+                          : c == 4 ? juce::String (juce::roundToInt (value)) + " ms" : c == 5 ? (std::abs (value) < 0.5f ? juce::String ("Same") : juce::String (juce::roundToInt (std::abs (value))) + (value < 0.0f ? " big" : " small"))
+                          : (value > 0.0f ? "+" : "") + juce::String (value, 0) + " c";
+                }
+                g.setFont (c == 1 ? bodyBold (11.5f) : body (11.0f)); g.setColour (lit ? text : voiceOn ? textDim : textMute);
+                g.drawText (shown, cell.reduced (6.0f, 0.0f), juce::Justification::centredLeft, true);
+            }
+        }
+    }
+    if (harmonyMode == 2)
+    {
+        // ---- the chord grid
+        const int count = juce::roundToInt (proc.getParam (ids::hmChordCount)), now = proc.getChordSlotNow(), keyboard = proc.getMidiChord();
+        const auto area = harmonyLeft().reduced (8.0f, 6.0f);
+        for (int note = 0; note < 12; ++note)
+        {
+            const bool inKey = Tuner::noteAllowed (60 + note, key, sc, mask);
+            g.setFont (body (9.5f)); g.setColour (note == key ? text : inKey ? textDim : textMute);
+            g.drawText (noteNames[note], juce::Rectangle<float> (area.getX(), chordCell (0, note).getY(), 22.0f, chordCell (0, note).getHeight()), juce::Justification::centredRight);
+        }
+        for (int slot = 0; slot < 16; ++slot)
+        {
+            const bool used = slot < count, playing = on && used && slot == now;
+            const int chord = juce::roundToInt (proc.getParam (ids::hmChord (slot)));
+            for (int note = 0; note < 12; ++note)
+            {
+                const auto cell = chordCell (slot, note).reduced (1.0f);
+                const bool inKey = Tuner::noteAllowed (60 + note, key, sc, mask), lit = ((chord >> note) & 1) != 0;
+                g.setColour (lit ? (! used ? textMute : playing ? yellow : on ? yellow.withAlpha (0.6f) : textDim) : (inKey ? raised : control).withAlpha (used ? 1.0f : 0.35f));
+                g.fillRoundedRectangle (cell, 2.0f);
+            }
+            const auto head = chordCell (slot, 11).withY (area.getY()).withHeight (16.0f);
+            g.setFont (bodyBold (9.5f)); g.setColour (playing ? yellow : used ? textDim : textMute);
+            const auto name = MUProcessor::chordName (chord);
+            g.drawText (name.isNotEmpty() ? name : (chord == 0 ? juce::String (slot + 1) : juce::String ("?")), head, juce::Justification::centred);
+        }
+        auto top = r.reduced (16.0f, 8.0f).removeFromTop (16.0f);
+        g.setFont (body (11.5f)); g.setColour (textDim);
+        g.drawText (keyboard != 0 ? juce::String ("Following the keys held on your keyboard.")
+                                  : juce::String ("Click notes to build each chord; the voices sing those notes, moving as little as they can. An empty column means: follow the key."),
+                    top, juce::Justification::centredLeft, true);
+        return;
+    }
     const float span = 30.0f, low = harmonyCentre - span * 0.5f;
-    const auto plot = r.reduced (1.0f).withTrimmedTop (24.0f);
+    const auto plot = harmonyMode == 0 ? r.reduced (1.0f).withTrimmedTop (24.0f) : harmonyLeft();
     auto yFor = [&] (float note) { return plot.getBottom() - (note - low) / span * plot.getHeight(); };
     g.saveState();
     g.reduceClipRegion (plot.toNearestInt());
@@ -509,17 +662,43 @@ void FXPage::drawHarmony (juce::Graphics& g, juce::Rectangle<float> r)
     };
     const int voices = PitchFX::numVoices (voicing);
     static const float offsets[] = { 110.0f, 190.0f, 150.0f };
-    for (int v = 0; v < voices; ++v)
+    if (harmonyMode == 0)
     {
-        const int note = PitchFX::harmonyNote (lead, v, voicing, key, sc, mask);
-        if (note >= 0) dot ((float) note, on ? yellow : textMute, 14.0f, midiName (note), offsets[v]);
+        for (int v = 0; v < voices; ++v)
+        {
+            const int note = PitchFX::harmonyNote (lead, v, voicing, key, sc, mask);
+            if (note >= 0) dot ((float) note, on ? yellow : textMute, 14.0f, midiName (note), offsets[v]);
+        }
+        dot (sungHere > 0.0f ? sungHere : (float) lead, sungHere > 0.0f || ! on ? text : textDim, 16.0f, "the lead, " + midiName (lead), -110.0f);
     }
-    dot (sungHere > 0.0f ? sungHere : (float) lead, sungHere > 0.0f || ! on ? text : textDim, 16.0f, "the lead, " + midiName (lead), -110.0f);
+    else
+    {
+        // the voices as they are sung right now (with voice leading they do not always sit a fixed distance from the lead)
+        for (int v = 0; v < 4; ++v)
+        {
+            if (proc.getParam (ids::hmVoiceOn (v)) < 0.5f) continue;
+            const int live = on && sungHere > 0.0f ? proc.getPitchFX().getHarmonyNote (v) : -1;
+            const int note = live >= 0 ? live : PitchFX::stepNote (lead, juce::roundToInt (proc.getParam (ids::hmVoiceSteps (v))), key, sc, mask);
+            const auto c = juce::Point<float> (cx + 26.0f + 30.0f * (float) v, yFor ((float) note));
+            g.setColour ((on ? yellow : textMute).withAlpha (0.2f)); g.fillEllipse (juce::Rectangle<float> (26.0f, 26.0f).withCentre (c));
+            g.setColour (on ? yellow : textMute); g.fillEllipse (juce::Rectangle<float> (16.0f, 16.0f).withCentre (c));
+            g.setColour (onYellow); g.setFont (bodyBold (10.0f)); g.drawText (juce::String (v + 1), juce::Rectangle<float> (16.0f, 16.0f).withCentre (c), juce::Justification::centred);
+        }
+        const auto c = juce::Point<float> (cx - 40.0f, yFor (sungHere > 0.0f ? sungHere : (float) lead));
+        g.setColour (text.withAlpha (0.2f)); g.fillEllipse (juce::Rectangle<float> (28.0f, 28.0f).withCentre (c));
+        g.setColour (sungHere > 0.0f || ! on ? text : textDim); g.fillEllipse (juce::Rectangle<float> (16.0f, 16.0f).withCentre (c));
+        g.setFont (bodyBold (11.0f)); g.drawText ("lead", juce::Rectangle<float> (60.0f, 14.0f).withCentre ({ c.x - 46.0f, c.y }), juce::Justification::centredRight);
+    }
     g.restoreState();
 
     static const char* const names[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
     auto top = r.reduced (16.0f, 8.0f).removeFromTop (16.0f);
     g.setFont (body (11.5f)); g.setColour (textDim);
+    if (harmonyMode == 1)
+    {
+        g.drawText ("Four voices, each set on its own row: click a number to switch a voice on, drag a box sideways to change it, double-click to put it back.", top, juce::Justification::centredLeft, true);
+        return;
+    }
     g.drawText (sc == 0 ? juce::String ("No key chosen (Chromatic): harmonies use fixed distances. Set the key on the Tune tab so they follow the song.")
                         : "Harmonies follow the key on the Tune tab: " + juce::String (names[key]) + " " + Tuner::scaleNames()[sc].toLowerCase() + ". Lit rows are notes of the key.",
                 top, juce::Justification::centredLeft, true);
@@ -555,6 +734,10 @@ void FXPage::drawShift (juce::Graphics& g, juce::Rectangle<float> r)
     g.setFont (body (11.5f)); g.setColour (textDim);
     g.drawText (mix > 0.98f ? "Mix at 100 %: only the shifted voice is heard." : "Mix at " + juce::String (juce::roundToInt (mix * 100.0f)) + " %: the shifted voice is layered under the real one.",
                 r.reduced (16.0f, 8.0f).removeFromBottom (16.0f), juce::Justification::centredLeft);
+    static const char* const modes[] = { "Shift: one copy of the voice, moved by Pitch and Fine.",
+                                         "Wide: two copies moved the same distance up and down, one on each side. A few cents of Fine with Pitch at zero thickens a voice without doubling it.",
+                                         "Robot: whatever is sung comes out on one note, the key note of the song, moved in semitones by Pitch." };
+    g.drawText (modes[juce::jlimit (0, 2, (int) proc.getParam (ids::psMode))], r.reduced (16.0f, 8.0f).removeFromTop (16.0f), juce::Justification::centredLeft, true);
 }
 
 void FXPage::drawPhone (juce::Graphics& g, juce::Rectangle<float> r)
@@ -795,7 +978,29 @@ bool FXPage::drawAt (juce::Point<int> where, bool firstTouch)
     if (firstTouch)
     {
         drawKind = 0;
-        if (selected == 7 && (int) proc.getParam (ids::mdShape) == 5 && motionPlot().expanded (8.0f).contains (p)) drawKind = 1;
+        if (selected == 3 && (int) proc.getParam (ids::hmMode) != 0)
+        {
+            for (int v = 0; v < 4 && drawKind == 0; ++v)
+                for (int c = 0; c < 7; ++c)
+                    if (voiceCell (v, c).expanded (2.0f).contains (p))
+                    {
+                        cellVoice = v; cellColumn = c; dragFrom = where; cellStart = proc.getParam (voiceParam (v, c));
+                        if (c == 0) { proc.setParam (ids::hmVoiceOn (v), cellStart > 0.5f ? 0.0f : 1.0f); repaint (well); return true; }
+                        drawKind = 3;
+                        break;
+                    }
+            if (drawKind == 0 && (int) proc.getParam (ids::hmMode) == 2)
+                for (int slot = 0; slot < 16 && drawKind == 0; ++slot)
+                    for (int note = 0; note < 12; ++note)
+                        if (chordCell (slot, note).contains (p))
+                        {
+                            // the first cell touched decides whether this stroke adds notes or takes them away
+                            chordPaint = ((juce::roundToInt (proc.getParam (ids::hmChord (slot))) >> note) & 1) == 0;
+                            drawKind = 4;
+                            break;
+                        }
+        }
+        else if (selected == 7 && (int) proc.getParam (ids::mdShape) == 5 && motionPlot().expanded (8.0f).contains (p)) drawKind = 1;
         else if (selected == 8 && (int) proc.getParam (ids::chMode) == 1 && chopPlot().expanded (2.0f, 8.0f).contains (p)) drawKind = 2;
         if (drawKind == 0) return false;
     }
@@ -811,6 +1016,34 @@ bool FXPage::drawAt (juce::Point<int> where, bool firstTouch)
         for (int k = 0; k <= count; ++k)
             proc.setParam (ids::mdPoint (drawLast + stepBy * k), count == 0 ? value : drawLastValue + (value - drawLastValue) * (float) k / (float) count);
         drawLast = point; drawLastValue = value;
+        repaint (well);
+        return true;
+    }
+    if (drawKind == 3)
+    {
+        // a box in the voice table: drag sideways. The interval moves a step every 14 pixels; the others cross their range in about 200.
+        const auto id = voiceParam (cellVoice, cellColumn);
+        const float dx = (float) (where.x - dragFrom.x);
+        if (cellColumn == 1) proc.setParam (id, (float) juce::jlimit (-14, 14, juce::roundToInt (cellStart) + juce::roundToInt (dx / 14.0f)));
+        else if (auto* param = proc.apvts.getParameter (id))
+        {
+            const auto range = param->getNormalisableRange();
+            proc.setParam (id, juce::jlimit (range.start, range.end, cellStart + dx / 200.0f * (range.end - range.start)));
+        }
+        repaint (well);
+        return true;
+    }
+    if (drawKind == 4)
+    {
+        for (int slot = 0; slot < 16; ++slot)
+            for (int note = 0; note < 12; ++note)
+                if (chordCell (slot, note).contains (p))
+                {
+                    const int chord = juce::roundToInt (proc.getParam (ids::hmChord (slot)));
+                    proc.setParam (ids::hmChord (slot), (float) (chordPaint ? (chord | (1 << note)) : (chord & ~(1 << note))));
+                    // drawing past the end of the loop makes the loop longer
+                    if (chordPaint && slot >= juce::roundToInt (proc.getParam (ids::hmChordCount))) proc.setParam (ids::hmChordCount, (float) (slot + 1));
+                }
         repaint (well);
         return true;
     }
@@ -866,6 +1099,21 @@ void FXPage::mouseDrag (const juce::MouseEvent& e)
     const auto wanted = fxorder::moved (now, dragTool, place);
     if (wanted != now) proc.setParam (ids::fxOrder, (float) fxorder::encode (wanted));
     repaint (rail);
+}
+
+void FXPage::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    // a box in Harmony's voice table goes back to how it came
+    if (selected != 3 || (int) proc.getParam (ids::hmMode) == 0) return;
+    for (int v = 0; v < 4; ++v)
+        for (int c = 1; c < 7; ++c)
+            if (voiceCell (v, c).contains (e.getPosition().toFloat()))
+                if (auto* param = proc.apvts.getParameter (voiceParam (v, c)))
+                {
+                    proc.setParam (voiceParam (v, c), param->getNormalisableRange().convertFrom0to1 (param->getDefaultValue()));
+                    repaint (well);
+                    return;
+                }
 }
 
 void FXPage::mouseUp (const juce::MouseEvent&)
@@ -938,6 +1186,7 @@ void FXPage::resized()
         auto top = p.removeFromTop (28);
         for (size_t i = 0; i < m.top.size(); ++i)
         {
+            if (! m.top[i]->isVisible()) continue;          // a control that belongs to another mode of the tool takes no room
             const int w = juce::jmin (m.topWidths[i], p.getWidth());
             if (w > top.getWidth()) { p.removeFromTop (8); top = p.removeFromTop (28); }
             m.top[i]->setBounds (top.removeFromLeft (w));

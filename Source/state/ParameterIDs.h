@@ -167,6 +167,24 @@ namespace ids
     inline const juce::String chGate      { "chGate" };
     inline const juce::String chSwing     { "chSwing" };
     inline juce::String chStep (int i)    { return "chS" + juce::String (i); }       // the pattern: sixteen step levels
+    // added in build 17: Shift's modes, and Harmony as separate voices, chords, voice leading and choir
+    inline const juce::String psMode      { "psMode" };
+    inline const juce::String psFine      { "psFine" };
+    inline const juce::String psDrive     { "psDrive" };
+    inline const juce::String psWidth     { "psWidth" };
+    inline const juce::String hmMode      { "hmMode" };
+    inline const juce::String hmLeading   { "hmLeading" };
+    inline const juce::String hmChoir     { "hmChoir" };
+    inline juce::String hmVoiceOn (int v)     { return "hmV" + juce::String (v + 1) + "On"; }
+    inline juce::String hmVoiceSteps (int v)  { return "hmV" + juce::String (v + 1) + "Steps"; }
+    inline juce::String hmVoiceLevel (int v)  { return "hmV" + juce::String (v + 1) + "Level"; }
+    inline juce::String hmVoicePan (int v)    { return "hmV" + juce::String (v + 1) + "Pan"; }
+    inline juce::String hmVoiceDelay (int v)  { return "hmV" + juce::String (v + 1) + "Delay"; }
+    inline juce::String hmVoiceSize (int v)   { return "hmV" + juce::String (v + 1) + "Size"; }
+    inline juce::String hmVoiceDetune (int v) { return "hmV" + juce::String (v + 1) + "Detune"; }
+    inline juce::String hmChord (int slot)    { return "hmChord" + juce::String (slot); }      // the notes of one chord: twelve bits, bit 0 = C
+    inline const juce::String hmChordCount { "hmChordCount" };    // how many of the sixteen chords are played before starting again
+    inline const juce::String hmChordLength { "hmChordLength" };  // how long each one lasts
     inline const juce::String fxOrder   { "fxOrder" };      // which order the in-line FX tools run in (see FxOrder.h)
     inline const juce::String dblDetune { "dblDetune" };
     inline const juce::String dblTiming { "dblTiming" };

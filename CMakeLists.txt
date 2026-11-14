@@ -37,6 +37,14 @@ juce_add_binary_data(MUAssets SOURCES
     Assets/fonts/Inter-Regular.ttf
     Assets/fonts/Inter-SemiBold.ttf)
 
+# MIDI in: Harmony can follow chords played on a keyboard. An Audio Unit effect is never sent MIDI by Logic (that
+# takes a separate "MIDI-controlled effect" plugin), so it is only switched on where the format can use it.
+if(WIN32)
+    set(MU_MIDI_INPUT TRUE)
+else()
+    set(MU_MIDI_INPUT FALSE)
+endif()
+
 juce_add_plugin(MusicallyUnorthodox
     COMPANY_NAME "Musically Unorthodox"
     COMPANY_WEBSITE "https://musicallyunorthodox.com"
@@ -46,7 +54,7 @@ juce_add_plugin(MusicallyUnorthodox
     FORMATS AU VST3 Standalone
     PRODUCT_NAME "Musically Unorthodox"
     IS_SYNTH FALSE
-    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_INPUT ${MU_MIDI_INPUT}
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
