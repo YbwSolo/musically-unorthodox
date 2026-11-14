@@ -7,7 +7,7 @@ MUEditor::MUEditor (MUProcessor& p)
     : AudioProcessorEditor (p), proc (p),
       status ([this] (const juce::String& s) { info.setStatus (s); }),
       header (p), rail (p), info (p),
-      mixPage (p, status), eqPage (p, status), dynamicsPage (p, status), tonePage (p), tunePage (p, status), fxPage (p, status), masterPage (p, status),
+      mixPage (p, status), eqPage (p, status), dynamicsPage (p, status), tonePage (p, status), tunePage (p, status), fxPage (p, status), masterPage (p, status),
       learnPage (p, status, [this] (int t) { showTab (t); }),
       brainPage (p, status),
       settings (p)

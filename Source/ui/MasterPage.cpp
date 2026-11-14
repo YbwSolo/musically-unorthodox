@@ -20,6 +20,8 @@ MasterPage::MasterPage (MUProcessor& p, std::function<void (const juce::String&)
       drive (p, ids::maxGain, "Drive"), ceiling (p, ids::targetTruePeak, "Ceiling"), target (p, ids::targetLufs, "Target"),
       autoLevel (p, ids::masterAutoTrim, "Auto level")
 {
+    useTabPresets (presets, proc, "master", setStatus);
+    addAndMakeVisible (presets);
     limiter.setPower (p, ids::peakGuard);
     for (auto* c : std::initializer_list<juce::Component*> { &loudness, &limiter, &checks, &drive, &ceiling, &target, &autoLevel, &resetMeasure, &makeMaster }) addAndMakeVisible (c);
     styleButton (resetMeasure, "Measure again", false, "master.history");
@@ -110,6 +112,7 @@ void MasterPage::updateChecks()
 
 void MasterPage::tick (float dt)
 {
+    presets.refresh();
     if (listenAs.getIndex() != (int) proc.getListenCheck()) listenAs.setIndex ((int) proc.getListenCheck());
     const int mode = (int) proc.getParam (ids::masterMode);
     for (int i = 0; i < 4; ++i)
@@ -304,6 +307,8 @@ void MasterPage::paintOverChildren (juce::Graphics& g)
 void MasterPage::resized()
 {
     auto r = getLocalBounds().reduced (12);
+    presets.setBounds (r.removeFromTop (26).removeFromRight (270));
+    r.removeFromTop (8);
     if (! isMaster) { bannerArea = r.removeFromTop (52); r.removeFromTop (10); makeMaster.setBounds (bannerArea.withTrimmedLeft (bannerArea.getWidth() - 186).reduced (0, 12).withTrimmedRight (14)); }
     makeMaster.setVisible (! isMaster);
 

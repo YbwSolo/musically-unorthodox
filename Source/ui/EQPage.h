@@ -22,6 +22,7 @@ public:
     void visibilityChanged() override;
 
 private:
+    PresetStrip presets { "eq.presets", "EQ presets" };
     void runAnalysis();
     void refreshReference();
     void askTutor();

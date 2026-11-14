@@ -1426,6 +1426,7 @@ juce::String MUProcessor::applyChainPreset (int index)
     if (index < 0 || index >= (int) presets.size()) return {};
     const auto& p = presets[(size_t) index];
     for (auto& pv : p.values) setParam (pv.id, pv.value);
+    for (auto* tab : { "eq", "dynamics", "tone", "master" }) apvts.state.removeProperty ("preset_" + juce::String (tab), nullptr);       // a whole chain replaces whatever a tab had loaded
     currentPreset = p.name;
     apvts.state.setProperty ("chainPresetName", currentPreset, nullptr);
     juce::String note;
@@ -1598,6 +1599,25 @@ std::vector<juce::String> MUProcessor::scopeParams (const juce::String& scope) c
 {
     std::vector<juce::String> ids;
     if (scope == "chain") { for (auto* p : abParams) ids.push_back (p->getParameterID()); return ids; }
+    // A tab's preset holds everything on that tab that shapes the sound, and nothing that belongs to the song
+    // (the role, the balance trim, the output level).
+    if (scope == "eq")
+    {
+        ids = { ids::eqEnabled, ids::eqAutoGain };
+        for (int b = 0; b < kNumEQBands; ++b)
+            for (auto& id : { ids::eqBandEnabled (b), ids::eqBandType (b), ids::eqBandFreq (b), ids::eqBandGain (b), ids::eqBandQ (b), ids::eqBandDyn (b),
+                              ids::eqBandThr (b), ids::eqBandRange (b), ids::eqBandSlope (b), ids::eqBandMode (b) }) ids.push_back (id);
+        return ids;
+    }
+    if (scope == "dynamics")
+        return { ids::gateOn, ids::gateThreshold, ids::gateRange, ids::gateAttack, ids::gateRelease, ids::gateHold,
+                 ids::compEnabled, ids::compThreshold, ids::compRatio, ids::compAttack, ids::compRelease, ids::compKnee, ids::compMakeup, ids::compAutoMakeup, ids::compMix, ids::compStyle, ids::compScHp,
+                 ids::dsOn, ids::dsFreq, ids::dsThreshold, ids::dsRange, ids::dsMode };
+    if (scope == "tone")
+        return { ids::smOn, ids::smDepth, ids::smFocus, ids::smSpeed, ids::satOn, ids::satDrive, ids::satMix, ids::satType,
+                 ids::riderOn, ids::riderTarget, ids::riderRange, ids::riderSpeed, ids::stWidth, ids::stMonoBass, ids::stMonoFreq, ids::vsEnabled, ids::vsAmount, ids::vsSpeed };
+    if (scope == "master")
+        return { ids::masterMode, ids::targetLufs, ids::targetTruePeak, ids::maxGain, ids::peakGuard };
     for (auto& preset : modulePresets())
         if (preset.module == scope)
             for (auto& v : preset.values)
@@ -1643,8 +1663,8 @@ juce::String MUProcessor::saveUserPreset (const juce::String& scope, const juce:
     if (isFactoryName (scope, p.name)) return "\"" + p.name + "\" is the name of a built-in preset. Choose a name of your own.";
     const auto ids = scopeParams (scope);
     for (auto& id : ids) if (apvts.getParameter (id) != nullptr) p.values.push_back ({ id, getParam (id) });
-    // a whole chain remembers how loud the track was, so its thresholds can follow a quieter or louder track later
-    if (scope == "chain" && loudness.getShortTerm() > -60.0f) p.level = toolLevel();
+    // anything with thresholds in it remembers how loud the track was, so they can follow a quieter or louder track later
+    if ((scope == "chain" || scope == "eq" || scope == "dynamics" || scope == "tone") && loudness.getShortTerm() > -60.0f) p.level = toolLevel();
     const auto result = UserPresets::save (p, replaceExisting);
     if (result.failed()) return result.getErrorMessage();
     if (scope == "chain") { currentPreset = p.name; apvts.state.setProperty ("chainPresetName", currentPreset, nullptr); }
@@ -1670,27 +1690,38 @@ juce::String MUProcessor::applyUserPreset (const UserPreset& preset)
     }
     if (set == 0) return "Nothing in that preset matches this version of the plugin.";
     juce::String note;
+    // Thresholds were set for the track the preset was saved on. If this one is louder or quieter, move the ones
+    // this preset holds by the difference, so the compressor, de-esser, gate and rider work as hard as they did there.
+    if (preset.level > -200.0f && loudness.getShortTerm() > -60.0f)
+    {
+        const float shift = toolLevel() - preset.level;
+        if (std::abs (shift) > 1.0f)
+        {
+            int moved = 0;
+            auto move = [&] (const juce::String& id, float lo, float hi)
+            {
+                if (std::find (allowed.begin(), allowed.end(), id) == allowed.end()) return;
+                setParam (id, juce::jlimit (lo, hi, getParam (id) + shift)); ++moved;
+            };
+            move (ids::compThreshold, -60.0f, 0.0f); move (ids::dsThreshold, -60.0f, 0.0f); move (ids::gateThreshold, -80.0f, 0.0f); move (ids::riderTarget, -40.0f, -6.0f);
+            for (int b = 0; b < kNumEQBands; ++b) move (ids::eqBandThr (b), -60.0f, 0.0f);
+            if (moved > 0)
+                note = " This track is " + juce::String (std::abs (shift), 1) + " dB " + (shift > 0.0f ? "louder" : "quieter") + " than the one it was saved on, so the thresholds were moved by that much.";
+        }
+    }
     if (preset.scope == "chain")
     {
         currentPreset = preset.name;
         apvts.state.setProperty ("chainPresetName", currentPreset, nullptr);
-        // Thresholds were set for the track the preset was saved on. If this one is louder or quieter, move them
-        // by the difference, so the compressor, de-esser, gate and rider work as hard as they did there.
-        if (preset.level > -200.0f && loudness.getShortTerm() > -60.0f)
-        {
-            const float shift = toolLevel() - preset.level;
-            if (std::abs (shift) > 1.0f)
-            {
-                auto move = [this, shift] (const juce::String& id, float lo, float hi) { setParam (id, juce::jlimit (lo, hi, getParam (id) + shift)); };
-                move (ids::compThreshold, -60.0f, 0.0f); move (ids::dsThreshold, -60.0f, 0.0f); move (ids::gateThreshold, -80.0f, 0.0f); move (ids::riderTarget, -40.0f, -6.0f);
-                for (int b = 0; b < kNumEQBands; ++b) move (ids::eqBandThr (b), -60.0f, 0.0f);
-                note = " This track is " + juce::String (std::abs (shift), 1) + " dB " + (shift > 0.0f ? "louder" : "quieter") + " than the one it was saved on, so the thresholds were moved by that much.";
-            }
-        }
+        for (auto* tab : { "eq", "dynamics", "tone", "master" }) apvts.state.removeProperty ("preset_" + juce::String (tab), nullptr);
         restartSpectrumAverage();
         resetMeasurement();
     }
-    else apvts.state.setProperty ("preset_" + preset.scope, preset.name, nullptr);
+    else
+    {
+        apvts.state.setProperty ("preset_" + preset.scope, preset.name, nullptr);
+        if (preset.scope == "eq") restartSpectrumAverage();
+    }
     rememberLoaded (preset.scope, allowed);
     if (skipped > 0) note << " " << skipped << (skipped == 1 ? " setting in it is" : " settings in it are") << " for controls this version does not have and " << (skipped == 1 ? "was" : "were") << " left out.";
     return "\"" + preset.name + "\" loaded (one of your presets)." + note;

@@ -8,7 +8,7 @@ namespace mu
 class TonePage : public juce::Component
 {
 public:
-    explicit TonePage (MUProcessor&);
+    TonePage (MUProcessor&, std::function<void (const juce::String&)> status);
     void tick (float dt);
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
@@ -17,6 +17,8 @@ public:
 
 private:
     MUProcessor& proc;
+    std::function<void (const juce::String&)> setStatus;
+    PresetStrip presets { "tone.presets", "Tone presets" };
     Section smooth { "Smooth" }, sat { "Saturation" }, rider { "Level rider" }, space { "Vocal space" }, stereo { "Stereo" }, output { "Output" };
     Knob smDepth; Segmented smFocus, smSpeed; IconButton smDelta { "phase", "sm.delta" };
     Segmented satType; Knob satDrive, satMix;

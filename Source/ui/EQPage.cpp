@@ -766,6 +766,8 @@ EQPage::EQPage (MUProcessor& p, std::function<void (const juce::String&)> status
     : proc (p), setStatus (std::move (status)),
       eqPower (p, ids::eqEnabled, "", "power"), autoGain (p, ids::eqAutoGain, "Auto gain")
 {
+    useTabPresets (presets, proc, "eq", setStatus);
+    addAndMakeVisible (presets);
     graph = std::make_unique<EQGraph> (proc, *this);
     chips = std::make_unique<BandChips> (proc, *this);
     suggestions = std::make_unique<SuggestionList> (proc, setStatus);
@@ -891,6 +893,7 @@ void EQPage::refreshReference()
 
 void EQPage::tick (float dt)
 {
+    presets.refresh();
     if (listening)
     {
         const float heard = proc.listenedSeconds();
@@ -971,6 +974,8 @@ void EQPage::resized()
     resetButton.setBounds (tb.removeFromRight (30));
     tb.removeFromRight (6);
     deltaButton.setBounds (tb.removeFromRight (30));
+    tb.removeFromRight (10);
+    presets.setBounds (tb.removeFromRight (juce::jmin (230, tb.getWidth())));
     r.removeFromTop (8);
 
     if (controls != nullptr) controls->setBounds (r.removeFromBottom (112));

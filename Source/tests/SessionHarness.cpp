@@ -1054,6 +1054,48 @@ int main()
                                                "{ \"rvMix\": 5000, \"compRatio\": 20, \"role\": 3, \"notAControl\": 1 } }");
         check (near (vocal->getParam (ids::rvMix), 100.0f, 0.01f) && near (vocal->getParam (ids::compRatio), ratioBefore, 0.01f) && (int) vocal->getParam (ids::role) == (int) Role::Vocal && sneaky.contains ("left out"),
                "A reverb preset can only move reverb controls, and a value outside a control's range is brought inside it", sneaky);
+        // one tab: that tab's controls and nothing else, for each of the four tabs that have no tool list of their own
+        {
+            struct Tab { const char* scope; juce::String mine, other; float saved, moved, otherMoved; };
+            const Tab tabs[] = { { "eq", ids::eqBandGain (3), ids::compRatio, 4.5f, -2.0f, 7.0f },
+                                 { "dynamics", ids::compRatio, ids::satDrive, 5.0f, 2.0f, 9.0f },
+                                 { "tone", ids::satDrive, ids::compRatio, 7.0f, 1.0f, 6.0f },
+                                 { "master", ids::targetLufs, ids::satDrive, -11.0f, -16.0f, 4.0f } };
+            bool allGood = true; juce::String detail;
+            for (auto& t : tabs)
+            {
+                vocal->setParam (t.mine, t.saved);
+                bool saved = false;
+                vocal->saveUserPreset (t.scope, juce::String ("Mine ") + t.scope, false, &saved);
+                vocal->setParam (t.mine, t.moved); vocal->setParam (t.other, t.otherMoved);
+                const auto said4 = vocal->loadUserPreset (t.scope, juce::String ("Mine ") + t.scope);
+                const bool good = saved && near (vocal->getParam (t.mine), t.saved, 0.05f) && near (vocal->getParam (t.other), t.otherMoved, 0.05f)
+                                  && vocal->getModulePresetName (t.scope) == juce::String ("Mine ") + t.scope && ! vocal->presetEdited (t.scope);
+                if (! good) { allGood = false; detail << t.scope << ": " << said4 << " "; }
+            }
+            // the role, the balance trim and the output level never travel in a tab's preset
+            bool songThings = false;
+            for (auto* scope : { "eq", "dynamics", "tone", "master" })
+                for (auto& id : vocal->scopeParams (scope))
+                    if (id == ids::role || id == ids::trim || id == ids::outputGain || id == ids::bypass) songThings = true;
+            check (allGood && ! songThings, "EQ, Dynamics, Tone and Master each save and load a preset of their own that holds that tab and nothing else", detail);
+            // a dynamics preset follows the level of the track it is loaded on, like a whole chain does
+            vocal->setParam (ids::compThreshold, -24.0f);
+            runSeconds (1.0); remeasure(); runSeconds (5.0);
+            bool saved = false;
+            vocal->saveUserPreset ("dynamics", "Level test", false, &saved);
+            const float wasGain2 = vocalGain; vocalGain *= 0.5f;
+            runSeconds (1.0); remeasure(); runSeconds (5.0);
+            const auto said5 = vocal->loadUserPreset ("dynamics", "Level test");
+            check (saved && near (vocal->getParam (ids::compThreshold), -30.0f, 1.5f) && said5.contains ("quieter"), "A Dynamics preset loaded on a track 6 dB quieter moves its thresholds down with it", said5);
+            vocalGain = wasGain2;
+            // loading a whole chain clears the name a tab was showing
+            vocal->applyChainPreset (findChainPreset ("Clean slate"));
+            check (vocal->getModulePresetName ("dynamics").isEmpty() && vocal->getModulePresetName ("eq").isEmpty(), "Loading a whole chain clears the names the tabs were showing");
+            vocal->setParam (ids::role, (float) Role::Auto);
+            runSeconds (1.0); remeasure(); runSeconds (3.0);
+        }
+
         // nothing half-written is ever left behind
         int strays = 0; for (auto& f : presetRoot.findChildFiles (juce::File::findFiles, true)) if (! f.hasFileExtension (".mupreset")) ++strays;
         check (strays == 0, "Saving leaves no temporary files behind");

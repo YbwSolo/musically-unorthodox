@@ -133,6 +133,9 @@ private:
     std::function<void (const juce::String&)> status;
 };
 
+// A whole tab's own presets (EQ, Dynamics, Tone, Master): no built-in list, only what the person has saved.
+void useTabPresets (PresetStrip& strip, MUProcessor& proc, const juce::String& scope, std::function<void (const juce::String&)> say);
+
 // The menu entries and prompts for someone's own presets, shared by the tool strips and the header's Presets menu.
 namespace ownpresets
 {

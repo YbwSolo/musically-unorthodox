@@ -16,6 +16,7 @@ public:
     void mouseExit (const juce::MouseEvent&) override;
 
 private:
+    PresetStrip presets { "master.presets", "Master presets" };
     struct Check { int state = 0; juce::String title, detail; };   // 0 not measured, 1 good, 2 needs attention
     void updateChecks();
     int cardAt (juce::Point<int> p) const;

@@ -17,6 +17,7 @@ public:
     void resized() override;
 
 private:
+    PresetStrip presets { "dyn.presets", "Dynamics presets" };
     MUProcessor& proc;
     std::function<void (const juce::String&)> setStatus;
     Section compSection { "Compressor" }, gateSection { "Gate" }, deEssSection { "De-esser" };

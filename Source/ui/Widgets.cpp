@@ -452,7 +452,7 @@ void PresetStrip::showMenu()
     juce::PopupMenu menu;
     menu.setLookAndFeel (&getLookAndFeel());
     const auto now = current ? current() : juce::String();
-    if (proc != nullptr && scope) menu.addSectionHeader ("Built in");
+    if (proc != nullptr && scope && ! list.isEmpty()) menu.addSectionHeader ("Built in");
     for (int i = 0; i < list.size(); ++i) menu.addItem (i + 1, list[i], true, list[i] == now);
     juce::StringArray own;
     if (proc != nullptr && scope) own = ownpresets::addToMenu (menu, *proc, scope());
@@ -464,6 +464,14 @@ void PresetStrip::showMenu()
             safe->choose (result - 1);
             safe->refresh();
         });
+}
+
+void useTabPresets (PresetStrip& strip, MUProcessor& proc, const juce::String& scope, std::function<void (const juce::String&)> say)
+{
+    strip.names = [] { return juce::StringArray(); };
+    strip.current = [&proc, scope] { return proc.getModulePresetName (scope); };
+    strip.choose = [] (int) {};
+    strip.enableOwnPresets (proc, [scope] { return scope; }, std::move (say));
 }
 
 void PresetStrip::resized()

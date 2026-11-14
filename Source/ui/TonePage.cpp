@@ -5,8 +5,8 @@ namespace mu
 {
 using namespace theme;
 
-TonePage::TonePage (MUProcessor& p)
-    : proc (p),
+TonePage::TonePage (MUProcessor& p, std::function<void (const juce::String&)> status)
+    : proc (p), setStatus (std::move (status)),
       smDepth (p, ids::smDepth, "Depth"), smFocus (p, ids::smFocus, { "Full range", "Low mids", "Harsh highs" }), smSpeed (p, ids::smSpeed, { "Slow", "Normal", "Fast" }),
       satType (p, ids::satType, { "Tape", "Tube", "Warm" }), satDrive (p, ids::satDrive, "Drive"), satMix (p, ids::satMix, "Mix"),
       riderTarget (p, ids::riderTarget, "Target"), riderRange (p, ids::riderRange, "Range"), riderSpeed (p, ids::riderSpeed, { "Slow", "Normal", "Fast" }),
@@ -14,6 +14,8 @@ TonePage::TonePage (MUProcessor& p)
       stWidth (p, ids::stWidth, "Width"), stMonoFreq (p, ids::stMonoFreq, "Mono below"), stMonoBass (p, ids::stMonoBass, "Mono bass"),
       outGain (p, ids::outputGain, "Output"), trim (p, ids::trim, "Balance trim")
 {
+    useTabPresets (presets, proc, "tone", setStatus);
+    addAndMakeVisible (presets);
     smooth.setPower (p, ids::smOn); sat.setPower (p, ids::satOn); rider.setPower (p, ids::riderOn); space.setPower (p, ids::vsEnabled);
     for (auto* c : std::initializer_list<juce::Component*> { &smooth, &sat, &rider, &space, &stereo, &output, &smDepth, &smFocus, &smSpeed, &smDelta, &satType, &satDrive, &satMix,
                                                               &riderTarget, &riderRange, &riderSpeed, &vsAmount, &vsSpeed, &stWidth, &stMonoFreq, &stMonoBass, &outGain, &trim })
@@ -34,6 +36,7 @@ void TonePage::visibilityChanged()
 
 void TonePage::tick (float dt)
 {
+    presets.refresh();
     const auto& sm = proc.getSmoother();
     for (int i = 0; i < Smoother::kBands; ++i)
     {
@@ -228,6 +231,8 @@ void TonePage::paintOverChildren (juce::Graphics& g)
 void TonePage::resized()
 {
     auto r = getLocalBounds().reduced (12);
+    presets.setBounds (r.removeFromTop (26).removeFromRight (270));
+    r.removeFromTop (8);
     auto top = r.removeFromTop ((r.getHeight() - 10) * 55 / 100);
     r.removeFromTop (10);
 

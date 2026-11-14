@@ -171,6 +171,8 @@ DynamicsPage::DynamicsPage (MUProcessor& p, std::function<void (const juce::Stri
       dFreq (p, ids::dsFreq, "Frequency"), dThr (p, ids::dsThreshold, "Threshold"), dRange (p, ids::dsRange, "Range"),
       dMode (p, ids::dsMode, { "Split band", "Wide band" })
 {
+    useTabPresets (presets, proc, "dynamics", setStatus);
+    addAndMakeVisible (presets);
     scope = std::make_unique<CompScope> (proc);
     curve = std::make_unique<TransferCurve> (proc);
     compSection.setPower (proc, ids::compEnabled);
@@ -187,6 +189,7 @@ DynamicsPage::~DynamicsPage() = default;
 
 void DynamicsPage::tick (float dt)
 {
+    presets.refresh();
     curve->tick (dt);
     scope->repaint();
     curve->repaint();
@@ -217,6 +220,8 @@ void DynamicsPage::paint (juce::Graphics& g)
 void DynamicsPage::resized()
 {
     auto r = getLocalBounds().reduced (12);
+    presets.setBounds (r.removeFromTop (26).removeFromRight (270));
+    r.removeFromTop (8);
     auto bottom = r.removeFromBottom (168);
     r.removeFromBottom (10);
     compSection.setBounds (r);
