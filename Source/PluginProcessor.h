@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <map>
+#include "state/FxOrder.h"
 #include "state/ParameterIDs.h"
 #include "state/ParameterLayout.h"
 #include "state/ChainPresets.h"
@@ -383,6 +384,10 @@ private:
     AF pTuneFlex = nullptr, pTuneHumanise = nullptr, pTuneSlides = nullptr, pHmHumanise = nullptr;
     AF pRvSize = nullptr, pRvDiffusion = nullptr, pRvModDepth = nullptr, pRvModRate = nullptr, pRvLowDecay = nullptr, pRvEarly = nullptr, pRvFreeze = nullptr, pRvShimmer = nullptr;
     AF pDlStyle = nullptr, pDlPattern = nullptr, pDlDrive = nullptr, pDlWobble = nullptr, pDlLowCut = nullptr;
+    AF pFxOrder = nullptr;
+    int fxOrderNow = 0;                        // audio thread: the order in force
+    fxorder::Order fxOrderList = fxorder::decode (0);
+    float fxOrderGain = 1.0f;                  // dips to nothing for a moment while the order changes, so it cannot click
     AF pPsOn = nullptr, pPsSemis = nullptr, pPsCharacter = nullptr, pPsMix = nullptr;
     AF pPhOn = nullptr, pPhAmount = nullptr, pPhTone = nullptr, pPhDrive = nullptr;
     AF pLfOn = nullptr, pLfCrush = nullptr, pLfWobble = nullptr, pLfMix = nullptr;

@@ -17,6 +17,8 @@ public:
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
 
 private:
     struct ModuleUI
@@ -28,6 +30,14 @@ private:
     };
     void select (int index);
     juce::Rectangle<int> rowBounds (int index) const;
+    // The rail lists the tools in the order the sound meets them: the three voice tools that work side by side,
+    // then the six in-line tools in the order chosen (drag one to move it).
+    int slotOf (int module) const;                 // which row of the rail a tool is on
+    int chainTool (int module) const;              // its place in fxorder::Tool, or -1 for the voice tools
+    int dragTool = -1, shownOrder = -1;
+    bool dragging = false;
+    juce::Point<int> dragFrom;
+    juce::Rectangle<int> orderNote;
     void drawDoubles (juce::Graphics&, juce::Rectangle<float>);
     void drawEcho (juce::Graphics&, juce::Rectangle<float>);
     void drawReverb (juce::Graphics&, juce::Rectangle<float>);

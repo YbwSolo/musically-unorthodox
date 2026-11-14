@@ -28,6 +28,7 @@
 #include "dsp/Reverb.h"
 #include "dsp/Echo.h"
 #include "dsp/PitchFX.h"
+#include "state/FxOrder.h"
 #include "dsp/ColourFX.h"
 #include "dsp/PeakGuard.h"
 #include "dsp/KeyFinder.h"
@@ -649,6 +650,26 @@ int main()
         runBlocks (mx5, music, 512);
         check (rmsDb (music) - before > 4.0f && measureTp (music) <= -0.9f, "Driving the maximizer raises loudness under the same ceiling",
                "+" + juce::String (rmsDb (music) - before, 1) + " dB RMS, " + juce::String (measureTp (music), 2) + " dBTP");
+    }
+
+    // --- FX order: one number for every order of the six in-line tools
+    {
+        namespace fo = mu::fxorder;
+        bool roundTrip = true, allDifferent = true;
+        std::vector<fo::Order> seen;
+        for (int n = 0; n < fo::kOrders; ++n)
+        {
+            const auto o = fo::decode (n);
+            if (fo::encode (o) != n) roundTrip = false;
+            int mask = 0; for (int t : o) mask |= 1 << t;
+            if (mask != 63 || std::find (seen.begin(), seen.end(), o) != seen.end()) allDifferent = false;
+            seen.push_back (o);
+        }
+        const fo::Order standard { fo::Phone, fo::Lofi, fo::Motion, fo::Chop, fo::Delay, fo::Reverb };
+        const fo::Order reverbFirst { fo::Reverb, fo::Phone, fo::Lofi, fo::Motion, fo::Chop, fo::Delay };
+        check (roundTrip && allDifferent && fo::decode (0) == standard && fo::moved (standard, fo::Reverb, 0) == reverbFirst && fo::moved (reverbFirst, fo::Reverb, 5) == standard
+               && fo::decode (-5) == standard && fo::decode (99999) == fo::decode (fo::kOrders - 1),
+               "Every one of the 720 FX orders has its own number, number 0 is the order older songs were made with, and moving a tool keeps the rest in sequence");
     }
 
     // --- Mix Brain: tonal analysis

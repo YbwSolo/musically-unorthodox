@@ -149,6 +149,7 @@ namespace ids
     // Doubler
     inline const juce::String dblOn     { "dblOn" };
     inline const juce::String dblMix    { "dblMix" };
+    inline const juce::String fxOrder   { "fxOrder" };      // which order the in-line FX tools run in (see FxOrder.h)
     inline const juce::String dblDetune { "dblDetune" };
     inline const juce::String dblTiming { "dblTiming" };
     inline const juce::String dblWidth  { "dblWidth" };

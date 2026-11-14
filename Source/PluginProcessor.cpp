@@ -39,6 +39,7 @@ MUProcessor::MUProcessor()
     pRvSize = p (ids::rvSize); pRvDiffusion = p (ids::rvDiffusion); pRvModDepth = p (ids::rvModDepth); pRvModRate = p (ids::rvModRate);
     pRvLowDecay = p (ids::rvLowDecay); pRvEarly = p (ids::rvEarly); pRvFreeze = p (ids::rvFreeze); pRvShimmer = p (ids::rvShimmer);
     pDlStyle = p (ids::dlStyle); pDlPattern = p (ids::dlPattern); pDlDrive = p (ids::dlDrive); pDlWobble = p (ids::dlWobble); pDlLowCut = p (ids::dlLowCut);
+    pFxOrder = p (ids::fxOrder);
     pPsOn = p (ids::psOn); pPsSemis = p (ids::psSemis); pPsCharacter = p (ids::psCharacter); pPsMix = p (ids::psMix);
     pPhOn = p (ids::phOn); pPhAmount = p (ids::phAmount); pPhTone = p (ids::phTone); pPhDrive = p (ids::phDrive);
     pLfOn = p (ids::lfOn); pLfCrush = p (ids::lfCrush); pLfWobble = p (ids::lfWobble); pLfMix = p (ids::lfMix);
@@ -356,12 +357,28 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
                 pitchFx.process (buffer);       // off: lets it reset
                 doubler.process (buffer);
             }
-            phone.process (buffer);
-            lofi.process (buffer);
-            motion.process (buffer);
-            chop.process (buffer);
-            echo.process (buffer);
-            reverb.process (buffer);
+            // The six in-line tools, in the order chosen on the FX tab. A change of order takes one block to fade
+            // the track out and the next to fade it back in, with the swap in the silence between.
+            const int wantOrder = juce::jlimit (0, fxorder::kOrders - 1, juce::roundToInt (pFxOrder->load()));
+            for (int tool : fxOrderList)
+                switch (tool)
+                {
+                    case fxorder::Phone:  phone.process (buffer); break;
+                    case fxorder::Lofi:   lofi.process (buffer); break;
+                    case fxorder::Motion: motion.process (buffer); break;
+                    case fxorder::Chop:   chop.process (buffer); break;
+                    case fxorder::Delay:  echo.process (buffer); break;
+                    case fxorder::Reverb: reverb.process (buffer); break;
+                    default: break;
+                }
+            if (wantOrder != fxOrderNow || fxOrderGain < 1.0f)
+            {
+                const float step = (float) n / (float) (0.008 * juce::jmax (8000.0, getSampleRate()));
+                const float to = wantOrder != fxOrderNow ? juce::jmax (0.0f, fxOrderGain - step) : juce::jmin (1.0f, fxOrderGain + step);
+                buffer.applyGainRamp (0, n, fxOrderGain, to);
+                fxOrderGain = to;
+                if (wantOrder != fxOrderNow && fxOrderGain <= 0.0f) { fxOrderNow = wantOrder; fxOrderList = fxorder::decode (wantOrder); }
+            }
             stereo.process (buffer);
             outGain.setTargetValue (juce::Decibels::decibelsToGain (pOut->load()));
             applySmoothedGain (outGain);
@@ -902,6 +919,7 @@ juce::String MUProcessor::applySound (int index)
     if (index < 0 || index >= (int) all.size()) return {};
     const auto& sound = all[(size_t) index];
     for (auto& m : fxModules()) { setParam (m.onParam, 0.0f); apvts.state.removeProperty ("preset_" + m.id, nullptr); }
+    setParam (ids::fxOrder, 0.0f);          // the sounds were made for the standard order
     for (auto& v : sound.values)
     {
         if (v.id == kRootOnly)
@@ -1425,6 +1443,7 @@ juce::String MUProcessor::applyChainPreset (int index)
     const auto& presets = chainPresets();
     if (index < 0 || index >= (int) presets.size()) return {};
     const auto& p = presets[(size_t) index];
+    setParam (ids::fxOrder, 0.0f);          // the built-in chains were made for the standard order
     for (auto& pv : p.values) setParam (pv.id, pv.value);
     for (auto* tab : { "eq", "dynamics", "tone", "master" }) apvts.state.removeProperty ("preset_" + juce::String (tab), nullptr);       // a whole chain replaces whatever a tab had loaded
     currentPreset = p.name;
@@ -1678,6 +1697,8 @@ juce::String MUProcessor::applyUserPreset (const UserPreset& preset)
 {
     const auto allowed = scopeParams (preset.scope);
     if (allowed.empty()) return "That preset is for a tool this version of the plugin does not have.";
+    // a chain saved before the FX order could be changed was made with the standard order
+    if (preset.scope == "chain") setParam (ids::fxOrder, 0.0f);
     int set = 0, skipped = preset.skipped;
     for (auto& v : preset.values)
     {

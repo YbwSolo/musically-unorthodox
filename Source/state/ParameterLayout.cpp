@@ -172,6 +172,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     p.push_back (std::make_unique<APC> (id (ids::dblVoices), "Doubler voices", juce::StringArray { "Double", "Stack" }, 0));
 
     // ---- reverb
+    p.push_back (std::make_unique<juce::AudioParameterInt> (id (ids::fxOrder), "FX order", 0, 719, 0, juce::AudioParameterIntAttributes().withAutomatable (false)));
     p.push_back (std::make_unique<APB> (id (ids::rvOn), "Reverb", false));
     p.push_back (std::make_unique<APF> (id (ids::rvMix), "Reverb level", range (0.0f, 100.0f, 0.1f), 18.0f, pctAttr()));
     p.push_back (std::make_unique<APB> (id (ids::rvAuto), "Reverb timed to tempo", true));

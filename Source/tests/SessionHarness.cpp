@@ -681,6 +681,77 @@ int main()
         check (accepted && right > 1.0 && diff > right * 0.02, "Mono in, stereo out is supported and gives a mono vocal wide doubles", "accepted " + juce::String ((int) accepted));
     }
 
+    // ---- the order of the in-line FX tools
+    {
+        namespace fo = mu::fxorder;
+        auto fresh = [&] (std::unique_ptr<MUProcessor>& p, int order)
+        {
+            p = std::make_unique<MUProcessor>();
+            p->setRateAndBufferSizeDetails (fs, block);
+            p->prepareToPlay (fs, block);
+            p->setParam (ids::lfOn, 1.0f); p->setParam (ids::lfCrush, 80.0f); p->setParam (ids::lfMix, 100.0f); p->setParam (ids::rvOn, 1.0f); p->setParam (ids::rvMix, 40.0f);
+            p->setParam (ids::fxOrder, (float) order);
+        };
+        const int reverbFirst = fo::encode (fo::moved (fo::decode (0), fo::Reverb, 0));       // Reverb, then Phone, Lo-fi, Motion, Chop, Delay
+        std::unique_ptr<MUProcessor> standard, swapped, swappedAgain;
+        fresh (standard, 0); fresh (swapped, reverbFirst); fresh (swappedAgain, reverbFirst);
+        juce::AudioBuffer<float> a (2, block), b (2, block), c (2, block);
+        double sum = 0.0, diffOrder = 0.0, diffSame = 0.0;
+        for (int n = 0; n < 200; ++n)
+        {
+            for (int i = 0; i < block; ++i)
+            {
+                // a short note twice a second, so there are tails to hear
+                const int at = (n * block + i) % (int) (fs * 0.5);
+                const float v = at < (int) (fs * 0.12) ? 0.3f * (float) (std::sin (juce::MathConstants<double>::twoPi * 330.0 * at / fs) + 0.5 * std::sin (juce::MathConstants<double>::twoPi * 2640.0 * at / fs)) : 0.0f;
+                for (auto* buf : { &a, &b, &c }) { buf->setSample (0, i, v); buf->setSample (1, i, v); }
+            }
+            standard->processBlock (a, midi); swapped->processBlock (b, midi); swappedAgain->processBlock (c, midi);
+            if (n > 60) for (int i = 0; i < block; ++i)
+            {
+                sum += (double) a.getSample (0, i) * a.getSample (0, i);
+                diffOrder += std::pow ((double) a.getSample (0, i) - b.getSample (0, i), 2.0);
+                diffSame += std::pow ((double) b.getSample (0, i) - c.getSample (0, i), 2.0);
+            }
+        }
+        const double byOrder = 10.0 * std::log10 (diffOrder / juce::jmax (1.0e-12, sum) + 1.0e-12), same = 10.0 * std::log10 (diffSame / juce::jmax (1.0e-12, sum) + 1.0e-12);
+        check (byOrder > -30.0 && same < -60.0, "Reverb before Lo-fi sounds different from Lo-fi before Reverb, and the same order gives the same sound",
+               "difference " + juce::String (byOrder, 1) + " dB against the signal between the two orders, " + juce::String (same, 1) + " dB between two runs of one order");
+
+        // changing the order while the song plays: the track dips for a moment and comes back, with no step in it
+        std::unique_ptr<MUProcessor> live;
+        fresh (live, 0);
+        live->setParam (ids::lfOn, 0.0f); live->setParam (ids::rvOn, 0.0f);
+        float worstStep = 0.0f, lowest = 1.0f, after = 0.0f; double phase = 0.0;
+        for (int n = 0; n < 120; ++n)
+        {
+            if (n == 60) live->setParam (ids::fxOrder, (float) reverbFirst);
+            for (int i = 0; i < block; ++i) { phase += juce::MathConstants<double>::twoPi * 220.0 / fs; const float v = 0.3f * (float) std::sin (phase); a.setSample (0, i, v); a.setSample (1, i, v); }
+            live->processBlock (a, midi);
+            if (n >= 58)
+            {
+                for (int i = 2; i < block; ++i) worstStep = juce::jmax (worstStep, std::abs (a.getSample (0, i) - 2.0f * a.getSample (0, i - 1) + a.getSample (0, i - 2)));
+                if (n < 66) lowest = juce::jmin (lowest, a.getMagnitude (0, block - 48, 48));        // the end of each block: the swap happens between blocks
+                if (n > 100) after = juce::jmax (after, a.getMagnitude (0, 0, block));
+            }
+        }
+        const float steadyCurve = 0.3f * (float) std::pow (juce::MathConstants<double>::twoPi * 220.0 / fs, 2.0);       // the second difference of the tone itself
+        check (worstStep < steadyCurve * 6.0f && lowest < 0.05f && after > 0.2f && juce::roundToInt (live->getParam (ids::fxOrder)) == reverbFirst,
+               "Changing the FX order during playback fades the track out and back in with no click",
+               "largest step " + juce::String (worstStep / steadyCurve, 1) + " times the tone's own curve; dips to " + juce::String (lowest, 3) + " and returns to " + juce::String (after, 2));
+        // the order travels with a chain preset of your own, and the built-in chains and sounds go back to the standard order
+        live->setParam (ids::fxOrder, (float) reverbFirst);        // A has Reverb first
+        live->switchAB();                                          // to B
+        live->setParam (ids::fxOrder, 0.0f);                       // B has the standard order
+        live->switchAB();                                          // back to A
+        const bool abKeeps = juce::roundToInt (live->getParam (ids::fxOrder)) == reverbFirst;
+        live->applyChainPreset (findChainPreset ("Rap vocal - punchy"));
+        const bool chainResets = juce::roundToInt (live->getParam (ids::fxOrder)) == 0;
+        live->setParam (ids::fxOrder, (float) reverbFirst);
+        live->applySound (0);
+        check (abKeeps && chainResets && juce::roundToInt (live->getParam (ids::fxOrder)) == 0, "The order is part of A/B, and a built-in chain or sound puts it back to the standard order");
+    }
+
     // ---- build 11: names, song key, hot peaks, presets and sounds, graph, reverb fit, checks
     {
         auto named = [] (MUProcessor& p, const juce::String& name) { juce::AudioProcessor::TrackProperties props; props.name = name; p.updateTrackProperties (props); };

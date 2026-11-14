@@ -12,7 +12,7 @@ juce::String midiName (int note)
     static const char* const names[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
     return juce::String (names[((note % 12) + 12) % 12]) + juce::String (note / 12 - 1);
 }
-constexpr int kRowH = 44, kRailW = 222;
+constexpr int kRowH = 42, kRailW = 222, kOrderGap = 22;
 }
 
 FXPage::FXPage (MUProcessor& p, std::function<void (const juce::String&)> status)
@@ -117,11 +117,38 @@ void FXPage::select (int index)
     repaint();
 }
 
-juce::Rectangle<int> FXPage::rowBounds (int index) const { return { railList.getX(), railList.getY() + index * kRowH, railList.getWidth(), kRowH }; }
+// fxModules(): 0 doubler, 1 delay, 2 reverb, 3 harmony, 4 shift, 5 phone, 6 lofi, 7 motion, 8 chop
+int FXPage::chainTool (int module) const
+{
+    switch (module)
+    {
+        case 5: return fxorder::Phone;   case 6: return fxorder::Lofi;   case 7: return fxorder::Motion;
+        case 8: return fxorder::Chop;    case 1: return fxorder::Delay;  case 2: return fxorder::Reverb;
+        default: return -1;
+    }
+}
+
+int FXPage::slotOf (int module) const
+{
+    if (module == 0) return 0;
+    if (module == 3) return 1;
+    if (module == 4) return 2;
+    const auto order = fxorder::decode (juce::roundToInt (proc.getParam (ids::fxOrder)));
+    const int tool = chainTool (module);
+    for (int place = 0; place < fxorder::kCount; ++place) if (order[(size_t) place] == tool) return 3 + place;
+    return 3;
+}
+
+juce::Rectangle<int> FXPage::rowBounds (int index) const
+{
+    const int slot = slotOf (index);
+    return { railList.getX(), railList.getY() + slot * kRowH + (slot >= 3 ? kOrderGap : 0), railList.getWidth(), kRowH };
+}
 
 void FXPage::tick (float dt)
 {
     sounds.refresh(); presets.refresh();
+    if (const int order = juce::roundToInt (proc.getParam (ids::fxOrder)); order != shownOrder) { shownOrder = order; resized(); repaint (rail); }
     const auto& d = proc.getDoubler();
     for (int v = 0; v < 4; ++v)
     {
@@ -174,13 +201,25 @@ void FXPage::paint (juce::Graphics& g)
         const bool on = proc.getParam (modules[(size_t) i].onParam) > 0.5f;
         if (i == selected) { g.setColour (raised); g.fillRoundedRectangle (row.toFloat().reduced (0.0f, 2.0f), 5.0f); g.setColour (yellow); g.fillRect (row.getX(), row.getY() + 8, 3, row.getHeight() - 16); }
         else if (i == hoverRow) { g.setColour (raised.withAlpha (0.5f)); g.fillRoundedRectangle (row.toFloat().reduced (0.0f, 2.0f), 5.0f); }
-        if (i == 3) { g.setColour (line); g.fillRect (row.getX() + 10, row.getY() - 1, row.getWidth() - 20, 1); }      // space tools above, voice and colour tools below
+        if (chainTool (i) >= 0)
+        {
+            // a grip on the tools that can be moved
+            g.setColour (i == selected || i == hoverRow ? textDim : textMute.withAlpha (0.6f));
+            for (int k = -1; k <= 1; ++k) g.fillRect (row.getRight() - 20, row.getCentreY() + k * 4, 10, 1);
+            if (dragging && chainTool (i) == dragTool) { g.setColour (yellow.withAlpha (0.5f)); g.drawRoundedRectangle (row.toFloat().reduced (0.5f, 2.5f), 5.0f, 1.0f); }
+        }
         auto textArea = row.withTrimmedLeft (48).withTrimmedRight (8);
         g.setFont (bodyBold (13.5f)); g.setColour (on ? text : textDim);
         g.drawText (modules[(size_t) i].name, textArea.removeFromTop (row.getHeight() / 2 + 3), juce::Justification::bottomLeft);
         g.setFont (body (10.5f)); g.setColour (on ? yellow.withAlpha (0.4f + 0.6f * glow[(size_t) i]) : textMute);
         const auto loaded = proc.getModulePresetName (modules[(size_t) i].id);
         g.drawText (on ? (loaded.isEmpty() ? juce::String ("On") : loaded) : juce::String ("Off"), textArea, juce::Justification::topLeft, true);
+    }
+    {
+        // between the voice tools and the in-line ones
+        g.setColour (line); g.fillRect (orderNote.getX() + 6, orderNote.getY() + 3, orderNote.getWidth() - 12, 1);
+        g.setFont (body (10.0f)); g.setColour (textMute);
+        g.drawText ("Then these, in this order. Drag to change it.", orderNote.withTrimmedTop (5).reduced (6, 0), juce::Justification::centredLeft, true);
     }
     if (! proc.isStereoOut())
     {
@@ -655,8 +694,39 @@ void FXPage::mouseDown (const juce::MouseEvent& e)
         {
             select (i);
             setStatus (fxModules()[(size_t) i].name + ": " + fxModules()[(size_t) i].blurb);
+            dragTool = chainTool (i); dragFrom = e.getPosition(); dragging = false;
             return;
         }
+    dragTool = -1;
+}
+
+void FXPage::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragTool < 0) return;
+    if (! dragging && std::abs (e.getPosition().y - dragFrom.y) < 6) return;
+    dragging = true;
+    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    // the place under the pointer, counted among the six in-line rows
+    const int top = railList.getY() + 3 * kRowH + kOrderGap;
+    const int place = juce::jlimit (0, fxorder::kCount - 1, (e.getPosition().y - top) / kRowH);
+    const auto now = fxorder::decode (juce::roundToInt (proc.getParam (ids::fxOrder)));
+    const auto wanted = fxorder::moved (now, dragTool, place);
+    if (wanted != now) proc.setParam (ids::fxOrder, (float) fxorder::encode (wanted));
+    repaint (rail);
+}
+
+void FXPage::mouseUp (const juce::MouseEvent&)
+{
+    if (dragging)
+    {
+        juce::StringArray names;
+        const auto order = fxorder::decode (juce::roundToInt (proc.getParam (ids::fxOrder)));
+        for (int tool : order)
+            for (int i = 0; i < (int) fxModules().size(); ++i) if (chainTool (i) == tool) names.add (fxModules()[(size_t) i].name);
+        setStatus ("The sound now goes through " + names.joinIntoString (", then ") + ". The order is saved with the song and in your chain presets.");
+    }
+    dragging = false; dragTool = -1;
+    repaint (rail);
 }
 
 void FXPage::mouseMove (const juce::MouseEvent& e)
@@ -666,6 +736,7 @@ void FXPage::mouseMove (const juce::MouseEvent& e)
     for (int i = 0; i < (int) fxModules().size(); ++i) if (rowBounds (i).contains (e.getPosition())) row = i;
     if (row != hoverRow) { hoverRow = row; repaint (rail); }
     if (row >= 0) key = fxModules()[(size_t) row].onParam;
+    else if (orderNote.contains (e.getPosition())) key = "fxOrder";
     else if (well.contains (e.getPosition())) key = selected == 2 ? juce::String ("rv.display") : selected == 1 ? juce::String ("dl.display") : fxModules()[(size_t) selected].onParam;
     getProperties().set ("help", key);
     setMouseCursor (row >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
@@ -682,8 +753,9 @@ void FXPage::resized()
     left.removeFromTop (Section::kHeader);
     sounds.setBounds (left.removeFromTop (28).reduced (4, 0));
     left.removeFromTop (6 + 30 + 8);
-    railList = left.removeFromTop (kRowH * (int) fxModules().size());
-    left.removeFromTop (10);
+    railList = left.removeFromTop (kRowH * (int) fxModules().size() + kOrderGap);
+    orderNote = { railList.getX(), railList.getY() + 3 * kRowH, railList.getWidth(), kOrderGap };
+    left.removeFromTop (8);
     monoNote = left.reduced (4, 0).withTrimmedBottom (8);
     for (int i = 0; i < powers.size(); ++i)
         powers[i]->setBounds (rowBounds (i).removeFromLeft (44).withSizeKeepingCentre (24, 24));
