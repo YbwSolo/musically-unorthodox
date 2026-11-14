@@ -14,6 +14,7 @@ set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
 
 option(MU_BUILD_TESTS "Build the DSP test runner" ON)
 option(MU_LTO "Link-time optimisation (slower builds, faster plugin)" ON)
+option(MU_COPY_AFTER_BUILD "Copy the built plugin into the system plugin folders" ON)
 
 # JUCE: use a local checkout if JUCE_DIR is given, otherwise fetch it.
 if(DEFINED JUCE_DIR AND EXISTS "${JUCE_DIR}/CMakeLists.txt")
@@ -49,7 +50,7 @@ juce_add_plugin(MusicallyUnorthodox
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
-    COPY_PLUGIN_AFTER_BUILD TRUE
+    COPY_PLUGIN_AFTER_BUILD ${MU_COPY_AFTER_BUILD}
     AU_MAIN_TYPE kAudioUnitType_Effect
     VST3_CATEGORIES Fx Analyzer Dynamics EQ
     HARDENED_RUNTIME_ENABLED TRUE

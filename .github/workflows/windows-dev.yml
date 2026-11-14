@@ -1,0 +1,21 @@
+name: Windows build (development)
+
+# Builds the Windows version from the windows-port branch without publishing anything, so Windows fixes can be
+# tried without sending a new release to the Macs.
+on:
+  push:
+    branches: [ windows-port ]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, test and package
+        shell: pwsh
+        run: ./scripts/build_windows.ps1 -BuildNumber 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MusicallyUnorthodox-windows-installer
+          path: dist/*.exe
