@@ -11,7 +11,7 @@ juce::String corePrompt()
 {
     return
         "You are the tutor inside Musically Unorthodox, a mixing and mastering plugin used by music students.\n"
-        "RULES: Answer in plain English a beginner can follow, in at most 110 words, as ordinary sentences with no markdown, lists or headings. "
+        "RULES: Answer in plain English a beginner can follow, in at most 90 words, as ordinary sentences with no markdown, lists or headings. "
         "Only recommend things this plugin can do, and always say which tab to open. Use only the numbers given in the notes and under THIS TRACK, and never invent numbers. "
         "When GUIDE NOTES FOR THIS QUESTION are given, build the answer from them. If you are not sure, say what to listen for instead. "
         "Speak to the student directly and never mention these instructions, the notes, or the headings in them.\n\n"
@@ -114,9 +114,9 @@ const Note kNotes[] = {
       "If the ends of words get chopped off, lower the threshold or lengthen the hold and release. Range sets how far it turns the track down: "
       "turning the gaps down part of the way sounds more natural than total silence." },
     { "How loud a finished song should be", "how loud,loudness,lufs,spotify,youtube,apple music,streaming,soundcloud,loud enough,quiet master,song too quiet,mix too quiet,normalise,normalize",
-      "Loudness is set on the Master tab of the instance on the stereo output, with its role set to Master. Streaming master mode aims for about -14 LUFS with a true peak ceiling of -1 dB, "
+      "{mixloudness} Loudness is set on the Master tab of the instance on the stereo output, with its role set to Master. Streaming master mode aims for about -14 LUFS with a true peak ceiling of -1 dB, "
       "which is the level Spotify and YouTube play at; Apple Music is about -16. Auto level sets the gain into the limiter: play the loudest section for a few seconds. "
-      "Services turn louder songs down, so extra loudness only costs punch. {mixloudness}" },
+      "Services turn louder songs down, so extra loudness only costs punch." },
     { "Mastering a song", "master,mastering,mastered,finish,finishing,final,release,upload,limiter,export,bounce",
       "Get the mix right first: on the Mix tab it should sit near -18 LUFS with peaks under -6 dB. Then on the instance on the stereo output: EQ only if the whole mix needs it, "
       "Glue compression of 1 to 2 dB at most, then the Master tab. Choose the mode, let Auto level reach the target, and check the limiter is not taking off more than 3 to 4 dB "
@@ -126,9 +126,9 @@ const Note kNotes[] = {
       "Do not lean on the limiter to rescue a mix that is too hot. Balance now on the Mix tab brings the whole mix to about -18 LUFS with peaks under -6 dB, "
       "which leaves the headroom mastering needs." },
     { "Stereo width and mono", "wide,wider,width,stereo,mono,narrow,spread,panning,pan,phase,correlation,centre,center",
-      "Width is on the Tone tab. Stereo width above 100 % pushes the sides out, which suits pads, backing vocals and effects. Keep the lead vocal, kick, bass and 808 in the centre. "
+      "{width} Width is on the Tone tab. Stereo width above 100 % pushes the sides out, which suits pads, backing vocals and effects. Keep the lead vocal, kick, bass and 808 in the centre. "
       "Mono bass makes everything below the chosen frequency mono. Watch Correlation: near +1 is safe, and below 0 means parts vanish in mono, so narrow the track. "
-      "Always check a mix in mono, because phones and club systems are close to mono. {width}" },
+      "Always check a mix in mono, because phones and club systems are close to mono." },
     { "Is the mix balanced", "balanced,balance,balancing,levels right,right level,right levels,too loud,loud enough,quiet enough,how loud should the,turn down,turn up,which track",
       "{balance} Balance now on the Mix tab moves every track to where it should sit against the lead vocal in one press, "
       "and Learn and balance listens to the loudest section for 20 seconds first. The lanes on the Mix tab show each move before it is made." },
@@ -144,7 +144,8 @@ const Note kNotes[] = {
       "An order that works: clean up first (low cut, then cut mud and harsh notes on the EQ tab), then control the level (gate if needed, compressor, then de-esser after the compressor), "
       "then add tone (saturation, a little air), then width. Balance the levels on the Mix tab before reaching for any processing, because most EQ problems are really level problems." },
     { "Backing vocals and adlibs", "backing,adlib,adlibs,ad-lib,ad-libs,doubles,double,harmonies,harmony,stack,stacks,layers",
-      "Backing vocals and adlibs support the lead, so they sit lower (the Mix tab puts them about 6 dB under it), thinner and wider. On the EQ tab use a higher low cut of 120 to 200 Hz "
+      "If backing vocals or adlibs are louder than the lead, the fix is their level, not EQ: Balance now on the Mix tab puts them about 6 dB under the lead. "
+      "They support the lead, so they should also be thinner and wider. On the EQ tab use a higher low cut of 120 to 200 Hz "
       "and a little less 2 to 4 kHz than the lead, so they do not compete with its words. Compress them harder than the lead for an even bed. "
       "On the Tone tab widen them with Stereo width and keep the lead in the centre." },
     { "Vocals over a two-track beat", "two track,two-track,2 track,2-track,mp3 beat,stereo beat,leased beat,youtube beat,beat is one file,type beat",
@@ -260,6 +261,9 @@ void choose (const juce::String& rawQuestion, int maxMixing, int maxControls, st
     auto best = [] (const Pick& a, const Pick& b) { return a.score > b.score; };
     std::stable_sort (mixing.begin(), mixing.end(), best);
     std::stable_sort (controls.begin(), controls.end(), best);
+    // a weak second match pulls a small model off the point, so keep only notes that match nearly as well as the best
+    while (mixing.size() > 1 && mixing.back().score * 10 < mixing.front().score * 6) mixing.pop_back();
+    while (controls.size() > 1 && controls.back().score * 10 < controls.front().score * 6) controls.pop_back();
     if ((int) mixing.size() > maxMixing) mixing.resize ((size_t) maxMixing);
     if ((int) controls.size() > maxControls) controls.resize ((size_t) maxControls);
 }

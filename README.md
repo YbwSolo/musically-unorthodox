@@ -48,28 +48,40 @@ maths the plugin uses, and several end with a "your turn" exercise.
 
 ## AI tutor (optional, free)
 
-Settings > **Turn on AI tutor** downloads the tutor once (about 2 GB). After that an "Ask the AI tutor" box appears
-in the Mix Brain panel on the EQ tab. The question goes to an AI model running on that Mac, together with this
-track's measurements and a short fact sheet. Nothing leaves the machine, there is no account or key, and it works
-without the internet. Answers come from a small model and can be wrong, which the plugin says under every answer.
+Settings > **Turn on AI tutor** downloads the tutor once. After that an "Ask the AI tutor" box appears in the Mix
+Brain panel on the EQ tab. The question goes to an AI model running on that Mac. Nothing leaves the machine, there
+is no account or key, and it works without the internet. Answers come from a small model and can be wrong, which
+the plugin says under every answer. Follow-up questions ("why?") are understood for ten minutes.
 
-How it works: the download is a helper program (the [llama.cpp](https://github.com/ggml-org/llama.cpp) server, MIT
+**Two models.** The lighter one (Llama 3.2 3B, 2 GB) runs on any Mac. The smarter one (Qwen3.5 4B, 3 GB, Apache 2.0)
+gives fuller answers and makes better use of what the plugin has measured; it goes to Apple-silicon Macs with 16 GB
+of memory or more. The plugin picks, and a button in Settings switches. Both are named, with their checksums, in
+`scripts/make_installer.sh`, so a model can be replaced later without changing the plugin: Macs that already have
+the tutor are offered the new one in Settings.
+
+**How it is made to know mixing.** A small model knows little about mixing and nothing about this plugin, so it
+answers from notes (`Source/ai/TutorKnowledge.cpp`):
+
+- a fixed core: where everything is in the plugin and the facts the lessons teach
+- the guide notes that match the question: about 35 mixing notes written for this plugin (muddy vocals, kick and 808,
+  sibilance, loudness, mastering, and so on) plus the plugin's own help text for any control that is named
+- measurements turned into finished sentences by the plugin (is the mix balanced and which track should move, is this
+  track safe in mono, how loud the mix is against the streaming level), because small models get comparisons wrong
+- this track (levels, compressor, EQ, Mix Brain suggestions) and the whole session (every track, the balance, collisions)
+
+How it runs: the download is a helper program (the [llama.cpp](https://github.com/ggml-org/llama.cpp) server, MIT
 licence, from that project's own Mac builds, pinned and checksummed in `scripts/make_tutor_pack.sh`) and one model
-file (Llama 3.2 3B, named in `scripts/make_installer.sh`, fetched from Hugging Face and checksummed). They are saved
-in `/Users/Shared/Musically Unorthodox`, so every account on a studio Mac shares one copy. The plugin starts the
-helper when someone asks a question; it only listens on the Mac itself and gives its memory back when idle.
-Needs macOS 13.3 or newer. Settings > Remove deletes it again.
+file from Hugging Face. They are saved in `/Users/Shared/Musically Unorthodox`, so every account on a studio Mac
+shares one copy. The plugin starts the helper when someone asks; it only listens on the Mac itself and gives its
+memory back when idle. Needs macOS 13.3 or newer. Settings > Remove deletes it again.
 
-Every release build installs the tutor on the build Mac and asks it two questions with the real model before
-anything is published (`MUTutorCheck`), so a broken tutor never ships.
+**Checked on a real Mac.** Every release build installs the tutor on the build Mac and asks both models questions
+before anything is published (`MUTutorCheck`). To tune the notes or try another model, push to a branch called
+`tutor-tuning`: the "Tutor answers check" workflow asks every question in `Source/tests/tutor_questions.txt` with
+each model and prints the answers, without publishing anything.
 
-What the tutor is told lives in `MUProcessor::tutorPrompt()`: where everything is in the plugin, the facts the
-lessons teach, two example answers, and this track's measurements and Mix Brain suggestions. To tune it, push to a
-branch called `tutor-tuning`: the "Tutor answers check" workflow asks every question in
-`Source/tests/tutor_questions.txt` with the real model and prints the answers, without publishing anything.
-
-If the built-in tutor is not installed but [Ollama](https://ollama.com) is running with a chat model, the plugin uses that and no download
-is needed.
+If the built-in tutor is not installed but [Ollama](https://ollama.com) is running with a chat model, the plugin uses
+that and no download is needed.
 
 ## Tabs
 
@@ -126,6 +138,7 @@ Source/
   session/BalanceEngine.*        role targets, balance plan, masking detection
   update/Updater.*               in-plugin updates: feed check, download, checksum, in-place install
   ai/LocalAI.*                   optional AI tutor: built-in helper and model, or a local Ollama server
+  ai/TutorKnowledge.*            what the tutor is told: core facts, mixing notes, lookup by question
   state/LocalSettings.h          per-computer settings (update checks, lesson progress)
   ui/                            theme, icons, look and feel, widgets, help text, pages
   tests/TestMain.cpp             DSP and analysis tests

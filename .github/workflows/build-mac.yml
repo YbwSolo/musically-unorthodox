@@ -53,7 +53,7 @@ jobs:
           MU_TUTOR_ARGS: "--device none"
         run: |
           BIN="$(find build -type f -name MUTutorCheck -perm +111 | head -1)"
-          "$BIN" "file://$PWD/dist" Source/tests/sample_track_notes.txt Source/tests/sample_tutor_facts.txt
+          "$BIN" "file://$PWD/dist" Source/tests/sample_track_notes.txt Source/tests/sample_tutor_facts.txt Source/tests/tutor_questions_release.txt
 
       - name: AI tutor check (smarter model)
         env:
