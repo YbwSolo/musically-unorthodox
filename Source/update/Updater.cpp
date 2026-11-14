@@ -53,6 +53,16 @@ void Updater::autoCheck()
 void Updater::installNow()
 {
     if (isThreadRunning() || getState().phase != UpdateState::Phase::Available) return;
+   #if JUCE_WINDOWS
+    // On Windows the plugin lives in Program Files, which only an installer run by the user may write to, and the
+    // host has the plugin file open. So the new installer is fetched in the browser for the user to run.
+    if (buildOverride < 0)
+    {
+        juce::URL (baseUrl + "/MusicallyUnorthodox-Windows-Setup.exe").launchInDefaultBrowser();
+        set (UpdateState::Phase::Available, "The new installer is downloading in your browser. Close your music software, run it, then open the song again.");
+        return;
+    }
+   #endif
     job.store ((int) Job::Install);
     set (UpdateState::Phase::Downloading, "Downloading the update...");
     startThread();
