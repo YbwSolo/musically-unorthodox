@@ -18,12 +18,27 @@ struct EchoSettings
     float width = 0.7f;         // 0 = every echo in the middle; 1 = echoes bounce left, right, left
     float duck = 0.5f;          // 0..1, how far the echoes step back while the dry sound is playing
     double bpm = 120.0;
+    int style = 0;              // see Echo::styleNames(): what the echoes pass through on every trip round
+    int pattern = 0;            // see Echo::patternNames(): where the echoes fall
+    float drive = 0.3f;         // 0..1, Tape and Analog: how hard each repeat is pushed into saturation
+    float wobble = 0.0f;        // 0..1, slow and fast pitch drift of the echoes (wow and flutter)
+    float lowCutHz = 160.0f;    // each repeat loses what is under this
 };
 
 // A delay timed to the song. 60,000 divided by the tempo is one beat in milliseconds; the echo time is that
 // multiplied by the note length (a quarter note is one beat, an eighth is half, a dotted eighth is three
 // quarters). Each repeat loses some top and bottom so the echoes fall behind the voice, and they step back while
 // the voice is sounding, so the words stay clear and the echoes fill the gaps.
+// What a repeat passes through on each trip is the style:
+//   Digital  - nothing but the tone filters: every repeat is a clean copy, only quieter.
+//   Tape     - a soft, symmetrical saturation after the filters and a top end that rolls away, so repeats get
+//              rounder and warmer as they go; add Wobble for the pitch drift of a tape machine.
+//   Analog   - a darker, two-stage filter and an uneven saturation (it adds the octave as well as the fifth above
+//              it), which is how bucket-brigade delay pedals smear their repeats.
+//   Diffused - two all-pass filters in the loop, so each repeat is more spread out than the one before and the
+//              echoes turn into a wash.
+// The pattern is where they fall: bouncing side to side, straight down the middle, or two different times left
+// and right (the right side three quarters of the left, the classic quarter against dotted eighth).
 class Echo
 {
 public:
@@ -32,14 +47,17 @@ public:
     void setSettings (const EchoSettings& s) noexcept { settings = s; }
     void process (juce::AudioBuffer<float>& buffer) noexcept;
 
-    static juce::StringArray noteNames() { return { "1/2", "1/4", "1/8 dotted", "1/8", "1/8 triplet", "1/16" }; }
+    static juce::StringArray styleNames() { return { "Digital", "Tape", "Analog", "Diffused" }; }
+    static juce::StringArray patternNames() { return { "Ping-pong", "Straight", "Dual" }; }
+    // (new lengths are added at the end so songs saved with the first six keep theirs)
+    static juce::StringArray noteNames() { return { "1/2", "1/4", "1/8 dotted", "1/8", "1/8 triplet", "1/16", "1 bar", "1/4 dotted", "1/4 triplet", "1/16 triplet", "1/32" }; }
     static float noteBeats (int index) noexcept
     {
-        static const float beats[] = { 2.0f, 1.0f, 0.75f, 0.5f, 1.0f / 3.0f, 0.25f };
-        return beats[juce::jlimit (0, 5, index)];
+        static const float beats[] = { 2.0f, 1.0f, 0.75f, 0.5f, 1.0f / 3.0f, 0.25f, 4.0f, 1.5f, 2.0f / 3.0f, 1.0f / 6.0f, 0.125f };
+        return beats[juce::jlimit (0, 10, index)];
     }
     static float syncedMs (double bpm, int note) noexcept { return (float) (60000.0 / juce::jlimit (40.0, 300.0, bpm)) * noteBeats (note); }
-    float currentTimeMs() const noexcept { return juce::jlimit (10.0f, 2000.0f, settings.sync ? syncedMs (settings.bpm, settings.note) : settings.timeMs); }
+    float currentTimeMs() const noexcept { return juce::jlimit (10.0f, 4000.0f, settings.sync ? syncedMs (settings.bpm, settings.note) : settings.timeMs); }
     // how long the echoes take to fall 60 dB
     float tailSeconds() const noexcept
     {
@@ -70,7 +88,14 @@ private:
     EchoSettings settings;
     bool wasEnabled = false;
     Line lines[2];
-    float timeNow = 12000.0f, hp[2] = { 0.0f, 0.0f }, lp[2] = { 0.0f, 0.0f };
+    struct Smear
+    {
+        Line line; int length = 1;
+        float run (float x, float g) noexcept { const float d = line.read ((float) length); const float v = x + g * d; line.write (v); return d - g * v; }
+    };
+    Smear smear[2][2];
+    float timeNow = 12000.0f, hp[2] = { 0.0f, 0.0f }, lp[2] = { 0.0f, 0.0f }, lp2[2] = { 0.0f, 0.0f }, dc[2] = { 0.0f, 0.0f };
+    float wowPhase = 0.0f, flutterPhase = 0.0f;
     float envelope = 0.0f, reference = 1.0e-4f, duckGain = 1.0f, mixNow = 0.0f;
     std::atomic<float> duckMeter { 0.0f };
     int meterCount = 0;

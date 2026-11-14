@@ -6,9 +6,11 @@ namespace
 {
 using V = std::vector<ParamValue>;
 
-ModulePreset tune (const juce::String& name, const juce::String& blurb, float speed, float vibrato, float amount, float hold, float formant = 0.0f, bool robot = false)
+ModulePreset tune (const juce::String& name, const juce::String& blurb, float speed, float vibrato, float amount, float hold, float flex = 0.0f, float humanise = 0.0f, float slides = 0.0f,
+                   float formant = 0.0f, bool robot = false)
 {
-    V v { { ids::tuneOn, 1 }, { ids::tuneMode, 0 }, { ids::tuneSpeed, speed }, { ids::tuneVibrato, vibrato }, { ids::tuneAmount, amount }, { ids::tuneHold, hold }, { ids::tuneFormant, formant } };
+    V v { { ids::tuneOn, 1 }, { ids::tuneMode, 0 }, { ids::tuneSpeed, speed }, { ids::tuneVibrato, vibrato }, { ids::tuneAmount, amount }, { ids::tuneHold, hold }, { ids::tuneFormant, formant },
+          { ids::tuneFlex, flex }, { ids::tuneHumanise, humanise }, { ids::tuneSlides, slides } };
     if (robot) v.push_back ({ kRootOnly, 1 });
     return { "tune", name, blurb, v };
 }
@@ -16,21 +18,27 @@ ModulePreset doubler (const juce::String& name, const juce::String& blurb, bool 
 {
     return { "doubler", name, blurb, { { ids::dblOn, 1 }, { ids::dblVoices, stack ? 1.0f : 0.0f }, { ids::dblMix, mix }, { ids::dblDetune, detune }, { ids::dblTiming, loose }, { ids::dblWidth, width } } };
 }
-// note: 0 = 1/2, 1 = 1/4, 2 = dotted 1/8, 3 = 1/8, 4 = 1/8 triplet, 5 = 1/16; a negative note means "not timed", with ms giving the time
-ModulePreset delay (const juce::String& name, const juce::String& blurb, int note, float ms, float mix, float repeats, float tone, float pingPong, float duck)
+// note: 0 = 1/2, 1 = 1/4, 2 = dotted 1/8, 3 = 1/8, 4 = 1/8 triplet, 5 = 1/16, 6 = 1 bar, 7 = dotted 1/4, 8 = 1/4 triplet, 9 = 1/16 triplet, 10 = 1/32;
+// a negative note means "not timed", with ms giving the time. style: 0 digital, 1 tape, 2 analog, 3 diffused. pattern: 0 ping-pong, 1 straight, 2 dual
+ModulePreset delay (const juce::String& name, const juce::String& blurb, int note, float ms, float mix, float repeats, float tone, float pingPong, float duck,
+                    int style = 0, int pattern = 0, float drive = 30, float wobble = 0, float lowCut = 160)
 {
     return { "delay", name, blurb, { { ids::dlOn, 1 }, { ids::dlSync, note >= 0 ? 1.0f : 0.0f }, { ids::dlNote, (float) juce::jmax (0, note) }, { ids::dlTime, ms }, { ids::dlMix, mix },
-                                       { ids::dlFeedback, repeats }, { ids::dlTone, tone }, { ids::dlWidth, pingPong }, { ids::dlDuck, duck } } };
+                                       { ids::dlFeedback, repeats }, { ids::dlTone, tone }, { ids::dlWidth, pingPong }, { ids::dlDuck, duck },
+                                       { ids::dlStyle, (float) style }, { ids::dlPattern, (float) pattern }, { ids::dlDrive, drive }, { ids::dlWobble, wobble }, { ids::dlLowCut, lowCut } } };
 }
-// type: 0 room, 1 plate, 2 hall. length: 0 = one beat, 1 = two, 2 = four
-ModulePreset reverb (const juce::String& name, const juce::String& blurb, int type, int length, float mix, float tone, float duck, float lowCut = 180, float width = 100)
+// type: see Reverb::typeNames(). length: 0 = one beat, 1 = two, 2 = four. The rest are the finer controls, with the values a space is designed around as defaults.
+struct Fine { float size = 100, diffusion = 80, early = 50, lowDecay = 100, movement = 30, rate = 0.6f, shimmer = 50; };
+ModulePreset reverb (const juce::String& name, const juce::String& blurb, int type, int length, float mix, float tone, float duck, float lowCut = 180, float width = 100, Fine f = {})
 {
     return { "reverb", name, blurb, { { ids::rvOn, 1 }, { ids::rvAuto, 1 }, { ids::rvType, (float) type }, { ids::rvLength, (float) length }, { ids::rvMix, mix }, { ids::rvTone, tone },
-                                        { ids::rvDuck, duck }, { ids::rvLowCut, lowCut }, { ids::rvWidth, width } } };
+                                        { ids::rvDuck, duck }, { ids::rvLowCut, lowCut }, { ids::rvWidth, width }, { ids::rvFreeze, 0 },
+                                        { ids::rvSize, f.size }, { ids::rvDiffusion, f.diffusion }, { ids::rvEarly, f.early }, { ids::rvLowDecay, f.lowDecay },
+                                        { ids::rvModDepth, f.movement }, { ids::rvModRate, f.rate }, { ids::rvShimmer, f.shimmer } } };
 }
-ModulePreset harmony (const juce::String& name, const juce::String& blurb, int voicing, float mix, float width)
+ModulePreset harmony (const juce::String& name, const juce::String& blurb, int voicing, float mix, float width, float humanise = 40)
 {
-    return { "harmony", name, blurb, { { ids::hmOn, 1 }, { ids::hmVoicing, (float) voicing }, { ids::hmMix, mix }, { ids::hmWidth, width } } };
+    return { "harmony", name, blurb, { { ids::hmOn, 1 }, { ids::hmVoicing, (float) voicing }, { ids::hmMix, mix }, { ids::hmWidth, width }, { ids::hmHumanise, humanise } } };
 }
 ModulePreset shift (const juce::String& name, const juce::String& blurb, float semis, float character, float mix)
 {
@@ -72,8 +80,8 @@ const std::vector<FxModule>& fxModules()
 {
     static const std::vector<FxModule> m = {
         { "doubler", "Doubler", ids::dblOn, "One take made to sound like two or four." },
-        { "delay",   "Delay",   ids::dlOn,  "Echoes timed to the song's tempo." },
-        { "reverb",  "Reverb",  ids::rvOn,  "Room, plate or hall, timed to the song's tempo." },
+        { "delay",   "Delay",   ids::dlOn,  "Echoes timed to the song: clean, tape, analog or diffused." },
+        { "reverb",  "Reverb",  ids::rvOn,  "Nine spaces from five different engines." },
         { "harmony", "Harmony", ids::hmOn,  "Extra voices singing along on other notes of the key." },
         { "shift",   "Shift",   ids::psOn,  "The whole voice moved up or down, as a layer or on its own." },
         { "phone",   "Phone",   ids::phOn,  "The voice through a small speaker: telephone, megaphone, radio." },
@@ -86,18 +94,20 @@ const std::vector<FxModule>& fxModules()
 const std::vector<ModulePreset>& modulePresets()
 {
     static const std::vector<ModulePreset> p = {
-        // ---- Tune
-        tune ("Natural", "The centre of each note is corrected; vibrato and slides stay as they were sung.", 70, 85, 100, 30),
-        tune ("Gentle touch-up", "Only part of the correction, slowly. For a singer who is nearly there.", 120, 100, 70, 20),
-        tune ("R&B smooth", "Quick enough to sound polished, slow enough that runs still flow.", 35, 60, 100, 45),
-        tune ("Tight pop", "Notes pulled in fast for a modern, finished vocal that still moves like a voice.", 18, 35, 100, 35),
-        tune ("Melodic rap", "Close to hard tune but with a little glide between notes.", 8, 15, 100, 55),
+        // ---- Tune                                                                                     speed vib amount hold flex human slides
+        tune ("Natural vocal", "The centre of each note is corrected. Vibrato, slides and anything already close are left as they were sung.", 70, 85, 100, 35, 10, 50, 80),
+        tune ("Transparent studio correction", "Only notes that are clearly out are touched, and only once the voice has settled on them. Meant to go unnoticed.", 90, 100, 100, 40, 18, 60, 100),
+        tune ("Subtle pitch correction", "Part of the correction, slowly. For a singer who is nearly there.", 120, 100, 70, 30, 12, 50, 100),
+        tune ("Smooth singing", "Polished and even, with the runs and slides still flowing.", 45, 70, 100, 40, 6, 40, 70),
+        tune ("Modern R&B", "Quick enough to sound finished, with a little of the slide between notes kept.", 28, 55, 100, 45, 0, 25, 40),
+        tune ("Melodic rap", "Close to hard tune, with a short glide between notes.", 10, 20, 100, 55, 0, 0, 15),
+        tune ("Fast modern tune", "Notes pulled in almost at once: the tuned sound of current pop and trap, just short of the full effect.", 4, 10, 100, 50),
         tune ("Hard tune", "Every note snaps onto the scale. Set the key and Major or Minor first.", 0, 0, 100, 50),
         tune ("Hard tune, held notes", "Hard tune that holds each note firmly, so a wavering voice does not warble between two notes.", 0, 0, 100, 100),
         tune ("Rescue", "For a take that is well out of tune: fast, full correction, and each note held until the voice clearly moves on.", 12, 20, 100, 85),
-        tune ("Deep and tuned", "Tight tuning with the voice made a little bigger and darker.", 20, 40, 100, 45, -3),
-        tune ("Bright and tuned", "Tight tuning with the voice made a little smaller and brighter.", 20, 40, 100, 45, 2),
-        tune ("Robot", "Only the key note is allowed, so the whole performance sits on one pitch.", 0, 0, 100, 0, 0, true),
+        tune ("Deep and tuned", "Tight tuning with the voice made a little bigger and darker.", 20, 40, 100, 45, 0, 0, 20, -3),
+        tune ("Bright and tuned", "Tight tuning with the voice made a little smaller and brighter.", 20, 40, 100, 45, 0, 0, 20, 2),
+        tune ("Robotic vocal", "Only the key note is allowed, so the whole performance sits on one pitch.", 0, 0, 100, 0, 0, 0, 0, 0, true),
 
         // ---- Doubler
         doubler ("Subtle", "A tight copy each side that thickens the lead without being heard as an effect.", false, 30, 6, 25, 100),
@@ -111,26 +121,42 @@ const std::vector<ModulePreset>& modulePresets()
         doubler ("Centre thickener", "Copies kept in the middle. Works on a mono track and keeps the sides clear.", false, 35, 7, 30, 0),
 
         // ---- Delay
-        delay ("Slap", "One quick echo, 95 ms behind. The classic way to give a dry vocal some depth.", -1, 95, 22, 0, 55, 0, 20),
-        delay ("Doubling slap", "A very short echo that thickens the voice more than it repeats it.", -1, 38, 30, 0, 70, 0, 0),
-        delay ("Eighth echo", "Echoes on every half beat, kept low under the words.", 3, 250, 18, 30, 45, 60, 55),
+        delay ("Slap", "One quick echo, 95 ms behind. The classic way to give a dry vocal some depth.", -1, 95, 22, 0, 55, 0, 20, 0, 1),
+        delay ("Tape slap", "The same single echo through tape: rounder, a little unsteady, straight down the middle.", -1, 110, 24, 0, 45, 0, 20, 1, 1, 45, 25),
+        delay ("Doubling slap", "A very short echo that thickens the voice more than it repeats it.", -1, 38, 30, 0, 70, 0, 0, 0, 1),
+        delay ("Eighth echo", "Clean echoes on every half beat, kept low under the words.", 3, 250, 18, 30, 45, 60, 55),
         delay ("Dotted eighth", "The off-beat echo that fills the gaps between words and gives a line bounce.", 2, 250, 20, 38, 45, 80, 55),
         delay ("Quarter throw", "A long echo on the beat that only speaks up in the gaps. Good on the last word of a line.", 1, 250, 24, 45, 40, 70, 78),
+        delay ("Quarter and dotted eighth", "Two times at once: a quarter note on the left against a dotted eighth on the right.", 1, 250, 20, 35, 50, 100, 55, 0, 2),
         delay ("Ping-pong sixteenth", "Fast echoes bouncing left and right.", 5, 250, 16, 40, 55, 100, 50),
         delay ("Triplet bounce", "Echoes in threes against the beat, for a rolling feel.", 4, 250, 18, 35, 50, 90, 50),
-        delay ("Dark tape", "Each repeat is duller than the last, the way a tape echo wears the sound down.", 1, 250, 22, 52, 12, 40, 55),
-        delay ("Half-note wash", "Long, slow repeats that build into a wash behind a hook.", 0, 250, 20, 58, 28, 70, 62),
+        delay ("Tape echo", "Quarter-note repeats through tape: each one warmer and softer than the last, drifting slightly in pitch.", 1, 250, 22, 52, 40, 40, 55, 1, 0, 50, 35),
+        delay ("Dark tape", "A worn tape echo. Dull, thick repeats that fall well behind the voice.", 1, 250, 22, 55, 15, 40, 55, 1, 0, 65, 45),
+        delay ("Analog eighth", "The dark, smeared repeats of a delay pedal, on every half beat.", 3, 250, 22, 45, 55, 30, 50, 2, 0, 40, 15),
+        delay ("Analog swirl", "A pedal pushed until the repeats nearly feed themselves, wobbling as they go.", 2, 250, 24, 72, 50, 50, 45, 2, 0, 60, 60),
+        delay ("Half-note wash", "Long repeats, each more spread out than the last, that build into a wash behind a hook.", 0, 250, 20, 58, 35, 70, 62, 3),
+        delay ("Diffused eighth", "Echoes that soften into a cloud after the second repeat.", 3, 250, 20, 50, 45, 80, 50, 3),
+        delay ("Thirty-second flutter", "Very fast repeats that blur into a metallic flutter. An effect, not a mix tool.", 10, 250, 18, 60, 60, 100, 30),
 
-        // ---- Reverb
+        // ---- Reverb                                                                          type length mix tone duck lowCut width
         reverb ("Tight rap", "One beat of plate, ducked hard: rap verses that stay dry and upfront.", 1, 0, 11, 45, 70, 220),
-        reverb ("Vocal plate", "Two beats of bright plate, the all-round setting for sung vocals.", 1, 1, 18, 60, 50),
+        reverb ("Vocal plate", "Two beats of plate, the all-round setting for sung vocals.", 1, 1, 18, 60, 50),
+        reverb ("Bright plate", "The plate with its top left on, for air around a dull vocal.", 1, 1, 17, 85, 55, 240),
         reverb ("Dark plate", "The same length with the top taken off, so it sits behind the voice.", 1, 1, 18, 25, 50),
-        reverb ("Small room", "A short, natural space. Makes a close-miked vocal sound less like a booth.", 0, 0, 14, 50, 20),
-        reverb ("Drum room", "A short room for drums and percussion; adds size without smearing the hits.", 0, 0, 16, 55, 0, 260),
-        reverb ("Big hall", "Four beats of darker hall for hooks, intros and slow songs.", 2, 2, 26, 40, 45),
+        reverb ("Small room", "A short, close space. Makes a close-miked vocal sound less like a booth.", 0, 0, 14, 50, 20, 180, 100, { 70, 80, 60 }),
+        reverb ("Large room", "A bigger live room with the walls further away.", 0, 1, 16, 50, 30, 180, 100, { 150, 80, 50 }),
+        reverb ("Drum room", "A short room for drums and percussion; adds size without smearing the hits.", 0, 0, 16, 55, 0, 260, 100, { 100, 60, 65 }),
+        reverb ("Studio chamber", "A hard-walled echo room: thicker than a room, tighter than a hall. Body for a rap vocal.", 3, 0, 15, 55, 55, 200),
+        reverb ("Concert hall", "Four beats of hall for hooks, intros and slow songs.", 2, 2, 24, 45, 45),
+        reverb ("Large hall", "The hall made bigger, with the lows kept short so the size does not turn into mud.", 2, 2, 26, 40, 45, 200, 100, { 150, 85, 45, 80 }),
         reverb ("Ballad hall", "A long, open hall with less ducking, so the voice swims in it.", 2, 2, 30, 50, 30),
+        reverb ("Cathedral", "Huge, dark and slow. A little goes a long way.", 4, 2, 22, 35, 40, 220, 100, { 100, 85, 45, 110, 40 }),
         reverb ("Adlib space", "Wetter than a lead reverb, to push adlibs and backing vocals to the back.", 2, 1, 30, 45, 20, 230),
-        reverb ("Ambient wash", "As much reverb as dry sound. For pads, effects and dreamy sections.", 2, 2, 45, 35, 0),
+        reverb ("Ambient cloud", "No reflections, just a soft cloud that swells in behind the sound.", 5, 2, 34, 45, 20, 220, 100, { 110, 100, 50, 100, 55 }),
+        reverb ("Ambient wash", "As much reverb as dry sound. For pads, effects and dreamy sections.", 5, 2, 45, 35, 0, 180, 100, { 130, 100, 50, 110, 60 }),
+        reverb ("Vintage digital", "An early digital reverb: darker, with a tail that turns slowly.", 6, 1, 20, 50, 40, 200, 100, { 100, 70, 50, 100, 60, 0.9f }),
+        reverb ("Shimmer halo", "A hall whose tail rises an octave into a glassy halo.", 7, 2, 24, 60, 35, 260, 100, { 110, 90, 30, 90, 40, 0.5f, 60 }),
+        reverb ("Gated burst", "A dense burst that holds its level and stops dead. Big on snares, claps and one-word adlibs.", 8, 1, 26, 65, 0, 200, 100, { 100, 70 }),
         reverb ("Centre room", "A short room kept in the middle, for a track that should stay narrow.", 0, 0, 15, 50, 20, 180, 0),
 
         // ---- Harmony
@@ -220,7 +246,7 @@ const std::vector<SoundPreset>& soundPresets()
         { "Radio intro", "Small radio speaker with dust and drift.",
           join ({ v (phone ("", "", 40, 50)), v (lofi ("", "", 25, 35)) }) },
         { "Robot hook", "One note only, with chorus and an eighth-note echo.",
-          join ({ v (tune ("", "", 0, 0, 100, 0, 0, true)), v (motion ("", "", 0, 0.5f, 40, 40)), v (delay ("", "", 3, 250, 16, 30, 50, 80, 50)) }) },
+          join ({ v (tune ("", "", 0, 0, 100, 0, 0, 0, 0, 0, true)), v (motion ("", "", 0, 0.5f, 40, 40)), v (delay ("", "", 3, 250, 16, 30, 50, 80, 50)) }) },
         { "Lo-fi memory", "Worn tape and a dark plate, for a vocal that should sound like an old recording.",
           join ({ v (lofi ("", "", 28, 45)), v (reverb ("", "", 1, 1, 20, 22, 40)) }) },
         { "Trance chop", "Sixteenth-note gate into a dotted echo and a hall, so the chops ring on.",
@@ -230,7 +256,7 @@ const std::vector<SoundPreset>& soundPresets()
         { "Wide adlibs", "Wide doubles, ping-pong echoes and a wet hall, to throw adlibs out to the sides and back.",
           join ({ v (doubler ("", "", false, 55, 12, 55, 100)), v (delay ("", "", 3, 250, 24, 35, 50, 100, 40)), v (reverb ("", "", 2, 1, 30, 45, 20, 230)) }) },
         { "Intimate ballad", "Natural tuning and a long open hall, nothing else.",
-          join ({ v (tune ("", "", 70, 85, 100, 30)), v (reverb ("", "", 2, 2, 28, 50, 32)) }) },
+          join ({ v (tune ("", "", 70, 85, 100, 35, 10, 50, 80)), v (reverb ("", "", 2, 2, 28, 50, 32)) }) },
     };
     return s;
 }

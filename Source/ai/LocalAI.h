@@ -48,6 +48,9 @@ public:
         juce::String offerName;             // the model this computer would download, once the feed has been read
         juce::int64 offerBytes = 0;
         juce::String otherId, otherName;    // the other model on offer, if there is one ("light" or "smart")
+        // every model the feed offers, lightest first, with what this computer makes of each
+        struct Choice { juce::String id, name; juce::int64 bytes = 0; int minMemoryGb = 0; bool appleSilicon = false, fits = true, chosen = false; };
+        std::vector<Choice> choices;
     };
 
     LocalAI();
@@ -58,6 +61,7 @@ public:
     void ask (const juce::String& systemPrompt, const juce::String& question, int conversation = 0);
     void forgetConversation();
     void installBuiltIn();                                                 // download the helper and the model
+    void installModel (const juce::String& id);                            // the same, for one particular model ("light" or "smart")
     void cancelInstall();
     void removeBuiltIn();
     void preferModel (const juce::String& id);                             // "light", "smart", or empty for automatic
@@ -104,6 +108,7 @@ private:
     juce::File testFolder;
     bool testing = false;
     std::atomic<int> job { None };
+    std::atomic<bool> installNext { false };      // an install was asked for while another job was running
 
     juce::ChildProcess server;       // the helper, when this process started it
     int serverPort = 0;

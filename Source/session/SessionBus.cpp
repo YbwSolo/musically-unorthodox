@@ -106,6 +106,7 @@ std::vector<TrackInfo> SessionBus::collectTracks() const
         t.playing = s.active.load();
         t.truePeakDb = s.truePeak.load();
         t.trimDb = s.client->getTrimDb();
+        t.peakOverDb = s.client->getPeakOverDb();
         t.acceptsBalance = s.client->acceptsBalance();
         t.active = s.active.load() || t.levelLufs > -60.0f;
         t.hasBands = s.client->fillBandsDb (t.bandsDb);
@@ -418,11 +419,18 @@ void SessionBus::timerCallback()
                     s.client->resetMeasurement();
                     said = "\"" + name + "\" was still " + juce::String (over, 1) + " dB over with its compressor on, because the track itself is too loud (" + juce::String (level, 1) + " LUFS). Its output was turned down " + juce::String (drop, 1) + " dB (Tone tab).";
                 }
-                else if (f.round < 2)
+                else if (rebalanceAtMs > 0.0 || autoBalance)
                 {
-                    s.client->tamePeaks();
-                    again = true;
-                    said = "\"" + name + "\" was still " + juce::String (over, 1) + " dB over, so its compressor was set a little harder.";
+                    // The balance is about to run again, and it leaves room for every track's peaks by turning the
+                    // whole song down rather than squeezing this one track harder.
+                }
+                else
+                {
+                    // Not being balanced: lower the track itself, after its processing, by what it is over.
+                    const float drop = juce::jmin (12.0f, over + 0.5f);
+                    s.client->turnOutputDown (drop);
+                    s.client->resetMeasurement();
+                    said = "\"" + name + "\" was still " + juce::String (over, 1) + " dB over with its compressor on. Compressing harder would flatten it, so its output was turned down " + juce::String (drop, 1) + " dB instead (Tone tab).";
                 }
             }
             const juce::ScopedLock sl (lock);

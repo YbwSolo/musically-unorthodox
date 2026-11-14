@@ -212,9 +212,16 @@ PresetStrip::PresetStrip (const juce::String& helpKey, const juce::String& empty
     addAndMakeVisible (previous); addAndMakeVisible (name); addAndMakeVisible (next);
 }
 
+void PresetStrip::enableOwnPresets (MUProcessor& p, std::function<juce::String()> scopeOf, std::function<void (const juce::String&)> say)
+{
+    proc = &p; scope = std::move (scopeOf); status = std::move (say);
+}
+
 void PresetStrip::refresh()
 {
-    const auto now = current ? current() : juce::String();
+    auto now = current ? current() : juce::String();
+    // a star after the name: a control has moved since this preset was loaded
+    if (now.isNotEmpty() && proc != nullptr && scope && proc->presetEdited (scope())) now << " *";
     if (now != shown || first)
     {
         first = false; shown = now;
@@ -225,12 +232,217 @@ void PresetStrip::refresh()
 void PresetStrip::step (int direction)
 {
     if (! names || ! choose) return;
-    const auto list = names();
+    auto list = names();
+    const int builtIn = list.size();
+    if (proc != nullptr && scope) for (auto& own : UserPresets::list (scope())) list.add (own.name);
     if (list.isEmpty()) return;
     const int at = list.indexOf (current ? current() : juce::String());
     const int target = at < 0 ? (direction > 0 ? 0 : list.size() - 1) : (at + direction + list.size()) % list.size();
-    choose (target);
+    if (target < builtIn) choose (target);
+    else if (status) status (proc->loadUserPreset (scope(), list[target]));
+    else proc->loadUserPreset (scope(), list[target]);
     refresh();
+}
+
+//==================================================================== someone's own presets
+namespace ownpresets
+{
+namespace
+{
+std::unique_ptr<juce::FileChooser>& chooser() { static std::unique_ptr<juce::FileChooser> c; return c; }
+
+// Asks for a name inside the plugin's own window. (A separate dialog window does not reliably get the keyboard
+// when the plugin is running inside a host.)
+class NamePrompt : public juce::Component
+{
+public:
+    NamePrompt (const juce::String& t, const juce::String& m, const juce::String& initial, std::function<void (const juce::String&)> d)
+        : title (t), message (m), done (std::move (d))
+    {
+        box.setFont (body (14.0f));
+        box.setText (initial, false);
+        box.setIndents (10, 8);
+        box.setTextToShowWhenEmpty ("Name", textMute);
+        box.onReturnKey = [this] { finish (true); };
+        box.onEscapeKey = [this] { finish (false); };
+        addAndMakeVisible (box);
+        styleButton (save, "Save", true);
+        save.onClick = [this] { finish (true); };
+        styleButton (cancel, "Cancel", false);
+        cancel.onClick = [this] { finish (false); };
+        addAndMakeVisible (save); addAndMakeVisible (cancel);
+        setWantsKeyboardFocus (true);
+    }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (black.withAlpha (0.72f));
+        fillPanel (g, card.toFloat(), raised, 8.0f);
+        g.setColour (yellow); g.fillRoundedRectangle (card.toFloat().withHeight (3.0f), 1.5f);
+        auto r = card.reduced (22, 18);
+        g.setFont (headline (20.0f)); g.setColour (text);
+        g.drawText (title.toUpperCase(), r.removeFromTop (28), juce::Justification::centredLeft);
+        r.removeFromTop (4);
+        drawWrapped (g, message, r.removeFromTop (44).toFloat(), body (12.5f), textDim, 1.35f);
+    }
+    void resized() override
+    {
+        card = getLocalBounds().withSizeKeepingCentre (juce::jmin (460, getWidth() - 40), 210);
+        auto r = card.reduced (22, 18);
+        r.removeFromTop (28 + 4 + 44 + 6);
+        box.setBounds (r.removeFromTop (36));
+        auto buttons = r.removeFromBottom (32);
+        save.setBounds (buttons.removeFromRight (110));
+        buttons.removeFromRight (8);
+        cancel.setBounds (buttons.removeFromRight (96));
+    }
+    ~NamePrompt() override { setLookAndFeel (nullptr); }
+    void mouseDown (const juce::MouseEvent& e) override { if (! card.contains (e.getPosition())) finish (false); }
+    void focus() { box.grabKeyboardFocus(); box.selectAll(); }
+
+private:
+    void finish (bool accepted)
+    {
+        const auto typed = box.getText();
+        auto callback = accepted ? done : std::function<void (const juce::String&)>();
+        juce::Component::SafePointer<NamePrompt> self (this);
+        juce::MessageManager::callAsync ([self, callback, typed]
+        {
+            if (self != nullptr) { if (auto* parent = self->getParentComponent()) parent->removeChildComponent (self.getComponent()); delete self.getComponent(); }
+            if (callback) callback (typed);
+        });
+    }
+    juce::String title, message;
+    std::function<void (const juce::String&)> done;
+    juce::TextEditor box;
+    juce::TextButton save, cancel;
+    juce::Rectangle<int> card;
+};
+
+void askForName (juce::Component& near, const juce::String& title, const juce::String& message, const juce::String& initial, std::function<void (const juce::String&)> done)
+{
+    auto* top = near.getTopLevelComponent();
+    if (top == nullptr) return;
+    auto* prompt = new NamePrompt (title, message, initial, std::move (done));
+    prompt->setLookAndFeel (&near.getLookAndFeel());      // the window it sits in may be the host's wrapper, which does not carry the brand look
+    top->addAndMakeVisible (prompt);
+    prompt->setBounds (top->getLocalBounds());
+    prompt->toFront (true);
+    prompt->focus();
+}
+}
+
+juce::StringArray addToMenu (juce::PopupMenu& menu, MUProcessor& proc, const juce::String& scope)
+{
+    juce::StringArray own;
+    const auto list = UserPresets::list (scope);
+    const auto now = proc.scopePresetName (scope);
+    bool nowIsOwn = false;
+    menu.addSectionHeader ("My presets");
+    if (list.empty()) menu.addItem (1, "None saved yet", false, false);
+    for (size_t i = 0; i < list.size(); ++i)
+    {
+        own.add (list[i].name);
+        nowIsOwn = nowIsOwn || list[i].name == now;
+        menu.addItem (FirstOwn + (int) i, list[i].name, true, list[i].name == now);
+    }
+    menu.addSeparator();
+    menu.addItem (SaveAs, "Save as...");
+    if (nowIsOwn)
+    {
+        menu.addItem (Save, "Save changes to \"" + now + "\"", proc.presetEdited (scope));
+        menu.addItem (Rename, "Rename \"" + now + "\"...");
+        menu.addItem (Delete, "Delete \"" + now + "\"");
+        menu.addItem (Export, "Export \"" + now + "\"...");
+    }
+    menu.addItem (Import, "Import a preset file...");
+    menu.addItem (ShowFolder, "Show my presets folder");
+    return own;
+}
+
+bool handle (int result, juce::Component& near, MUProcessor& proc, const juce::String& scope, const juce::StringArray& own, std::function<void (const juce::String&)> say)
+{
+    auto tell = [say] (const juce::String& s) { if (say) say (s); };
+    const auto now = proc.scopePresetName (scope);
+    juce::Component::SafePointer<juce::Component> safe (&near);
+    auto* p = &proc;
+    if (result >= FirstOwn)
+    {
+        if (result - FirstOwn < own.size()) tell (proc.loadUserPreset (scope, own[result - FirstOwn]));
+        return true;
+    }
+    switch (result)
+    {
+        case SaveAs:
+            askForName (near, "Save as a preset of your own", scope == "chain" ? "Saves every setting of this plugin on this track (not the track's role, its balance or the song's key)."
+                                                                             : juce::String ("Saves this tool's settings. It will be listed under My presets in every song."),
+                        UserPresets::list (scope).empty() || ! own.contains (now) ? juce::String() : now + " 2",
+                        [p, scope, tell] (const juce::String& typed) { tell (p->saveUserPreset (scope, typed, false)); });
+            return true;
+        case Save:   tell (proc.saveUserPreset (scope, now, true)); return true;
+        case Rename:
+            askForName (near, "Rename the preset", {}, now, [p, scope, now, tell] (const juce::String& typed) { tell (p->renameUserPreset (scope, now, typed)); });
+            return true;
+        case Delete: tell (proc.deleteUserPreset (scope, now)); return true;
+        case Import:
+            chooser() = std::make_unique<juce::FileChooser> ("Choose a preset file", juce::File::getSpecialLocation (juce::File::userDesktopDirectory), juce::String ("*") + UserPresets::kExtension);
+            chooser()->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [p, tell] (const juce::FileChooser& c)
+            {
+                if (c.getResult() != juce::File()) tell (p->importUserPreset (c.getResult(), true));
+            });
+            return true;
+        case Export:
+        {
+            UserPreset preset;
+            if (! UserPresets::find (scope, now, preset)) { tell ("That preset is no longer in your presets folder."); return true; }
+            chooser() = std::make_unique<juce::FileChooser> ("Export the preset", juce::File::getSpecialLocation (juce::File::userDesktopDirectory).getChildFile (preset.name + UserPresets::kExtension),
+                                                             juce::String ("*") + UserPresets::kExtension);
+            chooser()->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting, [preset, tell] (const juce::FileChooser& c)
+            {
+                if (c.getResult() == juce::File()) return;
+                const auto done = UserPresets::exportTo (preset, c.getResult());
+                tell (done.wasOk() ? "Exported \"" + preset.name + "\". Anyone with the plugin can load that file with Import." : done.getErrorMessage());
+            });
+            return true;
+        }
+        case ShowFolder:
+        {
+            auto folder = UserPresets::folder().getChildFile (scope);
+            folder.createDirectory();
+            folder.revealToUser();
+            return true;
+        }
+        default: return false;
+    }
+}
+}
+
+Choice::Choice (MUProcessor& p, const juce::String& paramId, const juce::StringArray& i, const juce::String& helpKey) : proc (p), id (paramId), items (i)
+{
+    styleButton (button, items[0], false, helpKey.isNotEmpty() ? helpKey : paramId);
+    button.onClick = [this] { showMenu(); };
+    addAndMakeVisible (button);
+    timerCallback();
+    startTimerHz (8);
+}
+
+void Choice::timerCallback()
+{
+    const int now = juce::jlimit (0, juce::jmax (0, items.size() - 1), juce::roundToInt (proc.getParam (id)));
+    if (now != shown) { shown = now; button.setButtonText (items[now]); }
+}
+
+void Choice::showMenu()
+{
+    juce::PopupMenu menu;
+    menu.setLookAndFeel (&getLookAndFeel());
+    for (int i = 0; i < items.size(); ++i) menu.addItem (i + 1, items[i], true, i == shown);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&button).withMinimumWidth (button.getWidth()),
+        [safe = juce::Component::SafePointer<Choice> (this)] (int result)
+        {
+            if (safe == nullptr || result <= 0) return;
+            safe->proc.setParam (safe->id, (float) (result - 1));
+            safe->timerCallback();
+        });
 }
 
 void PresetStrip::showMenu()
@@ -240,11 +452,15 @@ void PresetStrip::showMenu()
     juce::PopupMenu menu;
     menu.setLookAndFeel (&getLookAndFeel());
     const auto now = current ? current() : juce::String();
+    if (proc != nullptr && scope) menu.addSectionHeader ("Built in");
     for (int i = 0; i < list.size(); ++i) menu.addItem (i + 1, list[i], true, list[i] == now);
+    juce::StringArray own;
+    if (proc != nullptr && scope) own = ownpresets::addToMenu (menu, *proc, scope());
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&name).withMinimumWidth (name.getWidth()),
-        [safe = juce::Component::SafePointer<PresetStrip> (this)] (int result)
+        [safe = juce::Component::SafePointer<PresetStrip> (this), own] (int result)
         {
             if (safe == nullptr || result <= 0 || ! safe->choose) return;
+            if (safe->proc != nullptr && safe->scope && ownpresets::handle (result, *safe, *safe->proc, safe->scope(), own, safe->status)) { safe->refresh(); return; }
             safe->choose (result - 1);
             safe->refresh();
         });

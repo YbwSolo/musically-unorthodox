@@ -238,6 +238,17 @@ int main()
         check (plan.projectedMasterLufs <= -18.0f + 0.3f, "Projected master at or under target", juce::String (plan.projectedMasterLufs, 2));
         check (plan.projectedMasterTruePeak <= -6.0f + 0.3f, "Projected true peak under ceiling", juce::String (plan.projectedMasterTruePeak, 2));
         check (plan.moves.size() == 3, "Master never gets a move");
+        // A vocal whose own peaks would end up over the top of its channel: the whole song comes down to make room,
+        // the balance between the tracks stays exactly the same, and nothing is asked to compress harder.
+        auto spiky = tracks;
+        spiky[0].truePeakDb = 2.0f;                  // a vocal with 22 dB between its average and its peaks: over the top already
+        const auto roomy = computeBalance (spiky, tg);
+        float rVocal = 0, rBeat = 0;
+        for (auto& m : roomy.moves) { if (m.slot == 0) rVocal = m.deltaDb; if (m.slot == 1) rBeat = m.deltaDb; }
+        check (roomy.headroomDb > 0.5f && spiky[0].truePeakDb + rVocal <= tg.trackTruePeak + 0.11f && near (rBeat - rVocal, dBeat - dVocal, 0.05f),
+               "A track whose peaks would clip its channel makes the balance turn the whole song down, not that track alone",
+               "song " + juce::String (roomy.headroomDb, 1) + " dB lower, vocal peaks at " + juce::String (spiky[0].truePeakDb + rVocal, 1) + " dB, balance unchanged");
+        check (near (plan.headroomDb, 0.0f, 0.01f), "With room on every channel nothing is turned down for headroom");
 
         // locked track stays put
         tracks[1].acceptsBalance = false;
@@ -465,8 +476,8 @@ int main()
 
     // --- Compressor styles and sidechain high-pass
     {
-        const char* names[] = { "Clean", "Punch", "Smooth", "Glue" };
-        for (int style = 0; style < 4; ++style)
+        const char* names[] = { "Clean", "Punch", "Smooth", "Glue", "Vocal" };
+        for (int style = 0; style < 5; ++style)
         {
             Compressor c; c.prepare (fs, 512, 2);
             CompressorSettings st; st.enabled = true; st.thresholdDb = -20.0f; st.ratio = 4.0f; st.attackMs = 5.0f; st.releaseMs = 80.0f; st.kneeDb = 0.0f; st.autoMakeup = false; st.style = (CompStyle) style;
@@ -646,6 +657,39 @@ int main()
                 foundMud = true;
         check (foundMud, "Low-mid build-up on a vocal is found and answered with a cut", sug.empty() ? juce::String ("no suggestions") : sug[0].title + " -> " + sug[0].action);
         if (! sug.empty()) check (sug[0].why.length() > 40, "Suggestions explain themselves", sug[0].why.substring (0, 70) + "...");
+        // With a listening pass behind it, the analysis knows whether a build-up is always there or comes and goes
+        {
+            BandArray steady {}, comesAndGoes {};
+            steady.fill (1.5f); comesAndGoes.fill (9.0f);
+            auto mudOf = [&] (const BandArray* swing) -> Suggestion
+            {
+                for (auto& x : analyseTone (muddy, Role::Vocal, swing))
+                    if (x.kind == Suggestion::Kind::EqBand && x.band.type == EQType::Bell && x.band.freqHz > 150.0f && x.band.freqHz < 450.0f) return x;
+                return {};
+            };
+            const auto fixed = mudOf (&steady), moving = mudOf (&comesAndGoes);
+            check (! fixed.band.dynamic && fixed.band.gainDb < -0.9f && moving.band.dynamic && moving.band.rangeDb < -1.4f,
+                   "After listening, a build-up that is always there gets a fixed cut and one that comes and goes gets a dynamic cut", fixed.action + " / " + moving.action);
+        }
+        // the listening pass itself: only frames with sound in them count, and the result is the average over the pass
+        {
+            SpectrumAnalyzer an; an.prepare (fs);
+            an.startListen();
+            juce::AudioBuffer<float> chunk (2, 1024);
+            double phase = 0.0;
+            for (int block = 0; block < 280; ++block)        // six seconds: two of a 300 Hz tone, two silent, two of the tone again
+            {
+                const bool sounding = block < 94 || block >= 188;
+                for (int i = 0; i < 1024; ++i) { phase += juce::MathConstants<double>::twoPi * 300.0 / fs; const float v = sounding ? 0.3f * (float) std::sin (phase) : 0.0f; chunk.setSample (0, i, v); chunk.setSample (1, i, v); }
+                an.pushBlock (chunk);
+                an.pump();
+            }
+            std::array<float, SpectrumAnalyzer::kNumBands> mean {}, swing {};
+            const bool have = an.listenBands (mean, swing);
+            int loudest = 0; for (int b = 1; b < SpectrumAnalyzer::kNumBands; ++b) if (mean[(size_t) b] > mean[(size_t) loudest]) loudest = b;
+            check (have && near (an.getListenSeconds(), 4.0f, 0.4f) && near (an.bandCentreHz (loudest), 300.0f, 60.0f) && swing[(size_t) loudest] < 1.0f,
+                   "A listening pass counts only the time there was sound, and measures what was in it", juce::String (an.getListenSeconds(), 1) + " s of sound in 6 s, loudest band " + juce::String (an.bandCentreHz (loudest), 0) + " Hz");
+        }
 
         auto essy = target;
         for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 5000.0f && centres[(size_t) b] < 9000.0f) essy[(size_t) b] += 9.0f;
@@ -888,6 +932,20 @@ int main()
                 r.process (view);
             }
             b.setSample (0, 0, 0.0f); b.setSample (1, 0, 0.0f);                 // take the dry click back out
+            // The decay time of a reverb is the decay of its mids (highs are meant to go sooner), so keep 500 Hz to
+            // 2 kHz before measuring: two gentle filters each way.
+            const float lo = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 500.0f / (float) fs), hi = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 2000.0f / (float) fs);
+            for (int c = 0; c < 2; ++c)
+            {
+                float a1 = 0.0f, a2 = 0.0f, h1 = 0.0f, h2 = 0.0f;
+                for (int i = 0; i < b.getNumSamples(); ++i)
+                {
+                    float v = b.getSample (c, i);
+                    h1 += (v - h1) * lo; v -= h1; h2 += (v - h2) * lo; v -= h2;
+                    a1 += (v - a1) * hi; a2 += (a1 - a2) * hi;
+                    b.setSample (c, i, a2);
+                }
+            }
             // Schroeder integration: energy still to come at each moment, in dB; fit the fall from -5 to -25 dB
             std::vector<double> rest ((size_t) b.getNumSamples());
             double acc = 0.0;
@@ -902,7 +960,7 @@ int main()
             return (t5 >= 0 && t25 > t5) ? (float) (3.0 * (t25 - t5) / fs) : 0.0f;
         };
         const float d1 = decayOf (1.0f, 0.5f), d2 = decayOf (2.5f, 0.5f);
-        check (near (d1, 1.0f, 0.2f) && near (d2, 2.5f, 0.5f), "Reverb decays in the time it is set to", juce::String (d1, 2) + " s for 1.0, " + juce::String (d2, 2) + " s for 2.5");
+        check (near (d1, 1.0f, 0.2f) && near (d2, 2.5f, 0.5f), "Reverb decays in the time it is set to (measured on the mids)", juce::String (d1, 2) + " s for 1.0, " + juce::String (d2, 2) + " s for 2.5");
         check (near (Reverb::beatMs (120.0), 500.0f, 0.01f) && near (Reverb::autoPreDelayMs (120.0), 31.25f, 0.01f) && near (Reverb::autoDecaySeconds (120.0, 1), 1.0f, 0.001f)
                && near (Reverb::autoDecaySeconds (128.0, 2), 1.875f, 0.001f) && near (Reverb::autoDecaySeconds (90.0, 0), 0.6667f, 0.001f),
                "Reverb timing follows the tempo (60,000 / BPM)");
@@ -1284,6 +1342,503 @@ int main()
         double side = 0.0, wet = 0.0;
         for (int i = (int) fs / 2; i < burst.getNumSamples(); ++i) { side += std::abs (burst.getSample (0, i) - burst.getSample (1, i)); wet += std::abs (burst.getSample (0, i) - dry.getSample (0, i)); }
         check (side < wet * 1.0e-4 && wet > 1.0, "Reverb width at zero keeps the reverb in the middle");
+    }
+
+    // ================================================================ build 12: pulse-locked pitch engine, compressor, reverb, delay
+    // A voice-like test signal: a pulse on every period, like the vocal folds make, through three resonances that
+    // give it a vowel, with a little breath noise. The pitch follows whatever function it is given.
+    auto vowel = [fs] (double seconds, const std::function<double (double)>& hzAt, float breath = 0.003f, float jitter = 0.0f)
+    {
+        juce::AudioBuffer<float> b (1, (int) (fs * seconds));
+        ColourBiquad f1, f2, f3;
+        f1.peak (650.0f, 6.0f, 18.0f, fs); f2.peak (1100.0f, 7.0f, 15.0f, fs); f3.peak (2500.0f, 8.0f, 14.0f, fs);
+        juce::Random rng (3);
+        double phase = 0.0, wobbleNow = 1.0;
+        for (int i = 0; i < b.getNumSamples(); ++i)
+        {
+            // jitter: every period comes out a little longer or shorter than the last, as in a real voice
+            if (jitter > 0.0f && std::fmod (phase, juce::MathConstants<double>::twoPi) < juce::MathConstants<double>::twoPi * 150.0 / fs) wobbleNow = 1.0 + (double) jitter * (rng.nextDouble() * 2.0 - 1.0);
+            const double hz = hzAt ((double) i / fs) * wobbleNow;
+            phase += juce::MathConstants<double>::twoPi * hz / fs;
+            float x = 0.0f;
+            for (int k = 1; (double) k * hz < 5500.0; ++k) x += (float) std::cos ((double) k * phase) / (float) k;
+            x = x * 0.05f + breath * (rng.nextFloat() * 2.0f - 1.0f);
+            b.setSample (0, i, f3.run (0, f2.run (0, f1.run (0, x))) * 0.25f);
+        }
+        return b;
+    };
+    // How much the level in a band wobbles from one 20 ms slice to the next, in dB. On a steady vowel it should
+    // hardly move; a pitch shifter that smears the voice on and off makes it swing.
+    auto bandWobble = [fs] (const juce::AudioBuffer<float>& b, float loHz, float hiHz, double fromSeconds)
+    {
+        ColourBiquad hp, lp; hp.highPass (loHz, 0.707f, fs); lp.lowPass (hiHz, 0.707f, fs);
+        std::vector<float> levels;
+        const int slice = (int) (fs * 0.02);
+        double sum = 0.0; int count = 0;
+        for (int i = 0; i < b.getNumSamples(); ++i)
+        {
+            const float v = lp.run (0, hp.run (0, b.getSample (0, i)));
+            if (i < (int) (fs * fromSeconds)) continue;
+            sum += (double) v * v;
+            if (++count == slice) { levels.push_back ((float) (10.0 * std::log10 (sum / slice + 1.0e-12))); sum = 0.0; count = 0; }
+        }
+        double mean = 0.0; for (float l : levels) mean += l; mean /= (double) juce::jmax ((size_t) 1, levels.size());
+        double var = 0.0; for (float l : levels) var += ((double) l - mean) * ((double) l - mean);
+        return (float) std::sqrt (var / (double) juce::jmax ((size_t) 1, levels.size()));
+    };
+    {
+        // --- old slicing against pulse-locked slicing, same voice, same shift (a major third up, as a harmony uses)
+        const auto drifting = [] (double t) { return 140.0 * std::pow (2.0, (35.0 * std::sin (juce::MathConstants<double>::twoPi * 0.8 * t) + 12.0 * std::sin (juce::MathConstants<double>::twoPi * 5.3 * t)) / 1200.0); };
+        const auto voice = vowel (4.0, drifting);
+        auto shiftWith = [&] (bool locked, float ratio)
+        {
+            GrainEngine engine; engine.prepare (1, fs);
+            GrainEngine::Voice v; engine.resetVoice (v, (float) (fs * 0.02));
+            PitchDetector d; d.prepare (fs);
+            juce::AudioBuffer<float> out (1, voice.getNumSamples());
+            float period = (float) (fs / 140.0), now = period; bool voiced = false;
+            for (int i = 0; i < voice.getNumSamples(); ++i)
+            {
+                const float x = voice.getSample (0, i);
+                engine.write (0, x);
+                if (d.push (x)) { voiced = d.frequency() > 0.0f; if (voiced) period = (float) (fs / d.frequency()); }
+                now += (period - now) * 0.007f;
+                float y = 0.0f;
+                if (locked) engine.renderSync (v, now, voiced, ratio, (float) (fs * 0.02), &y);
+                else        engine.render (v, period, voiced, ratio, (float) (fs * 0.02), &y);
+                out.setSample (0, i, y);
+                engine.advance();
+            }
+            return out;
+        };
+        const float dry = bandWobble (voice, 1800.0f, 3400.0f, 1.0);
+        const auto oldUp = shiftWith (false, 1.26f), newUp = shiftWith (true, 1.26f), oldDown = shiftWith (false, 0.5f), newDown = shiftWith (true, 0.5f);
+        const float wOld = bandWobble (oldUp, 1800.0f, 3400.0f, 1.0), wNew = bandWobble (newUp, 1800.0f, 3400.0f, 1.0);
+        const float dOld = bandWobble (oldDown, 1800.0f, 3400.0f, 1.0), dNew = bandWobble (newDown, 1800.0f, 3400.0f, 1.0);
+        std::printf ("      pulse-locked engine: presence-band wobble, dry voice %.2f dB; third up %.2f -> %.2f dB; octave down %.2f -> %.2f dB\n", dry, wOld, wNew, dOld, dNew);
+        // a rougher, speech-like voice: the pitch sliding fast inside each syllable, 1.5 % jitter, more breath
+        const auto talking = [] (double t) { const double s = std::fmod (t, 0.3) / 0.3; return 115.0 * std::pow (2.0, (7.0 * s * (1.0 - s) * 4.0 - 2.0 * s) / 12.0); };
+        const auto rough = vowel (4.0, talking, 0.012f, 0.015f);
+        auto clarityOf = [fs] (const juce::AudioBuffer<float>& b)
+        {
+            PitchDetector d; d.prepare (fs);
+            double sum = 0.0; int n = 0;
+            for (int i = (int) fs; i < b.getNumSamples(); ++i) if (d.push (b.getSample (0, i)) && d.frequency() > 0.0f) { sum += d.clarity(); ++n; }
+            return n > 0 ? (float) (sum / n) : 0.0f;
+        };
+        auto shiftRough = [&] (bool locked, float ratio)
+        {
+            GrainEngine engine; engine.prepare (1, fs);
+            GrainEngine::Voice v; engine.resetVoice (v, (float) (fs * 0.02));
+            PitchDetector d; d.prepare (fs);
+            juce::AudioBuffer<float> out (1, rough.getNumSamples());
+            float period = (float) (fs / 140.0), now = period; bool voiced = false;
+            for (int i = 0; i < rough.getNumSamples(); ++i)
+            {
+                const float x = rough.getSample (0, i);
+                engine.write (0, x);
+                if (d.push (x)) { voiced = d.frequency() > 0.0f; if (voiced) period = (float) (fs / d.frequency()); }
+                now += (period - now) * 0.007f;
+                float y = 0.0f;
+                if (locked) engine.renderSync (v, now, voiced, ratio, (float) (fs * 0.02), &y);
+                else        engine.render (v, period, voiced, ratio, (float) (fs * 0.02), &y);
+                out.setSample (0, i, y);
+                engine.advance();
+            }
+            return out;
+        };
+        // What the measurements show, and what is asserted. On a clean, steady voice the two engines measure the
+        // same. The difference appears on a voice with real roughness (pitch moving inside each syllable, every
+        // period a little different from the last): shifted up, the pulse-locked slices keep the tone steadier.
+        // Shifted down an octave they are no better, and that is stated rather than hidden.
+        float roughOld[3] {}, roughNew[3] {}; int k = 0;
+        for (float ratio : { 1.06f, 1.26f, 0.5f })
+        {
+            const auto a = shiftRough (false, ratio), b2 = shiftRough (true, ratio);
+            roughOld[k] = bandWobble (a, 1800.0f, 3400.0f, 1.0); roughNew[k] = bandWobble (b2, 1800.0f, 3400.0f, 1.0); ++k;
+            std::printf ("      rough voice x%.2f: clarity dry %.3f old %.3f new %.3f; wobble dry %.2f old %.2f new %.2f dB\n", ratio, clarityOf (rough), clarityOf (a), clarityOf (b2),
+                         bandWobble (rough, 1800.0f, 3400.0f, 1.0), roughOld[k - 1], roughNew[k - 1]);
+        }
+        check (wNew <= wOld + 0.1f && wNew < dry + 0.3f, "Clean voice, a third up: pulse-locked slicing is as steady as the old slicing and close to the dry voice",
+               juce::String (wOld, 2) + " dB of tone wobble before, " + juce::String (wNew, 2) + " dB now (the dry voice has " + juce::String (dry, 2) + ")");
+        check (roughNew[0] < roughOld[0] * 0.85f && roughNew[1] < roughOld[1] * 0.85f, "Rough voice shifted up: pulse-locked slicing keeps the tone steadier than the old slicing",
+               "a semitone up " + juce::String (roughOld[0], 2) + " -> " + juce::String (roughNew[0], 2) + " dB, a third up " + juce::String (roughOld[1], 2) + " -> " + juce::String (roughNew[1], 2) + " dB");
+        check (dNew < dOld + 0.3f && roughNew[2] < roughOld[2] + 0.3f, "An octave down is no worse than before (it is not better either)",
+               "clean " + juce::String (dOld, 2) + " -> " + juce::String (dNew, 2) + " dB, rough " + juce::String (roughOld[2], 2) + " -> " + juce::String (roughNew[2], 2) + " dB");
+        // the shifted notes are still the right notes
+        juce::AudioBuffer<float> tail (1, (int) (fs * 2.5)); tail.copyFrom (0, 0, newUp, 0, (int) fs, tail.getNumSamples());
+        juce::AudioBuffer<float> src (1, (int) (fs * 2.5)); src.copyFrom (0, 0, voice, 0, (int) (fs * 0.98), src.getNumSamples());
+        check (std::abs (meanOf (trackNotes (tail, 0.1f)) - meanOf (trackNotes (src, 0.1f)) - 4.0f) < 0.06f, "A third up is still exactly four semitones",
+               juce::String (meanOf (trackNotes (tail, 0.1f)) - meanOf (trackNotes (src, 0.1f)), 3));
+    }
+
+    {
+        // --- Tune: the new controls. A voice singing 35 cents flat of A3, hard tuned in A major.
+        const float flatA = 220.0f * std::pow (2.0f, -35.0f / 1200.0f);
+        auto tuned = [&] (float hz, const std::function<void (TunerSettings&)>& set, float seconds = 2.0f)
+        {
+            Tuner t; t.prepare (fs, 256, 1);
+            TunerSettings ts; ts.enabled = true; ts.key = 9; ts.scale = 1; ts.speedMs = 0.0f; ts.keepVibrato = 0.0f; ts.hold = 0.3f;
+            set (ts); t.setSettings (ts);
+            auto b = voiceTone (hz, seconds, 1);
+            inBlocks (b, 256, [&] (juce::AudioBuffer<float>& v) { t.process (v); });
+            return meanOf (trackNotes (b, 0.6f));
+        };
+        const float plain = tuned (flatA, [] (TunerSettings&) {});
+        check (std::abs (plain - 57.0f) < 0.04f, "Hard tune puts a note 35 cents flat exactly on the note", juce::String (plain, 3));
+        // Flex: within the tolerance the note is left as sung; well outside it, it is corrected in full
+        const float close = 220.0f * std::pow (2.0f, -8.0f / 1200.0f);
+        const float leftAlone = tuned (close, [] (TunerSettings& ts) { ts.flexCents = 20.0f; });
+        const float stillFixed = tuned (flatA, [] (TunerSettings& ts) { ts.flexCents = 20.0f; });
+        check (std::abs (leftAlone - (57.0f - 0.08f)) < 0.02f && std::abs (stillFixed - 57.0f) < 0.04f, "Flex leaves a note that is 8 cents out as it was sung and still corrects one that is 35 cents out",
+               juce::String ((leftAlone - 57.0f) * 100.0f, 1) + " cents and " + juce::String ((stillFixed - 57.0f) * 100.0f, 1) + " cents from the note");
+
+        // Keep slides: a slow slide from A3 up to B3 and back, natural speed. With keep slides the voice is left
+        // nearer to what was sung while it is moving, and a held note is still tuned.
+        auto slide = [&] (float keep)
+        {
+            Tuner t; t.prepare (fs, 256, 1);
+            TunerSettings ts; ts.enabled = true; ts.key = 9; ts.scale = 1; ts.speedMs = 40.0f; ts.keepVibrato = 0.5f; ts.hold = 0.3f; ts.keepSlides = keep;
+            t.setSettings (ts);
+            const int n = (int) (fs * 4.0);
+            juce::AudioBuffer<float> b (1, n), dryCopy;
+            double phase = 0.0;
+            for (int i = 0; i < n; ++i)
+            {
+                const double tt = (double) i / fs;
+                const double note = 57.0 + 1.0 - std::cos (juce::MathConstants<double>::twoPi * tt / 0.5);        // 57..59 and back, twice a second: 8 semitones a second
+                phase += juce::MathConstants<double>::twoPi * 440.0 * std::pow (2.0, (note - 69.0) / 12.0) / fs;
+                float v = 0.0f; for (int h = 1; h <= 8; ++h) v += (float) std::sin (phase * h) / (float) h;
+                b.setSample (0, i, 0.2f * v);
+            }
+            dryCopy.makeCopyOf (b);
+            inBlocks (b, 256, [&] (juce::AudioBuffer<float>& v) { t.process (v); });
+            // compare the pitch of the result with the pitch that went in, 20 ms earlier (the tuner's delay)
+            juce::AudioBuffer<float> shifted (1, n); shifted.clear(); shifted.copyFrom (0, (int) (fs * 0.02), dryCopy, 0, 0, n - (int) (fs * 0.02));
+            const auto a = trackNotes (shifted, 1.0f), c = trackNotes (b, 1.0f);
+            double sum = 0.0; const size_t m = std::min (a.size(), c.size());
+            for (size_t i = 0; i < m; ++i) sum += std::abs (a[i] - c[i]);
+            return m > 0 ? (float) (sum / (double) m) * 100.0f : 0.0f;
+        };
+        const float pulled = slide (0.0f), kept = slide (1.0f);
+        check (kept < pulled * 0.82f && pulled > 12.0f, "Keep slides leaves a sliding voice nearer to what was sung", juce::String (pulled, 1) + " cents moved without it, " + juce::String (kept, 1) + " cents with it");
+        const float heldStill = tuned (flatA, [] (TunerSettings& ts) { ts.speedMs = 40.0f; ts.keepSlides = 1.0f; }, 3.0f);
+        check (std::abs (heldStill - 57.0f) < 0.05f, "With keep slides on, a held note is still tuned", juce::String ((heldStill - 57.0f) * 100.0f, 1) + " cents from the note");
+    }
+
+    {
+        // --- Compressor: the gain must not ride each cycle of a low note. A 110 Hz tone and a 110 Hz + 2.5 kHz pair,
+        // 18 dB over the threshold, fast settings. Build 11 measured -42 dB (Punch) and -51 dB (Clean) on this test.
+        auto harmonicsDb = [&] (int style, bool pair)
+        {
+            Compressor c; c.prepare (fs, 256, 2);
+            CompressorSettings st; st.enabled = true; st.thresholdDb = -30.0f; st.ratio = 4.0f; st.attackMs = 3.0f; st.releaseMs = 60.0f; st.kneeDb = 3.0f; st.style = (CompStyle) style;
+            c.setSettings (st);
+            const int n = (int) (fs * 4.0);
+            juce::AudioBuffer<float> b (2, n);
+            for (int i = 0; i < n; ++i)
+            {
+                const float v = 0.25f * (float) std::sin (juce::MathConstants<double>::twoPi * 110.0 * i / fs)
+                              + (pair ? 0.063f * (float) std::sin (juce::MathConstants<double>::twoPi * 2500.0 * i / fs) : 0.0f);
+                b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+            inBlocks (b, 256, [&] (juce::AudioBuffer<float>& v) { c.process (v); });
+            const int from = (int) (fs * 2.0);
+            auto db = [&] (float hz) { return juce::Decibels::gainToDecibels (amountAt (b, 0, hz, from), -200.0f); };
+            if (! pair) return juce::jmax (db (220.0f), db (330.0f)) - db (110.0f);
+            return juce::jmax (db (2390.0f), db (2610.0f), db (2280.0f)) - db (2500.0f);
+        };
+        juce::String detail; float worst = -200.0f, worstPair = -200.0f;
+        for (int style = 0; style < 5; ++style)
+        {
+            const float h = harmonicsDb (style, false), im = harmonicsDb (style, true);
+            worst = juce::jmax (worst, h); worstPair = juce::jmax (worstPair, im);
+            detail << Compressor::styleNames()[style] << " " << juce::String (juce::roundToInt (h)) << " / " << juce::String (juce::roundToInt (im)) << " dB  ";
+        }
+        check (worst < -65.0f && worstPair < -65.0f, "Compressing a low note adds no audible harmonics or sidebands in any style (harmonics / sidebands)", detail);
+
+        // The Vocal style against the same settings without its second stage (Smooth): a voice-like pattern of
+        // 150 ms words with a 4 ms spike at the front of each. The catcher takes the spikes down; the body of
+        // the words comes out the same.
+        auto pattern = [&] (CompStyle style, float& spikeDb, float& bodyDb)
+        {
+            Compressor c; c.prepare (fs, 256, 2);
+            CompressorSettings st; st.enabled = true; st.thresholdDb = -20.0f; st.ratio = 3.0f; st.attackMs = 12.0f; st.releaseMs = 110.0f; st.kneeDb = 8.0f; st.autoMakeup = false; st.style = style;
+            c.setSettings (st);
+            const int n = (int) (fs * 3.0), word = (int) (fs * 0.3);
+            juce::AudioBuffer<float> b (2, n);
+            for (int i = 0; i < n; ++i)
+            {
+                const int at = i % word;
+                const float level = at < (int) (fs * 0.004) ? 0.9f : at < (int) (fs * 0.15) ? 0.25f : 0.05f;
+                const float v = level * (float) std::sin (juce::MathConstants<double>::twoPi * 300.0 * i / fs);
+                b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+            inBlocks (b, 256, [&] (juce::AudioBuffer<float>& v) { c.process (v); });
+            const int from = word * 6;
+            spikeDb = juce::Decibels::gainToDecibels (b.getMagnitude (0, from, (int) (fs * 0.004)));
+            bodyDb = juce::Decibels::gainToDecibels (b.getRMSLevel (0, from + (int) (fs * 0.06), (int) (fs * 0.08)));
+        };
+        float spikeSmooth, bodySmooth, spikeVocal, bodyVocal;
+        pattern (CompStyle::Smooth, spikeSmooth, bodySmooth); pattern (CompStyle::Vocal, spikeVocal, bodyVocal);
+        check (spikeVocal < spikeSmooth - 1.5f && std::abs (bodyVocal - bodySmooth) < 1.0f, "Vocal style: the catcher takes the spikes down and leaves the body of the words to the leveller",
+               "spikes " + juce::String (spikeSmooth, 1) + " dB with the leveller alone, " + juce::String (spikeVocal, 1) + " dB with the catcher; body " + juce::String (bodySmooth, 1) + " / " + juce::String (bodyVocal, 1) + " dB");
+    }
+
+    {
+        // --- Reverb: nine spaces from five engines. Each is measured from what it does to a single click.
+        auto clickThrough = [&] (const std::function<void (ReverbSettings&)>& set, float seconds)
+        {
+            Reverb r; r.prepare (fs, 512, 2);
+            ReverbSettings rs; rs.enabled = true; rs.autoTime = false; rs.decaySeconds = 2.0f; rs.preDelayMs = 0.0f; rs.mix = 1.0f; rs.duck = 0.0f; rs.tone = 0.6f; rs.lowCutHz = 40.0f;
+            set (rs); r.setSettings (rs);
+            juce::AudioBuffer<float> b (2, (int) (fs * seconds)); b.clear();
+            b.setSample (0, 100, 0.9f); b.setSample (1, 100, 0.9f);
+            inBlocks (b, 512, [&r] (juce::AudioBuffer<float>& v) { r.process (v); });
+            b.setSample (0, 100, b.getSample (0, 100) - 0.9f); b.setSample (1, 100, b.getSample (1, 100) - 0.9f);        // the wet sound only
+            return b;
+        };
+        auto bandOf = [fs] (const juce::AudioBuffer<float>& in, float loHz, float hiHz)
+        {
+            juce::AudioBuffer<float> b; b.makeCopyOf (in);
+            const float lo = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * loHz / (float) fs), hi = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * hiHz / (float) fs);
+            float a1 = 0.0f, a2 = 0.0f, h1 = 0.0f, h2 = 0.0f;
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                float v = b.getSample (0, i);
+                h1 += (v - h1) * lo; v -= h1; h2 += (v - h2) * lo; v -= h2;
+                a1 += (v - a1) * hi; a2 += (a1 - a2) * hi;
+                b.setSample (0, i, a2);
+            }
+            return b;
+        };
+        // decay time from the fall between 5 and 35 dB down in the energy still to come
+        auto decayOf = [fs] (const juce::AudioBuffer<float>& b)
+        {
+            std::vector<double> rest ((size_t) b.getNumSamples());
+            double acc = 0.0;
+            for (int i = b.getNumSamples() - 1; i >= 0; --i) { acc += (double) b.getSample (0, i) * b.getSample (0, i); rest[(size_t) i] = acc; }
+            int t5 = -1, t35 = -1;
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const double db = 10.0 * std::log10 (rest[(size_t) i] / rest[0] + 1e-30);
+                if (t5 < 0 && db <= -5.0) t5 = i;
+                if (t35 < 0 && db <= -35.0) { t35 = i; break; }
+            }
+            return (t5 >= 0 && t35 > t5) ? (float) (2.0 * (t35 - t5) / fs) : 0.0f;
+        };
+        // evenness of a stretch of tail once its own decay is taken out: 3 is smooth noise, well above it means
+        // separate echoes stick out
+        auto evenness = [fs] (const juce::AudioBuffer<float>& b, float from, float to)
+        {
+            const int a = (int) (fs * from), n = (int) (fs * (to - from)), w = 960;
+            std::vector<double> x ((size_t) n);
+            for (int i = 0; i < n; ++i)
+            {
+                double e = 0.0; for (int k = -w / 2; k < w / 2; ++k) { const double v = b.getSample (0, a + i + k); e += v * v; }
+                x[(size_t) i] = b.getSample (0, a + i) / (std::sqrt (e / w) + 1e-12);
+            }
+            double m2 = 0.0, m4 = 0.0; for (double v : x) { m2 += v * v; m4 += v * v * v * v; }
+            m2 /= n; m4 /= n;
+            return (float) (m4 / (m2 * m2 + 1e-30));
+        };
+        auto halfEnergyMs = [fs] (const juce::AudioBuffer<float>& b)
+        {
+            double total = 0.0; for (int i = 0; i < b.getNumSamples(); ++i) total += (double) b.getSample (0, i) * b.getSample (0, i);
+            double acc = 0.0;
+            for (int i = 0; i < b.getNumSamples(); ++i) { acc += (double) b.getSample (0, i) * b.getSample (0, i); if (acc >= 0.5 * total) return (float) (1000.0 * (i - 100) / fs); }
+            return 0.0f;
+        };
+
+        juce::String decays, smooth; bool decaysOk = true, smoothOk = true, finite = true; float halves[Reverb::NumTypes] {};
+        for (int t = 0; t < Reverb::NumTypes; ++t)
+        {
+            const auto ir = clickThrough ([t] (ReverbSettings& rs) { rs.type = t; }, 6.0f);
+            for (int i = 0; i < ir.getNumSamples(); i += 7) finite = finite && std::isfinite (ir.getSample (0, i)) && std::abs (ir.getSample (0, i)) < 4.0f;
+            halves[t] = halfEnergyMs (ir);
+            if (t == Reverb::Gated) continue;
+            const float d = decayOf (bandOf (ir, 500.0f, 2000.0f)), k = evenness (ir, 0.4f, 0.8f);
+            decays << Reverb::typeNames()[t] << " " << juce::String (d, 2) << "  "; smooth << Reverb::typeNames()[t] << " " << juce::String (k, 1) << "  ";
+            decaysOk = decaysOk && near (d, 2.0f, 0.35f); smoothOk = smoothOk && k > 2.4f && k < 3.8f;
+        }
+        check (finite, "Every reverb space gives finite, bounded sound");
+        check (decaysOk, "Every ringing space fades in the time that was set, measured on the mids (2.0 s asked for)", decays);
+        check (smoothOk, "Every tail is smooth: no separate echoes or ringing notes stick out of it (3 is ideal)", smooth);
+        check (halves[Reverb::Room] < halves[Reverb::Chamber] && halves[Reverb::Chamber] < halves[Reverb::Hall] && halves[Reverb::Hall] < halves[Reverb::Cathedral] && halves[Reverb::Ambient] > halves[Reverb::Cathedral],
+               "The spaces are different sizes: half the sound has arrived later in each of room, chamber, hall, cathedral, and latest in the ambient cloud",
+               juce::String (halves[Reverb::Room], 0) + " / " + juce::String (halves[Reverb::Chamber], 0) + " / " + juce::String (halves[Reverb::Hall], 0) + " / " + juce::String (halves[Reverb::Cathedral], 0) + " / " + juce::String (halves[Reverb::Ambient], 0) + " ms");
+
+        // the plate and the vintage unit are different sounds, not renamed halls: brighter and darker
+        auto topShare = [&] (int t) { const auto ir = clickThrough ([t] (ReverbSettings& rs) { rs.type = t; }, 3.0f); return juce::Decibels::gainToDecibels (bandOf (ir, 5000.0f, 20000.0f).getRMSLevel (0, 0, ir.getNumSamples()) / ir.getRMSLevel (0, 0, ir.getNumSamples())); };
+        const float plateTop = topShare (Reverb::Plate), hallTop = topShare (Reverb::Hall), vintageTop = topShare (Reverb::Vintage);
+        check (plateTop > hallTop + 0.8f && vintageTop < hallTop - 1.5f, "The plate is brighter than the hall and the vintage unit darker",
+               "share above 5 kHz: plate " + juce::String (plateTop, 1) + ", hall " + juce::String (hallTop, 1) + ", vintage " + juce::String (vintageTop, 1) + " dB");
+
+        // Gated: holds its level for the length of the burst, then is gone
+        {
+            const auto ir = clickThrough ([] (ReverbSettings& rs) { rs.type = Reverb::Gated; rs.decaySeconds = 1.5f; }, 2.0f);
+            const float gate = Reverb::gateSeconds (1.5f);
+            auto level = [&] (float from, float to) { return juce::Decibels::gainToDecibels (ir.getRMSLevel (0, 100 + (int) (fs * from), (int) (fs * (to - from))), -120.0f); };
+            const float early = level (0.05f, 0.15f), late = level (gate - 0.12f, gate - 0.02f), after = level (gate + 0.25f, gate + 0.45f);
+            check (std::abs (late - early) < 6.0f && after < late - 45.0f, "Gated reverb holds its level for the burst and then stops dead",
+                   "start " + juce::String (early, 1) + " dB, end " + juce::String (late, 1) + " dB, a quarter of a second later " + juce::String (after, 1) + " dB");
+        }
+        // Shimmer: a 440 Hz note comes back with its octaves in the tail; the hall has none
+        {
+            auto octaveIn = [&] (int type)
+            {
+                Reverb r; r.prepare (fs, 512, 2);
+                ReverbSettings rs; rs.enabled = true; rs.autoTime = false; rs.decaySeconds = 3.0f; rs.mix = 1.0f; rs.duck = 0.0f; rs.type = type; rs.shimmer = 0.6f; r.setSettings (rs);
+                juce::AudioBuffer<float> b (2, (int) (fs * 4.0)); b.clear();
+                for (int i = 0; i < (int) fs; ++i) { const float v = 0.3f * (float) std::sin (juce::MathConstants<double>::twoPi * 440.0 * i / fs); b.setSample (0, i, v); b.setSample (1, i, v); }
+                inBlocks (b, 512, [&r] (juce::AudioBuffer<float>& v) { r.process (v); });
+                // the tail moves, so a note in it is a narrow band, not a single frequency: add up 40 Hz either side
+                juce::AudioBuffer<float> part (1, (int) fs); part.copyFrom (0, 0, b, 0, (int) (fs * 1.5), part.getNumSamples());
+                auto around = [&] (float hz) { double sum = 0.0; for (float f = hz - 40.0f; f <= hz + 40.0f; f += 1.0f) { const double a = amountAt (part, 0, f, 0); sum += a * a; } return juce::Decibels::gainToDecibels ((float) std::sqrt (sum), -200.0f); };
+                return around (880.0f) - around (440.0f);
+            };
+            const float shimmer = octaveIn (Reverb::Shimmer), hall = octaveIn (Reverb::Hall);
+            check (shimmer > -22.0f && hall < shimmer - 20.0f, "Shimmer feeds the tail back an octave higher", "octave against the note: " + juce::String (shimmer, 1) + " dB with shimmer, " + juce::String (hall, 1) + " dB in the plain hall");
+        }
+        // Freeze: the tail stops fading, and nothing new gets in
+        {
+            Reverb r; r.prepare (fs, 512, 2);
+            ReverbSettings rs; rs.enabled = true; rs.autoTime = false; rs.decaySeconds = 0.6f; rs.mix = 1.0f; rs.duck = 0.0f; rs.type = Reverb::Hall; r.setSettings (rs);
+            juce::AudioBuffer<float> b (2, (int) (fs * 5.0)); b.clear();
+            juce::Random rng (5);
+            for (int i = 0; i < (int) (fs * 0.3); ++i) { const float v = (rng.nextFloat() * 2.0f - 1.0f) * 0.3f; b.setSample (0, i, v); b.setSample (1, i, v); }
+            for (int i = (int) (fs * 2.0); i < (int) (fs * 2.2); ++i) { b.setSample (0, i, 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 3000.0 * i / fs)); b.setSample (1, i, b.getSample (0, i)); }
+            int pos = 0;
+            inBlocks (b, 512, [&] (juce::AudioBuffer<float>& v)
+            {
+                if (pos >= (int) (fs * 0.4) && ! rs.freeze) { rs.freeze = true; r.setSettings (rs); }
+                r.process (v); pos += v.getNumSamples();
+            });
+            const float held1 = b.getRMSLevel (0, (int) (fs * 1.0), (int) (fs * 0.5)), held2 = b.getRMSLevel (0, (int) (fs * 4.0), (int) (fs * 0.5));
+            const float newTone = juce::Decibels::gainToDecibels (amountAt (b, 0, 3000.0f, (int) (fs * 2.5)), -200.0f) - juce::Decibels::gainToDecibels (held2, -200.0f);
+            check (held2 > held1 * 0.7f && held1 > 0.001f && newTone < -25.0f, "Freeze holds the tail where it is and lets nothing new in",
+                   juce::String (juce::Decibels::gainToDecibels (held2 / held1), 1) + " dB change over three seconds (0.6 s decay); a new note is " + juce::String (newTone, 0) + " dB under the held tail");
+        }
+        // Low decay: the lows can ring shorter or longer than the rest
+        {
+            const float shortLows = decayOf (bandOf (clickThrough ([] (ReverbSettings& rs) { rs.type = Reverb::Hall; rs.lowDecay = 0.5f; }, 7.0f), 60.0f, 160.0f));
+            const float longLows = decayOf (bandOf (clickThrough ([] (ReverbSettings& rs) { rs.type = Reverb::Hall; rs.lowDecay = 1.8f; }, 7.0f), 60.0f, 160.0f));
+            check (shortLows < 1.5f && longLows > 2.6f, "Low decay sets how long the lows ring against the mids", juce::String (shortLows, 2) + " s at 50 %, " + juce::String (longLows, 2) + " s at 180 % (mids 2.0 s)");
+        }
+        // pushed as far as it goes, it stays stable
+        {
+            bool ok = true; float peak = 0.0f;
+            for (int t : { (int) Reverb::Plate, (int) Reverb::Cathedral, (int) Reverb::Shimmer, (int) Reverb::Vintage })
+            {
+                const auto ir = clickThrough ([t] (ReverbSettings& rs) { rs.type = t; rs.decaySeconds = 30.0f; rs.size = 2.0f; rs.modDepth = 1.0f; rs.modRate = 3.0f; rs.shimmer = 1.0f; rs.lowDecay = 2.0f; rs.tone = 1.0f; }, 12.0f);
+                for (int i = 0; i < ir.getNumSamples(); i += 3) { ok = ok && std::isfinite (ir.getSample (0, i)); peak = juce::jmax (peak, std::abs (ir.getSample (0, i))); }
+            }
+            check (ok && peak < 2.0f, "Reverb stays stable with every control at its limit (30 s decay, largest size, full movement and shimmer)", "peak " + juce::String (peak, 3));
+        }
+    }
+
+    {
+        // --- the same engines at 192 kHz and 44.1 kHz, every space, everything at its limit
+        bool ok = true;
+        for (double rate : { 192000.0, 44100.0 })
+            for (int t = 0; t < Reverb::NumTypes; ++t)
+            {
+                Reverb r; r.prepare (rate, 256, 2);
+                ReverbSettings rs; rs.enabled = true; rs.autoTime = false; rs.decaySeconds = 30.0f; rs.preDelayMs = 500.0f; rs.mix = 1.0f; rs.duck = 0.0f; rs.type = t;
+                rs.size = 2.0f; rs.modDepth = 1.0f; rs.modRate = 3.0f; rs.shimmer = 1.0f; rs.lowDecay = 2.0f; rs.tone = 1.0f; rs.diffusion = 1.0f; rs.early = 1.0f;
+                r.setSettings (rs);
+                juce::AudioBuffer<float> b (2, (int) (rate * 1.5)); b.clear();
+                juce::Random rng (t + 1);
+                for (int i = 0; i < (int) (rate * 0.2); ++i) { b.setSample (0, i, rng.nextFloat() - 0.5f); b.setSample (1, i, rng.nextFloat() - 0.5f); }
+                inBlocks (b, 256, [&r] (juce::AudioBuffer<float>& v) { r.process (v); });
+                for (int i = 0; i < b.getNumSamples(); i += 11) ok = ok && std::isfinite (b.getSample (0, i)) && std::abs (b.getSample (0, i)) < 8.0f;
+            }
+        check (ok, "Every reverb space runs at 44.1 and 192 kHz with every control at its limit");
+    }
+
+    {
+        // --- Delay: styles and patterns
+        auto echoOf = [&] (const std::function<void (EchoSettings&)>& set, juce::AudioBuffer<float> b)
+        {
+            Echo e; e.prepare (fs, 512, 2);
+            EchoSettings es; es.enabled = true; es.sync = false; es.timeMs = 300.0f; es.feedback = 0.5f; es.mix = 1.0f; es.duck = 0.0f; es.tone = 1.0f; es.width = 1.0f; es.lowCutHz = 20.0f;
+            set (es); e.setSettings (es);
+            inBlocks (b, 512, [&e] (juce::AudioBuffer<float>& v) { e.process (v); });
+            return b;
+        };
+        auto clickBuffer = [fs] (float seconds, int width = 48) { juce::AudioBuffer<float> b (2, (int) (fs * seconds)); b.clear(); for (int i = 0; i < width; ++i) { b.setSample (0, 1000 + i, 0.8f); b.setSample (1, 1000 + i, 0.8f); } return b; };
+        auto firstEchoMs = [fs] (const juce::AudioBuffer<float>& b, int channel)
+        {
+            for (int i = 1000 + (int) (fs * 0.05); i < b.getNumSamples(); ++i) if (std::abs (b.getSample (channel, i)) > 0.05f) return (float) (1000.0 * (i - 1000) / fs);
+            return 0.0f;
+        };
+        const auto dual = echoOf ([] (EchoSettings& es) { es.pattern = 2; }, clickBuffer (2.0f));
+        check (near (firstEchoMs (dual, 0), 300.0f, 6.0f) && near (firstEchoMs (dual, 1), 225.0f, 6.0f), "Dual delay: the right side repeats at three quarters of the left side's time",
+               juce::String (firstEchoMs (dual, 0), 0) + " ms left, " + juce::String (firstEchoMs (dual, 1), 0) + " ms right");
+        const auto straight = echoOf ([] (EchoSettings& es) { es.pattern = 1; }, clickBuffer (2.0f));
+        double differ = 0.0; for (int i = 0; i < straight.getNumSamples(); ++i) differ += std::abs (straight.getSample (0, i) - straight.getSample (1, i));
+        check (differ < 1.0e-3 && near (firstEchoMs (straight, 0), 300.0f, 6.0f), "Straight delay keeps every echo in the middle");
+        const auto pong = echoOf ([] (EchoSettings&) {}, clickBuffer (2.0f));
+        check (near (firstEchoMs (pong, 0), 300.0f, 6.0f) && near (firstEchoMs (pong, 1), 600.0f, 6.0f), "Ping-pong still alternates sides", juce::String (firstEchoMs (pong, 0), 0) + " ms left, " + juce::String (firstEchoMs (pong, 1), 0) + " ms right");
+
+        // what a repeat goes through: a 300 Hz note, measured on its third repeat (0.9 to 1.2 s after it ends)
+        auto toneBurst = [fs] { juce::AudioBuffer<float> b (2, (int) (fs * 2.0)); b.clear(); for (int i = 0; i < (int) (fs * 0.25); ++i) { const float v = 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 300.0 * i / fs); b.setSample (0, i, v); b.setSample (1, i, v); } return b; };
+        auto thirdHarmonic = [&] (int style, float drive)
+        {
+            const auto b = echoOf ([style, drive] (EchoSettings& es) { es.style = style; es.drive = drive; es.pattern = 1; es.feedback = 0.7f; }, toneBurst());
+            juce::AudioBuffer<float> part (1, (int) (fs * 0.2)); part.copyFrom (0, 0, b, 0, (int) (fs * 0.92), part.getNumSamples());
+            return juce::Decibels::gainToDecibels (amountAt (part, 0, 900.0f, 0), -200.0f) - juce::Decibels::gainToDecibels (amountAt (part, 0, 300.0f, 0), -200.0f);
+        };
+        const float cleanH = thirdHarmonic (0, 1.0f), tapeH = thirdHarmonic (1, 1.0f), tapeLow = thirdHarmonic (1, 0.0f);
+        auto secondHarmonic = [&] (int style)
+        {
+            const auto b = echoOf ([style] (EchoSettings& es) { es.style = style; es.drive = 1.0f; es.pattern = 1; es.feedback = 0.7f; }, toneBurst());
+            juce::AudioBuffer<float> part (1, (int) (fs * 0.2)); part.copyFrom (0, 0, b, 0, (int) (fs * 0.92), part.getNumSamples());
+            return juce::Decibels::gainToDecibels (amountAt (part, 0, 600.0f, 0), -200.0f) - juce::Decibels::gainToDecibels (amountAt (part, 0, 300.0f, 0), -200.0f);
+        };
+        check (cleanH < -70.0f && tapeH > -40.0f && tapeLow < tapeH - 10.0f, "Tape delay saturates its repeats and Drive sets how much; Digital adds nothing",
+               "third harmonic on the third repeat: digital " + juce::String (cleanH, 0) + " dB, tape " + juce::String (tapeLow, 0) + " dB with no drive, " + juce::String (tapeH, 0) + " dB with full drive");
+        check (secondHarmonic (2) > secondHarmonic (1) + 15.0f, "Analog delay adds the octave as well (uneven saturation); tape does not",
+               "second harmonic: analog " + juce::String (secondHarmonic (2), 0) + " dB, tape " + juce::String (secondHarmonic (1), 0) + " dB");
+        // analog is darker: the top of a click's first echo
+        auto topOfEcho = [&] (int style)
+        {
+            const auto b = echoOf ([style] (EchoSettings& es) { es.style = style; es.pattern = 1; es.drive = 0.0f; }, clickBuffer (1.0f, 2));
+            juce::AudioBuffer<float> part (1, (int) (fs * 0.1)); part.copyFrom (0, 0, b, 0, 1000 + (int) (fs * 0.29), part.getNumSamples());
+            return juce::Decibels::gainToDecibels (amountAt (part, 0, 8000.0f, 0), -200.0f) - juce::Decibels::gainToDecibels (amountAt (part, 0, 500.0f, 0), -200.0f);
+        };
+        check (topOfEcho (2) < topOfEcho (1) - 6.0f && topOfEcho (1) < topOfEcho (0) - 1.0f, "Each style has its own top end: digital brightest, tape softer, analog darkest",
+               "8 kHz against 500 Hz in the first echo: " + juce::String (topOfEcho (0), 0) + " / " + juce::String (topOfEcho (1), 0) + " / " + juce::String (topOfEcho (2), 0) + " dB");
+        // diffused: a click's third repeat is spread out, not a click any more
+        auto spread = [&] (int style)
+        {
+            const auto b = echoOf ([style] (EchoSettings& es) { es.style = style; es.pattern = 1; es.feedback = 0.8f; }, clickBuffer (2.0f));
+            const int from = 1000 + (int) (fs * 0.88), n = (int) (fs * 0.14);
+            return b.getMagnitude (0, from, n) / (b.getRMSLevel (0, from, n) + 1.0e-9f);
+        };
+        check (spread (3) < spread (0) * 0.6f, "Diffused delay smears each repeat more than the last", "peak against average on the third repeat: " + juce::String (spread (0), 1) + " digital, " + juce::String (spread (3), 1) + " diffused");
+        // wobble moves the pitch of an echo by cents, not semitones
+        {
+            auto steady = voiceTone (220.0f, 6.0f, 2);
+            for (int i = (int) (fs * 5.0); i < steady.getNumSamples(); ++i) { steady.setSample (0, i, 0.0f); steady.setSample (1, i, 0.0f); }
+            auto wet = echoOf ([] (EchoSettings& es) { es.wobble = 1.0f; es.pattern = 1; es.feedback = 0.0f; es.mix = 1.0f; }, steady);
+            for (int i = 0; i < wet.getNumSamples(); ++i) wet.setSample (0, i, wet.getSample (0, i) - steady.getSample (0, i));      // the echo alone
+            const auto notes = trackNotes (wet, 1.0f);
+            std::vector<float> inside (notes.begin(), notes.begin() + (long) std::min<size_t> (notes.size(), 380));
+            const float span = spanOf (inside) * 100.0f;
+            check (span > 8.0f && span < 40.0f, "Delay wobble drifts the pitch of the echoes by a few cents, like tape", juce::String (span, 1) + " cents from lowest to highest");
+        }
+        // pushed hard, it stays stable
+        {
+            auto loud = voiceTone (180.0f, 6.0f, 2); loud.applyGain (4.0f);
+            bool ok = true; float peak = 0.0f;
+            for (int style = 0; style < 4; ++style)
+            {
+                const auto b = echoOf ([style] (EchoSettings& es) { es.style = style; es.feedback = 0.9f; es.drive = 1.0f; es.wobble = 1.0f; es.timeMs = 40.0f; }, loud);
+                for (int i = 0; i < b.getNumSamples(); i += 5) { ok = ok && std::isfinite (b.getSample (0, i)); peak = juce::jmax (peak, std::abs (b.getSample (0, i))); }
+            }
+            check (ok && peak < 40.0f, "Delay stays stable with repeats, drive and wobble at their limits", "peak " + juce::String (peak, 1));
+        }
     }
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED", failures, failures == 1 ? "" : "s");

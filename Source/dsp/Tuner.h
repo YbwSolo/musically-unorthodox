@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include "Pitch.h"
 #include "KeyFinder.h"
 #include "TuneGraph.h"
@@ -18,6 +19,10 @@ struct TunerSettings
     float hold = 0.3f;         // 0..1, how firmly a note is held before the voice is allowed to move to the next one
     float formantSemis = 0.0f; // the size of the voice: 0 = as recorded, up = smaller and brighter, down = bigger and darker
     int noteMask = 0xFFF;      // with the Custom scale: which of the twelve notes are allowed, bit 0 = C
+    float flexCents = 0.0f;    // notes sung within this many cents of the target are left alone
+    float humanise = 0.0f;     // 0..1: held notes are corrected more gently than short ones, so long notes keep some life
+    float keepSlides = 0.0f;   // 0..1: while the voice is sliding from note to note it is left alone, and only settled notes are tuned
+    bool legacySlicing = false; // for comparison tests only: cut the slices the way builds 10 and 11 did
 };
 
 // Pitch correction for a single voice. It hears which note is being sung, picks the nearest note of the chosen
@@ -38,6 +43,8 @@ public:
 
     // for the display (any thread)
     float getDetectedNote() const noexcept { return detectedNote.load (std::memory_order_relaxed); }    // MIDI note with fraction, 0 = no pitch
+    float getSlideSpeed() const noexcept { return sliding; }      // semitones a second; for the lab tool and tests
+    float getShift() const noexcept { return shift; }
     float getOutputNote() const noexcept { return outputNote.load (std::memory_order_relaxed); }
     int getTargetNote() const noexcept { return targetNote.load (std::memory_order_relaxed); }
 
@@ -66,6 +73,11 @@ private:
 
     bool voiced = false;
     float period = 240.0f, ratio = 1.0f, shift = 0.0f, slowNote = 0.0f;
+    float periodNow = 240.0f, outPeriodNow = 240.0f;      // what the engine is given: the same values, moved smoothly between measurements
+    int unsureFrames = 0, framesOnNote = 0;
+    float sliding = 0.0f;                                 // how fast the voice is travelling, in semitones a second
+    std::array<float, 18> recent {}; int recentCount = 0, recentAt = 0;      // the last 180 ms of pitch
+    bool snap = true;
     int target = -1, farFrames = 0, switchFrames = 0, lastCaptured = -1;
     TuneGraph* graph = nullptr;
     bool playing = false;

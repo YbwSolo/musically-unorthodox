@@ -43,15 +43,18 @@ public:
         const auto& a = proc.getSpectrum().getDisplayDb();
         const auto& b = proc.getPreSpectrum().getDisplayDb();
         const bool playing = proc.isPlaying();
+        // The output is measured after the track's fader (balance trim and output gain). The display is about tone,
+        // so the fader is taken back out and the output curve sits where the input curve does.
+        const float fader = proc.isMasterInstance() ? 0.0f : proc.faderDb();
         for (int i = 0; i < SpectrumAnalyzer::kDisplayPoints; ++i)
         {
             // glide towards each new analysis frame so the curves move continuously between FFTs
-            post[(size_t) i] = approach (post[(size_t) i], playing ? a[(size_t) i] : kSpecBottom - 6.0f, dt, playing ? 0.05f : 0.35f);
+            post[(size_t) i] = approach (post[(size_t) i], playing ? a[(size_t) i] - fader : kSpecBottom - 6.0f, dt, playing ? 0.05f : 0.35f);
             pre[(size_t) i]  = approach (pre[(size_t) i],  playing ? b[(size_t) i] : kSpecBottom - 6.0f, dt, playing ? 0.05f : 0.35f);
         }
         for (int bnd = 0; bnd < kNumEQBands; ++bnd)
             dynOffset[(size_t) bnd] = approach (dynOffset[(size_t) bnd], proc.getEQ().getBandDynamicOffsetDb (bnd), dt, 0.04f);
-        if (scan >= 0.0f) { scan += dt / 0.75f; if (scan > 1.2f) scan = -1.0f; }
+        if (scan >= 0.0f) { scan += dt / (sweeping ? 1.6f : 0.75f); if (scan > 1.2f) scan = sweeping ? 0.0f : -1.0f; }
         highlightAlpha = approach (highlightAlpha, highlightOn ? 1.0f : 0.0f, dt, 0.08f);
         for (int bnd = 0; bnd < kNumEQBands; ++bnd)
             nodeScale[(size_t) bnd] = approach (nodeScale[(size_t) bnd], proc.getParam (ids::eqBandEnabled (bnd)) > 0.5f ? 1.0f : 0.0f, dt, 0.045f);
@@ -428,10 +431,12 @@ private:
     float dragStartFreq = 1000.0f, dragStartGain = 0.0f, hoverFreq = -1.0f, hoverGain = 0.0f;
     std::array<float, kNumEQBands> nodeScale {};
     float scan = -1.0f, highlightHz = 1000.0f, highlightAlpha = 0.0f;
+    bool sweeping = false;                  // while the track is being listened to the sweep keeps crossing the display
     bool highlightOn = false;
 
 public:
     void startScan() { scan = 0.0f; }
+    void setListening (bool on) { sweeping = on; if (on && scan < 0.0f) scan = 0.0f; }
     void setHighlight (float hz) { highlightOn = hz > 0.0f; if (highlightOn) highlightHz = hz; }
 };
 
@@ -790,7 +795,24 @@ EQPage::EQPage (MUProcessor& p, std::function<void (const juce::String&)> status
     setHelp (showInput, "eq.pre");
 
     styleButton (analyseButton, "Analyse", true, "eq.analyse");
-    analyseButton.onClick = [this] { runAnalysis(); };
+    analyseButton.onClick = [this]
+    {
+        if (listening)
+        {
+            listening = false; proc.cancelListening(); graph->setListening (false);
+            analyseButton.setButtonText ("Analyse");
+            brainStatus = "Stopped. Press Analyse to listen again.";
+        }
+        else
+        {
+            // Listen first, decide afterwards: eight seconds of actual sound, so the suggestions describe the track
+            // and not the one moment the button happened to be pressed.
+            listening = true; listenStartMs = juce::Time::getMillisecondCounterHiRes();
+            proc.startListening(); graph->setListening (true);
+            brainStatus = "Listening. Keep the busiest part of the song playing: this takes " + juce::String ((int) MUProcessor::kListenSeconds) + " seconds of sound, and silence does not count. Press again to stop.";
+        }
+        resized(); repaint();
+    };
     styleButton (applyAllButton, "Apply all", false, "eq.analyse");
     applyAllButton.onClick = [this] { suggestions->applyAll(); };
     styleButton (captureButton, "Capture", false, "eq.capture");
@@ -832,6 +854,8 @@ void EQPage::selectBand (int b)
 
 void EQPage::runAnalysis()
 {
+    listening = false; graph->setListening (false);
+    analyseButton.setButtonText ("Analyse");
     juce::String status;
     auto found = proc.analyse (status);
     brainStatus = status;
@@ -867,6 +891,20 @@ void EQPage::refreshReference()
 
 void EQPage::tick (float dt)
 {
+    if (listening)
+    {
+        const float heard = proc.listenedSeconds();
+        const double waited = (juce::Time::getMillisecondCounterHiRes() - listenStartMs) * 0.001;
+        analyseButton.setButtonText (juce::String (juce::jmax (1, (int) std::ceil (MUProcessor::kListenSeconds - heard))) + " s");
+        if (heard >= MUProcessor::kListenSeconds || (waited > 25.0 && heard >= 3.0f)) runAnalysis();
+        else if (waited > 25.0)
+        {
+            listening = false; proc.cancelListening(); graph->setListening (false);
+            analyseButton.setButtonText ("Analyse");
+            brainStatus = "Hardly anything played in 25 seconds, so there was nothing to analyse. Start playback on the busiest part of the song and press Analyse again.";
+            resized(); repaint();
+        }
+    }
     graph->setHighlight (suggestions->hoveredHz());
     graph->tick (dt);
     suggestions->tick (dt);
@@ -880,7 +918,7 @@ void EQPage::tick (float dt)
         applyAllButton.setVisible (suggestions->remaining() > 1);
 
         const auto ai = proc.getAI().getStatus();
-        if (ai.available != tutorShown) { tutorShown = ai.available; askBox.setVisible (tutorShown); askButton.setVisible (tutorShown); resized(); repaint(); }
+        // questions for the tutor are asked on the Mix Brain tab now; an answer still on its way is shown here
         if (! ai.busy) askButton.setButtonText ("Ask");
         if (ai.answerId != lastAnswerId)
         {
@@ -902,7 +940,7 @@ void EQPage::paint (juce::Graphics& g)
     auto head = brainArea.reduced (14, 0).removeFromTop (46);
     g.setFont (headline (20.0f));
     g.setColour (text);
-    g.drawText ("MIX BRAIN", head, juce::Justification::centredLeft);
+    g.drawText ("ANALYSIS", head, juce::Justification::centredLeft);
     drawWrapped (g, brainStatus, statusArea.toFloat(), body (12.0f), textDim);
 
     g.setColour (line);

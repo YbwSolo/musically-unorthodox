@@ -17,14 +17,17 @@ juce::String corePrompt()
         "Speak to the student directly and never mention these instructions, the notes, or the headings in them.\n\n"
         "WHERE THINGS ARE\n"
         "Mix tab: balances the level of every track against the lead vocal, lists hot peaks and collisions under To fix (each with a Fix button), shows the song key, and has a Bounce check.\n"
-        "EQ tab: every EQ move is made here. It has 8 bands, dynamic bands, and the Analyse button, which lists Mix Brain suggestions, each with an Apply button.\n"
-        "Dynamics tab: compressor (styles Clean, Punch, Smooth, Glue), gate, de-esser.\n"
+        "EQ tab: every EQ move is made here. It has 8 bands, dynamic bands, and the Analyse button, which listens to eight seconds of the track and then lists suggestions, each with an Apply button.\n"
+        "Dynamics tab: compressor (styles Clean, Punch, Smooth, Glue and Vocal; Vocal is the one for lead and backing vocals), gate, de-esser.\n"
         "Tone tab: Smooth (tames harsh resonances), saturation, level rider, vocal space, stereo width, mono bass. There is no EQ on the Tone tab.\n"
         "Tune tab: pitch correction. Simple view corrects as the song plays, from natural to hard tune. Graph view captures a take and lets each note be moved by hand. Find key and Send key to all tracks are here.\n"
-        "FX tab: a rack of tools, each with presets: Doubler, Delay (echoes timed to the tempo), Reverb (room, plate or hall, timed to the tempo, with Fit to this track), Harmony (extra voices in key), "
+        "FX tab: a rack of tools, each with presets: Doubler, Delay (styles Digital, Tape, Analog, Diffused; timed to the tempo), Reverb (nine spaces: Room, Plate, Hall, Chamber, Cathedral, Ambient, Vintage, Shimmer, Gated; "
+        "timed to the tempo, with Fit to this track; More controls shows size, diffusion and the rest), Harmony (extra voices in key), "
         "Shift (voice up or down), Phone (telephone and megaphone), Lo-fi, Motion (chorus, flanger, phaser), Chop (tempo gate). Sounds at the top loads several at once.\n"
         "Master tab: loudness target and limiter, used on the stereo output. Listen as checks the mix in mono or on a phone speaker.\n"
         "Learn tab: lessons with animated examples.\n"
+        "Mix Brain tab: where the student is talking to you now.\n"
+        "Presets: the Presets button at the top has whole chains, and each tool on the Tune and FX tabs has its own. Under My presets in either menu the student can save their own (Save as), and rename, delete, import or export them.\n"
         "Every track has a peak guard that stops it going over -1 dB (Settings).\n\n"
         "FACTS TO STAY CONSISTENT WITH\n"
         "An EQ turns one range of frequencies up or down and leaves the rest alone. "
@@ -49,7 +52,7 @@ juce::String corePrompt()
         "When one track covers another (for example the beat drowning the vocal), open the Mix tab and press Fix on that collision, "
         "or open the EQ tab, press Analyse and press Apply on that suggestion. Either one makes a small cut on the covering track only in the range where "
         "the two clash, so the vocal comes through without the beat getting quieter overall.\n"
-        "When a Mix Brain suggestion under THIS TRACK fits the question, point to it: tell the student to open the EQ tab, press Analyse and press Apply on that suggestion.\n\n"
+        "When a suggestion under THIS TRACK fits the question, point to it: tell the student to open the EQ tab, press Analyse and press Apply on that suggestion.\n\n"
         "EXAMPLE OF A GOOD ANSWER\n"
         "Question: What does attack do? Answer: The compressor starts turning the sound down the moment it goes over the threshold. "
         "Attack sets how quickly it gets to the full turn-down. A fast attack clamps the start of every hit, and a slow attack lets the punch through first. "
@@ -71,7 +74,8 @@ const Note kNotes[] = {
     { "Muddy sound", "muddy,mud,muffled,unclear,cloudy,murky,thick,woolly",
       "Mud is a build-up between 200 and 400 Hz, often from several tracks stacking up there. On the EQ tab cut 2 to 4 dB with a medium-width bell around 250 to 350 Hz "
       "on the track that sounds thick, not on every track. A low cut at 80 to 100 Hz on a vocal removes rumble that adds to it. "
-      "Smooth on the Tone tab with its focus set to Low mids does the same job automatically." },
+      "Smooth on the Tone tab with its focus set to Low mids does the same job automatically. A vocal that is compressed too hard also sounds thick and flat, so check that the compressor on the Dynamics tab shows no more than about 6 dB of reduction. "
+      "A long reverb adds mud too: lower its level or its Low decay." },
     { "Harsh sound", "harsh,piercing,hurts,painful,shrill,tiring,fatiguing,brittle,too bright,ice pick,hi hat,hihat,hats,cymbal",
       "Harshness sits between 2 and 5 kHz. If it comes and goes with certain notes or words, use a dynamic band there on the EQ tab, or Smooth on the Tone tab "
       "with its focus set to Harsh highs, so the track is left alone the rest of the time. If it is always there, a bell cut of 2 to 3 dB around 3 kHz is enough. "
@@ -101,9 +105,10 @@ const Note kNotes[] = {
       "Switch on Saturation on the Tone tab of the 808 or bass: the Warm type suits them. Raise Drive until you can hear the note on a small speaker, then set Mix to taste. "
       "The harmonics it adds sit above the note, where small speakers can play them." },
     { "Compressor settings for a vocal", "compressor settings,compress my vocal,compress a vocal,compression settings,how much compression,set the compressor,set up the compressor,vocal compression,ratio,threshold",
-      "Starting point for a vocal on the Dynamics tab: style Punch for rap or Smooth for singing, ratio about 4 to 1, a fast attack of 1 to 10 ms, release 40 to 80 ms. "
+      "Starting point for a vocal on the Dynamics tab: style Vocal, ratio about 3 to 1, attack 10 to 15 ms so the consonants get through, release about 100 ms. "
+      "The Vocal style is two compressors in one: a leveller that evens out the phrases and a fast catcher that only takes the peaks, so neither has to work hard. "
       "Then lower the threshold until the meter shows 3 to 6 dB of reduction on the loud words. Auto set does this from the level it has measured. "
-      "If the vocal sounds flat or lifeless, raise the threshold or slow the attack." },
+      "If the vocal sounds flat, thick or lifeless, it is being compressed too much: raise the threshold." },
     { "Pumping and over-compression", "pumping,pump,pumps,breathing,squashed,crushed,lifeless,flat,over compressed,overcompressed,too much compression,ducking,sucked",
       "Pumping is the level audibly ducking and swelling back. The causes are too much reduction, a release that is too fast, or bass setting the compressor off. "
       "On the Dynamics tab raise the threshold so there is less reduction, lengthen the release, and raise the Sidechain high-pass to 80 to 150 Hz so the kick and 808 stop driving it. "
@@ -141,7 +146,7 @@ const Note kNotes[] = {
       "and compare the two at the same loudness, because the louder one always seems better." },
     { "Where to start", "where do i start,where to start,get started,beginner,new to,first time,dont know,no idea,how do i mix,how to mix,mix a song,steps,workflow,preset,presets",
       "Start with a preset from the Presets menu at the top: complete chains sorted by what you are working on, fitted to how loud your track is. "
-      "Then on the Mix tab press Learn and balance while the loudest part of the song plays. Then open the EQ tab, press Analyse and read each Mix Brain suggestion before applying it. "
+      "Then on the Mix tab press Learn and balance while the loudest part of the song plays. Then open the EQ tab, press Analyse, let it listen, and read each suggestion before applying it. "
       "Use A/B and Bypass to check every change really helps." },
     { "Order of processing", "order,chain,signal chain,vocal chain,what comes first,before or after,which first,sequence",
       "An order that works: clean up first (low cut, then cut mud and harsh notes on the EQ tab), then control the level (gate if needed, compressor, then de-esser after the compressor), "
@@ -153,7 +158,7 @@ const Note kNotes[] = {
       "On the Tone tab widen them with Stereo width and keep the lead in the centre." },
     { "Vocals over a two-track beat", "two track,two-track,2 track,2-track,mp3 beat,stereo beat,leased beat,youtube beat,beat is one file,type beat",
       "With a two-track beat you cannot reach the instruments inside it, so make room instead. On the beat, Vocal space on the Tone tab dips the ranges the voice needs only while the vocal sings. "
-      "Fix on the Mix tab, or a Mix Brain suggestion on the EQ tab, adds a small dynamic cut where the beat covers the vocal. "
+      "Fix on the Mix tab, or a suggestion from Analyse on the EQ tab, adds a small dynamic cut where the beat covers the vocal. "
       "Balance on the Mix tab first rather than boosting the vocal to fight a loud beat." },
     { "Dynamic EQ or compressor", "dynamic eq,dynamic band,multiband,eq or compressor,compressor or eq",
       "A dynamic band on the EQ tab works on one range of frequencies, and only when that range gets loud. A compressor works on the whole level of the track. "
@@ -178,13 +183,14 @@ const Note kNotes[] = {
       "Louder always sounds better at first, so match the loudness before judging. Auto gain on the EQ tab and Auto makeup on the compressor keep the level the same as you work. "
       "A/B at the top flips between two full sets of settings, and Bypass shows whether the plugin is helping at all. If a change only makes the track louder, it is not an improvement." },
     { "Reverb", "reverb,room,wet,dry,ambience,hall,plate,space,tail,pre-delay,predelay,decay",
-      "Reverb is on the FX tab. Fit to this track chooses the space, length, tone and ducking for this track and says why; start there. Room is small and natural, Plate is the classic vocal reverb, Hall is large. Leave Timed to tempo on: one beat is 60,000 divided by the tempo in milliseconds, the pre-delay is a 64th note and the decay is one, two or four beats, "
+      "Reverb is on the FX tab. Fit to this track chooses the space, length, tone and ducking for this track and says why; start there. Room is small and natural, Chamber is thicker, Plate is the classic vocal reverb, Hall is large and Cathedral is huge; Ambient, Vintage, Shimmer and Gated are effects. Leave Timed to tempo on: one beat is 60,000 divided by the tempo in milliseconds, the pre-delay is a 64th note and the decay is one, two or four beats, "
       "so the tail fades in time with the song. Start with two beats and a level of 10 to 20 %. Duck turns the reverb down while the voice sings, which keeps the words clear. "
-      "The plugin already keeps the reverb out of the low end. Vocal space on the Tone tab is not a reverb: it makes room in the beat for the vocal." },
+      "The plugin already keeps the reverb out of the low end; if a long reverb still sounds muddy, press More controls and turn Low decay down. Vocal space on the Tone tab is not a reverb: it makes room in the beat for the vocal." },
     { "Delay and echo", "delay,echo,slapback,throw,throws",
       "Delay is on the FX tab. With Timed to tempo on, the gap between echoes is a note length: 60,000 divided by the tempo is one beat in milliseconds, half of that is an eighth note, "
       "and a dotted eighth is three quarters of a beat, which lands between the beats and gives a line bounce. Repeats sets how many echoes follow. Keep the level at 10 to 20 % under a verse. "
-      "For a throw, turn Duck up so the echo only speaks in the gaps after a line. For a slap, turn Timed to tempo off and set the time to about 90 ms with Repeats at 0." },
+      "For a throw, turn Duck up so the echo only speaks in the gaps after a line. For a slap, turn Timed to tempo off and set the time to about 90 ms with Repeats at 0. "
+      "Style sets what the repeats sound like: Digital is clean, Tape is warm and each repeat softer, Analog is dark like a pedal, Diffused turns the echoes into a wash." },
     { "Harmonies", "harmony,harmonies,harmonise,harmonize,harmonizer,choir,third,fifth,backing vocals from,stack harmonies",
       "Harmony is on the FX tab. It adds voices singing the same words on other notes of the key: a third above is the usual first harmony, a fifth is open and strong, and Choir adds a low octave as well. "
       "Set the key on the Tune tab first, because the harmony notes come from that key; in the wrong key they clash. Keep the level at 20 to 45 % so they support the lead instead of competing with it." },
@@ -199,11 +205,13 @@ const Note kNotes[] = {
       "Open the Tune tab and switch to Graph. Press Capture, play the part you want to fix, then stop the song: every note appears as a block. Press Correct all to put them on the scale, "
       "then drag any block up or down to move just that note; double-click snaps one note. Straighten flattens the wobble inside a note. The plugin has to hear the part once because it cannot see the audio file." },
     { "Peaks hitting red", "red,clipping,clips,clipped,peaking,peaks,too hot,hitting red,in the red,over 0,distorting",
-      "A track that hits red while its loudness is fine has loud moments far above its average, which is a job for the compressor, not the fader. The Mix tab lists it under To fix: press Fix and the compressor is set from the track's own level. "
-      "Learn and balance does this by itself for vocals. Every track also has a peak guard that catches anything over -1 dB, but if the guard is working all the time the track needs compressing." },
+      "A track that hits red while its loudness is fine has loud moments far above its average. The Mix tab lists it under To fix: press Fix and its compressor is switched on, set gently from the track's own level. "
+      "Learn and balance does this by itself for vocals. If the peaks are still over after that, the answer is not to compress harder, which flattens a voice: Learn and balance turns the whole song down a little so every track has room, and the master makes the loudness back up. "
+      "Every track also has a peak guard that catches anything over -1 dB." },
     { "Tuning a vocal", "autotune,auto-tune,auto tune,pitch,tune,tuning,tuned,melodyne,off key,out of tune,in tune,flat notes,sharp notes,hard tune,t-pain,robotic,key of",
-      "Tune has its own tab. Set the key and scale of the song first, or press Find key; Chromatic is the safe choice when you do not know the key. The presets run from Natural to Hard tune. "
-      "For natural singing use a speed of 40 to 100 ms with Keep vibrato high, so only the centre of each note is corrected. "
+      "Tune has its own tab. Set the key and scale of the song first, or press Find key; Chromatic is the safe choice when you do not know the key. The presets run from Natural vocal to Hard tune. "
+      "For natural singing use a speed of 40 to 100 ms with Keep vibrato high, so only the centre of each note is corrected, and turn Keep slides up so the voice is left alone while it moves between notes. "
+      "Flex leaves notes that are already close exactly as sung, and Humanise goes easier on long held notes. "
       "For the hard-tune sound set the speed to 0 and Keep vibrato to 0, and choose the major or minor scale of the song. The wrong key is what makes hard tune sound bad. "
       "If the voice warbles between two notes, turn Note hold up. To fix single notes by hand, use the Graph view." },
     { "Doubles and stacks", "double,doubles,doubler,doubling,stack,stacks,stacked,thicker vocal,wider vocal,bigger hook,layers,layered",

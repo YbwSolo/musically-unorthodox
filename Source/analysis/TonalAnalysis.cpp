@@ -138,7 +138,51 @@ BandArray roleTargetCurve (Role role)
     }
 }
 
-std::vector<Suggestion> analyseTone (const BandArray& m, Role role)
+static void fitCutsToBehaviour (std::vector<Suggestion>& found, const BandArray& centres, const BandArray& swing);
+std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role);
+
+std::vector<Suggestion> analyseTone (const BandArray& m, Role role, const BandArray* swingDb)
+{
+    auto found = analyseToneOnce (m, role);
+    if (swingDb != nullptr) fitCutsToBehaviour (found, analysisBandCentres(), *swingDb);
+    return found;
+}
+
+// With a listening pass behind it, the analysis knows how each problem behaves over time. A build-up that is
+// there all the time is best taken out with a fixed cut; one that comes and goes should only be cut when it is
+// there, which is what a dynamic band does.
+static void fitCutsToBehaviour (std::vector<Suggestion>& found, const BandArray& centres, const BandArray& swing)
+{
+    for (auto& s : found)
+    {
+        if (s.kind != Suggestion::Kind::EqBand || s.band.type != EQType::Bell) continue;
+        const bool isCut = s.band.dynamic ? s.band.rangeDb < 0.0f : s.band.gainDb < 0.0f;
+        if (! isCut) continue;
+        int nearest = 0;
+        for (int b = 1; b < kAnalysisBands; ++b)
+            if (std::abs (std::log2 (centres[(size_t) b] / s.band.freqHz)) < std::abs (std::log2 (centres[(size_t) nearest] / s.band.freqHz))) nearest = b;
+        const float sw = swing[(size_t) nearest];
+        const auto where = s.band.freqHz >= 1000.0f ? juce::String (s.band.freqHz / 1000.0f, 1) + " kHz" : juce::String (juce::roundToInt (s.band.freqHz / 10.0f) * 10) + " Hz";
+        if (sw < 3.5f && s.band.dynamic)
+        {
+            const float g = juce::jlimit (-4.5f, -1.0f, s.band.rangeDb * 0.75f);
+            s.band.dynamic = false; s.band.gainDb = g; s.band.rangeDb = 0.0f;
+            s.action = "Cut " + juce::String (g, 1) + " dB at " + where;
+            s.why << " Over the stretch that was listened to it was there the whole time, so a fixed cut is the right tool.";
+        }
+        else if (sw > 6.5f && ! s.band.dynamic)
+        {
+            const float g = juce::jlimit (-4.5f, -1.5f, s.band.gainDb * 1.25f);
+            s.band.dynamic = true; s.band.rangeDb = g; s.band.gainDb = 0.0f;
+            s.action = "Dynamic cut, up to " + juce::String (g, 1) + " dB at " + where;
+            s.why << " Over the stretch that was listened to it came and went, so the cut is dynamic: it only works while the build-up is there.";
+        }
+        else if (s.band.dynamic)
+            s.why << " Over the stretch that was listened to it came and went, which is why the cut is dynamic.";
+    }
+}
+
+std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role)
 {
     std::vector<Suggestion> out;
     const auto centres = analysisBandCentres();

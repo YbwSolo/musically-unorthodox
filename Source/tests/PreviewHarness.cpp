@@ -100,6 +100,21 @@ public:
             juce::Timer::callAfterDelay (8000, [this, index] { session->get (index).stopCapture(); });
             juce::Timer::callAfterDelay (9000, [this, index] { session->get (index).correctAllNotes (0.35f); });
         }
+        else if (presetName == "brainempty")
+        {
+            auto& proc = session->get (index);
+            proc.getAI().setAddressForTesting (juce::SystemStats::getEnvironmentVariable ("MU_TEST_AI_URL", "http://127.0.0.1:11599"));
+            proc.getAI().refresh();
+        }
+        else if (presetName == "brain")
+        {
+            // the Mix Brain tab with a conversation in it, answered by tests/mock_ollama.py
+            auto& proc = session->get (index);
+            proc.getAI().setAddressForTesting (juce::SystemStats::getEnvironmentVariable ("MU_TEST_AI_URL", "http://127.0.0.1:11599"));
+            proc.getAI().refresh();
+            proc.brainTalk.push_back ({ "Why does my vocal sound muddy?", "Mud is a build-up between about 180 and 350 Hz. On this track the low mids measure 4 dB heavier than a balanced vocal, mostly around 250 Hz.\n\nOpen the EQ tab and press Analyse. After it has listened it will offer a dynamic cut there: it only works on the words where the build-up appears, so the voice keeps its body the rest of the time.", false });
+            proc.brainTalk.push_back ({ "And what does the compressor's attack do?", "Attack is how long the compressor waits before it turns a loud sound down. A short attack catches the very start of each word; a longer one (10 to 15 ms) lets the consonants through first, which keeps a vocal clear.", false });
+        }
         else if (presetName.startsWith ("sound:"))
             juce::Timer::callAfterDelay (3000, [this, index] { const auto& all = soundPresets(); for (size_t i = 0; i < all.size(); ++i) if (all[i].name == presetName.fromFirstOccurrenceOf (":", false, false)) session->get (index).applySound ((int) i); });
         else if (presetName.isNotEmpty())

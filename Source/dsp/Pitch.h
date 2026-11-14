@@ -44,7 +44,7 @@ private:
 class GrainEngine
 {
 public:
-    static constexpr int kMaxGrains = 12;
+    static constexpr int kMaxGrains = 24;
     struct Voice
     {
         struct Grain { double centre = 0, src = 0; float half = 1, gain = 1, rate = 1; };
@@ -52,6 +52,7 @@ public:
         int count = 0;
         double nextCentre = 0, prevSrc = 0;
         float nextHalf = 240.0f;
+        bool locked = false;          // renderSync: the last slice was centred on one of the voice's own pulses
     };
 
     void prepare (int numChannels, double sampleRate);
@@ -62,12 +63,24 @@ public:
     // formant: 1 leaves the character of the voice alone; above 1 makes it smaller and brighter, below 1 bigger and
     // darker. It works by reading each slice faster or slower while the slices stay the same distance apart.
     void render (Voice& v, float periodSamples, bool voiced, float ratio, float delaySamples, float* out, float formant = 1.0f) noexcept;
-    void advance() noexcept { ++now; }
+    // The same job done properly for a voice. A sung or spoken note is a train of pulses from the vocal folds, one
+    // per period. render() cuts its slices wherever the clock says, so a slice may land on a pulse or between two,
+    // and as the pitch estimate drifts the cut point wanders: the tone goes from clear to smeared and back, which
+    // is heard as a warble or a phasey, uneasy quality, worst on big shifts such as harmonies. renderSync() finds
+    // the pulses and centres every slice on one, so each slice always holds one whole pulse and its ring. That is
+    // how pitch-synchronous overlap-add is meant to be done.
+    void renderSync (Voice& v, float periodSamples, bool voiced, float ratio, float delaySamples, float* out, float formant = 1.0f) noexcept;
+    void advance() noexcept;
     int numChannels() const noexcept { return channels; }
 
 private:
     float read (int channel, double position) const noexcept;
+    double findPulse (double around, float reach, float preferNear) const noexcept;
+    void checkPolarity (double around, float period) noexcept;
     std::array<std::vector<float>, 2> ring;
+    std::vector<float> pulse;              // the sound with everything above about 1 kHz removed: its peaks are the pulses
+    float lp1 = 0.0f, lp2 = 0.0f, hp = 0.0f, lpCoeff = 0.1f, hpCoeff = 0.99f, polarity = 1.0f;
+    int polarityVotes = 0, sincePolarity = 0;
     juce::int64 now = 0, mask = 0;
     int channels = 1;
     float minPeriod = 40.0f, maxPeriod = 800.0f;

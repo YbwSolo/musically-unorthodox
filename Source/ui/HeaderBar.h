@@ -6,7 +6,7 @@ namespace mu
 class HeaderBar : public juce::Component
 {
 public:
-    enum Tab { Mix = 0, EQ, Dynamics, Tone, Tune, FX, Master, Learn, NumTabs };
+    enum Tab { Mix = 0, EQ, Dynamics, Tone, Tune, FX, Master, Learn, Brain, NumTabs };     // new tabs go on the end so saved songs open on the tab they were left on
 
     explicit HeaderBar (MUProcessor&);
     void setTab (int t);

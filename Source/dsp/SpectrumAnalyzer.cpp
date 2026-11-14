@@ -1,4 +1,5 @@
 #include "SpectrumAnalyzer.h"
+#include <algorithm>
 #include <cmath>
 
 namespace mu
@@ -138,6 +139,51 @@ bool SpectrumAnalyzer::update()
             for (int i = i0; i <= i1; ++i) sum += longTermBinLinear[(size_t) i];
             longTermDb[(size_t) b] = 10.0f * std::log10 (juce::jmax (1.0e-12f, sum));
         }
+        if (listening && listenFrames < kListenMax)
+        {
+            std::array<float, kNumBands> power {};
+            float total = 0.0f;
+            for (int b = 0; b < kNumBands; ++b)
+            {
+                const int i0 = juce::jlimit (1, kFFTSize / 2 - 1, (int) (bandLo[(size_t) b] * (float) kFFTSize / (float) fs));
+                const int i1 = juce::jlimit (i0, kFFTSize / 2 - 1, (int) (bandHi[(size_t) b] * (float) kFFTSize / (float) fs));
+                float sum = 0.0f;
+                for (int i = i0; i <= i1; ++i) { const float mag = fftData[(size_t) i] * norm; sum += mag * mag; }
+                power[(size_t) b] = sum; total += sum;
+            }
+            // only frames with real sound in them count: the gaps between words say nothing about the tone
+            if (total > 1.0e-8f)
+            {
+                for (int b = 0; b < kNumBands; ++b)
+                {
+                    listenSum[(size_t) b] += (double) power[(size_t) b];
+                    listenShare[(size_t) (listenFrames * kNumBands + b)] = 10.0f * std::log10 (juce::jmax (1.0e-12f, power[(size_t) b]) / total);
+                }
+                ++listenFrames;
+            }
+        }
+    }
+    return true;
+}
+
+void SpectrumAnalyzer::startListen()
+{
+    listenShare.assign ((size_t) kListenMax * kNumBands, -120.0f);
+    listenSum.fill (0.0);
+    listenFrames = 0;
+    listening = true;
+}
+
+bool SpectrumAnalyzer::listenBands (std::array<float, kNumBands>& meanDb, std::array<float, kNumBands>& swingDb) const
+{
+    if (listenFrames < 20 || listenShare.empty()) return false;
+    std::vector<float> column ((size_t) listenFrames);
+    for (int b = 0; b < kNumBands; ++b)
+    {
+        meanDb[(size_t) b] = (float) (10.0 * std::log10 (juce::jmax (1.0e-12, listenSum[(size_t) b] / (double) listenFrames)));
+        for (int f = 0; f < listenFrames; ++f) column[(size_t) f] = listenShare[(size_t) (f * kNumBands + b)];
+        std::sort (column.begin(), column.end());
+        swingDb[(size_t) b] = column[(size_t) (listenFrames * 9 / 10)] - column[(size_t) (listenFrames / 2)];
     }
     return true;
 }

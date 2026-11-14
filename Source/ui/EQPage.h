@@ -43,6 +43,8 @@ private:
     juce::String brainStatus, referenceText;
     juce::Rectangle<int> brainArea, statusArea, referenceArea, toolbarArea;
     float refreshTimer = 0.0f;
+    bool listening = false;             // Analyse is listening to the track before it decides
+    double listenStartMs = 0.0;
     /** Only takes the keyboard after a click, so opening the plugin never steals the host's keys. */
     struct AskEditor : juce::TextEditor
     {

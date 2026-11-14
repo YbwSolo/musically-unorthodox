@@ -39,8 +39,11 @@ Logic: Audio Units > Musically Unorthodox. Also installs the VST3 and a standalo
    track is, so load them while the song plays.
 3. Put one on the Stereo Out. It becomes the **Master** by itself.
 4. Play the loudest section. On the **Mix** tab press **Learn and balance** and keep it playing for 20 seconds.
-   Every track's trim moves so the vocal leads and the mix lands at -18 LUFS with peaks under -6 dBTP. A vocal
-   whose loud words tower over the rest of it has its compressor switched on as well.
+   Every track's trim moves so the vocal leads and the mix lands at -18 LUFS with peaks under -6 dBTP. The trim is
+   the track's fader: it comes after all the processing, so balancing never changes how hard a compressor is
+   driven. A vocal whose loud words tower over the rest of it has its compressor switched on (the gentle two-stage
+   Vocal style); if a track's peaks would still clip its channel, the whole song is turned down to make room
+   instead of that track being squeezed harder.
 5. Work through **To fix** on the Mix tab: tracks hitting the top, then collisions.
 6. On the master's **Master** tab choose where the song is going (mix hand-off, streaming, loud), check the mix
    with **Listen as** Mono and Phone speaker, and run the **Bounce check** on the Mix tab before exporting.
@@ -54,12 +57,17 @@ maths the plugin uses, and several end with a "your turn" exercise.
 **Tune** is pitch correction for one voice. A YIN pitch detector hears the note every 10 ms (a leap of more than
 four semitones has to be heard twice before it is believed, which keeps consonants and breaths from being mistaken
 for notes). The voice is re-pitched by laying two-period slices of it closer together or further apart, which
-leaves the formants (the character of the voice) where they were. Adds 20 ms of reported latency while on.
+leaves the formants (the character of the voice) where they were. Each slice is centred on a pulse of the voice
+(found on a low-passed copy), the pitch handed to the engine glides between measurements instead of stepping every
+10 ms, and a measurement the detector is unsure of changes nothing. Adds 20 ms of reported latency while on.
 
 **Simple** view corrects as the song plays. Key and scale choose which notes are allowed; the keyboard lets any
 single note be blocked or allowed. Speed 40 to 100 ms with Keep vibrato high corrects only the centre of each note;
-speed 0 with Keep vibrato 0 is the hard-tune effect. **Note hold** stops a wavering voice flickering between two
-notes, and **Formant** changes the size of the voice without changing the notes.
+speed 0 with Keep vibrato 0 is the hard-tune effect. **Flex** leaves notes that are already close as they were
+sung. **Keep slides** lets go of the voice while it travels between notes (measured over the last 180 ms, which is
+about one cycle of vibrato) and **Humanise** corrects long held notes more gently; both fade out under 20 ms of
+speed, so hard tune stays hard. **Note hold** stops a wavering voice flickering between two notes, and **Formant**
+changes the size of the voice without changing the notes.
 
 **Graph** view is for fixing a take by hand. The plugin cannot see the audio file, so it is built by listening:
 press **Capture**, play the part, stop the song. The pitch is written down against the song position, split into
@@ -78,11 +86,20 @@ A rack of nine tools, each with its own switch, a live picture of what it is doi
 - **Doubler** makes one take sound like two or four. Each extra voice is a real copy moved a few cents and a few
   milliseconds, both drifting slowly, placed left and right. The copies drop back on consonants so they do not flam.
 - **Delay** is timed to the song: 60,000 / BPM is one beat in milliseconds, and the echo time is a note length of
-  that. Each repeat loses some top, the echoes can bounce left and right, and they duck under the voice.
-- **Reverb** is an eight-line feedback delay network with a lossless mixing matrix, so the decay time is exact.
-  Room, plate or hall. With **Timed to tempo** on, the pre-delay is a 64th note and the decay is one, two or four
-  beats. **Fit to this track** chooses the space, length, tone and ducking from what the track is, the tempo and
-  how bright it is, and says why; kick, 808 and finished beats are left dry.
+  that (eleven lengths, from a bar to a 32nd). **Style** is what each repeat passes through: Digital (clean), Tape
+  (saturation after the filters, softer top, optional wow and flutter), Analog (darker two-stage filter and uneven
+  saturation, like a bucket-brigade pedal) or Diffused (all-pass filters in the loop, so repeats turn into a wash).
+  **Pattern** is where they fall: Ping-pong, Straight, or Dual (right side at three quarters of the left).
+- **Reverb** has nine spaces from five different engines, not one engine with nine names:
+  Room, Chamber, Hall, Cathedral and Ambient are a sixteen-line feedback delay network with a lossless mixing
+  matrix (so the decay time is exact), every line moving on its own slow cycle, each space with its own line
+  spacing, first reflections and input diffusion; Plate is a figure-of-eight all-pass tank after Dattorro's
+  published design; Vintage is an eight-line network with a band-limited input and deep movement; Shimmer feeds
+  the hall's tail back an octave up; Gated is a burst of eighty reflections that holds and stops. **More controls**
+  adds size, diffusion, early/late balance, low decay, movement and shimmer; **Freeze** holds the tail. With
+  **Timed to tempo** on, the pre-delay is a 64th note and the decay is one, two or four beats. **Fit to this
+  track** chooses the space, length, tone and ducking from what the track is, the tempo and how bright it is, and
+  says why; kick, 808 and finished beats are left dry.
 - **Harmony** adds up to three voices on other notes of the key (third, fifth, octave, choir).
 - **Shift** moves the whole voice up or down, as a layer or on its own, with control of the size of the voice.
 - **Phone** is the voice through a small speaker. **Lo-fi** is sample-rate and bit reduction with tape wobble.
@@ -96,8 +113,9 @@ it is on, and it is never saved with the song.
 
 ## AI tutor (optional, free)
 
-Settings > **Turn on AI tutor** downloads the tutor once. After that an "Ask the AI tutor" box appears in the Mix
-Brain panel on the EQ tab. The question goes to an AI model running on that Mac. Nothing leaves the machine, there
+The **Mix Brain** tab is where questions are asked. Until a model is installed the tab shows the two on offer with
+their sizes and a Download button for each; after that it is a conversation, with what the tutor can see about the
+track beside it. The question goes to an AI model running on that Mac. Nothing leaves the machine, there
 is no account or key, and it works without the internet. Answers come from a small model and can be wrong, which
 the plugin says under every answer. Follow-up questions ("why?") are understood for ten minutes.
 
@@ -136,13 +154,49 @@ that and no download is needed.
 | Tab | What is on it |
 | --- | --- |
 | Mix | Mix loudness dial, one lane per instance (level, target, move, where its energy is), hot peaks and collisions with one-click fixes, Learn and balance, song key, bounce check |
-| EQ | Input and output analysers, 8 bands (bell, shelves, cuts to 48 dB/oct, notch), per-band stereo / mid / side, dynamic bands, band solo, auto gain, delta listening, Mix Brain suggestions, reference capture and match |
-| Dynamics | Compressor with four styles (Clean, Punch, Smooth, Glue), sidechain high-pass, parallel mix, scrolling level and reduction display, transfer curve, Auto set; gate; de-esser |
+| EQ | Input and output analysers, 8 bands (bell, shelves, cuts to 48 dB/oct, notch), per-band stereo / mid / side, dynamic bands, band solo, auto gain, delta listening, Analyse (listens to eight seconds of sound, then suggests), reference capture and match |
+| Dynamics | Compressor with five styles (Clean, Punch, Smooth, Glue, and the two-stage Vocal), sidechain high-pass, parallel mix, scrolling level and reduction display, transfer curve, Auto set; gate; de-esser |
 | Tone | Smooth (resonance tamer), saturation (tape, tube, warm), level rider, Vocal space, stereo width and mono bass, output |
-| Tune | Pitch correction: Simple (live, natural to hard tune, note hold, formant, custom notes) and Graph (capture a take, move each note by hand), Find key, Send key to all tracks |
-| FX | Doubler, Delay, Reverb, Harmony, Shift, Phone, Lo-fi, Motion, Chop; presets for each, and combined Sounds |
+| Tune | Pitch correction: Simple (live, natural to hard tune, flex, humanise, keep slides, note hold, formant, custom notes) and Graph (capture a take, move each note by hand), Find key, Send key to all tracks |
+| FX | Doubler, Delay (four styles), Reverb (nine spaces), Harmony, Shift, Phone, Lo-fi, Motion, Chop; presets for each, your own presets, and combined Sounds |
 | Master | Target modes (-18 / -14 / -9 LUFS), true-peak limiter with look-ahead, auto level, loudness history, release check, Mono and Phone speaker listening checks |
+| Mix Brain | Ask the AI tutor about the track or about mixing; model download with sizes |
 | Learn | Animated lessons: how sound works, what an EQ is, masking, what a compressor is, attack and release, gate and de-esser, saturation, stereo and mono, loudness and mastering, putting it together |
+
+## Presets of your own
+
+The **Presets** button (whole chain) and the preset strip of every tool on the Tune and FX tabs have a **My presets**
+section: Save as, Save changes, Rename, Delete, Import, Export. A star after a preset's name means a control has
+moved since it was loaded. Each preset is one JSON file with the extension `.mupreset`, kept outside any song in
+`~/Library/Application Support/Musically Unorthodox/Presets/<chain or tool>/`, so it is there in every project and
+can be sent to someone else. The file carries a format version, stores values in real units (dB, ms, Hz), and is
+written to a temporary file and swapped in, so a crash never leaves half a preset. On loading, a file from a newer
+format is refused, controls this build does not have are skipped and reported, values are brought inside each
+control's range, and a tool's preset can only move that tool's controls. A whole-chain preset also remembers how
+loud the track was, and moves its thresholds when loaded on a quieter or louder one. The EQ, Dynamics, Tone and
+Master tabs do not have per-tool presets of your own yet; a whole-chain preset covers them.
+
+## Sound quality: what is measured
+
+`MUTests` asserts these on every build:
+
+- Compressor: a 110 Hz tone and a 110 Hz + 2.5 kHz pair, 18 dB over the threshold with a 3 ms attack and 60 ms
+  release, come out with harmonics and sidebands below -65 dB in every style (build 11: -42 dB in Punch, -51 dB in
+  Clean). The gain is computed and smoothed in decibels, with an 8 ms hold on the peak reading so it does not ride
+  each cycle of a low note.
+- Reverb: every ringing space reaches the decay it is set to (mids, within 0.35 s at 2 s), its tail measures as
+  smooth noise (normalised kurtosis 2.4 to 3.8, 3 being ideal), the spaces differ in when their energy arrives,
+  the gated space stops, shimmer adds the octave, freeze holds, and nothing blows up at 30 s with every control
+  at its limit.
+- Delay: pattern timing, saturation by style and drive, top end by style, diffusion, and wobble in cents.
+- Tune: hard tune lands on the note, Flex leaves close notes alone, Keep slides leaves a sliding voice nearer to
+  what was sung, and the pulse-locked slicing is compared with the old slicing on a clean and on a rough voice.
+
+Two lab tools run recordings through the plugin outside a host, for measuring (and listening): `MUVoiceLab` (one
+tool at a time) and `MUMixLab` (a voice and a backing track through real instances, then Learn and balance).
+
+What has not been done: none of this has been compared by ear, in a blind test, against the commercial plugins
+that were given as references, and no claim is made that it matches them.
 
 ## What it does not do (yet)
 
@@ -150,8 +204,12 @@ that and no download is needed.
 - Eight bands, not 24 or 32.
 - Smooth works on 24 quarter-octave bands, not per FFT bin like a full spectral processor.
 - No external sidechain input: instances share information through the session instead.
-- The Mix Brain is a rule-based comparison against role tone curves and the other tracks. It is not a trained model.
-  The AI tutor is separate, optional, and only explains; it never changes settings.
+- Analyse on the EQ tab is a rule-based comparison against role tone curves and the other tracks. It is not a
+  trained model. The AI tutor (Mix Brain tab) is separate, optional, and only explains; it never changes settings.
+- Harmony is still three voices chosen by a voicing. There is no per-voice editor, MIDI or piano-roll control,
+  voice leading or snapshots yet. Shift, Phone, Lo-fi, Motion and Chop are as they were in build 11.
+- Pitch shifting down by an octave measures no better with the new slicing than with the old.
+- Mac only (AU, VST3, Standalone). There is no Windows build.
 - It cannot change the settings of other plugins; it sits after them and corrects the result.
 - Tune works on one voice at a time, not on chords or a full beat. The Graph view moves the pitch of notes; it
   does not move them in time, and it has to hear a part once before it can show it (there is no ARA link to the

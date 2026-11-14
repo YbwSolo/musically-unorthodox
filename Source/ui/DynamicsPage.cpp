@@ -117,7 +117,7 @@ public:
         g.drawLine (r.getX(), r.getBottom(), r.getRight(), r.getY(), 1.0f);
 
         const float thr = proc.getParam (ids::compThreshold), ratio = proc.getParam (ids::compRatio);
-        const float knee = (int) proc.getParam (ids::compStyle) == (int) CompStyle::Smooth ? juce::jmax (10.0f, proc.getParam (ids::compKnee)) : proc.getParam (ids::compKnee);
+        const float knee = ((int) proc.getParam (ids::compStyle) == (int) CompStyle::Smooth || (int) proc.getParam (ids::compStyle) == (int) CompStyle::Vocal) ? juce::jmax (8.0f, proc.getParam (ids::compKnee)) : proc.getParam (ids::compKnee);
         const bool on = proc.getParam (ids::compEnabled) > 0.5f;
         juce::Path p;
         for (int i = 0; i <= 120; ++i)
@@ -153,7 +153,8 @@ static const char* styleBlurb (int s)
 {
     switch (s)
     {
-        case 1:  return "Punch: fast peak detector that snaps back quickly and adds a little bite as it works. Rap vocals, kicks, snares, anything that should hit.";
+        case 1:  return "Punch: fast peak detector that snaps back quickly. Kicks, snares and anything that should hit. It adds no distortion of its own.";
+        case 4:  return "Vocal: two compressors in one. A slow leveller evens out the phrases and a fast catcher behind it takes only the peaks, so neither works hard and the voice stays open. Rap and sung leads.";
         case 2:  return "Smooth: listens to the average level and releases slowly when it has been working hard. Sung vocals, bass, keys, anything that should feel even.";
         case 3:  return "Glue: gentle and slow, with a release that follows the music. Drum groups, the beat and the master, where everything should move together.";
         default: return "Clean: follows peaks and average level together and adds no colour. Use it when you want control and nobody should hear a compressor.";
@@ -162,7 +163,7 @@ static const char* styleBlurb (int s)
 
 DynamicsPage::DynamicsPage (MUProcessor& p, std::function<void (const juce::String&)> status)
     : proc (p), setStatus (std::move (status)),
-      style (p, ids::compStyle, { "Clean", "Punch", "Smooth", "Glue" }),
+      style (p, ids::compStyle, { "Clean", "Punch", "Smooth", "Glue", "Vocal" }),
       thr (p, ids::compThreshold, "Threshold"), ratio (p, ids::compRatio, "Ratio"), attack (p, ids::compAttack, "Attack"), release (p, ids::compRelease, "Release"),
       knee (p, ids::compKnee, "Knee"), makeup (p, ids::compMakeup, "Makeup"), mix (p, ids::compMix, "Mix"), scHp (p, ids::compScHp, "Sidechain HP"),
       autoMakeup (p, ids::compAutoMakeup, "Auto makeup"),

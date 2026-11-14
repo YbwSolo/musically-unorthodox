@@ -432,6 +432,7 @@ TunePage::TunePage (MUProcessor& p, std::function<void (const juce::String&)> st
       scale (p, ids::tuneScale, { "Chromatic", "Major", "Minor", "Maj pent", "Min pent", "Custom" }, ids::tuneScale),
       speed (p, ids::tuneSpeed, "Speed", ids::tuneSpeed), hold (p, ids::tuneHold, "Note hold", ids::tuneHold), vibrato (p, ids::tuneVibrato, "Keep vibrato", ids::tuneVibrato),
       amount (p, ids::tuneAmount, "Amount", ids::tuneAmount), formant (p, ids::tuneFormant, "Formant", ids::tuneFormant),
+      flex (p, ids::tuneFlex, "Flex", ids::tuneFlex), humanise (p, ids::tuneHumanise, "Humanise", ids::tuneHumanise), slides (p, ids::tuneSlides, "Keep slides", ids::tuneSlides),
       graph (p, setStatus)
 {
     section.setPower (p, ids::tuneOn);
@@ -444,6 +445,7 @@ TunePage::TunePage (MUProcessor& p, std::function<void (const juce::String&)> st
 
     presets.names = [] { juce::StringArray n; for (int i : modulePresetsFor ("tune")) n.add (modulePresets()[(size_t) i].name); return n; };
     presets.current = [this] { return proc.getModulePresetName ("tune"); };
+    presets.enableOwnPresets (proc, [] { return juce::String ("tune"); }, setStatus);
     presets.choose = [this] (int i) { const auto list = modulePresetsFor ("tune"); if (i >= 0 && i < (int) list.size()) setStatus (proc.applyModulePreset (list[(size_t) i])); };
 
     keyBox.addItemList (Tuner::keyNames(), 1);
@@ -508,7 +510,7 @@ TunePage::TunePage (MUProcessor& p, std::function<void (const juce::String&)> st
         }
     };
 
-    for (auto* c : std::initializer_list<juce::Component*> { &section, &view, &presets, &keyBox, &scale, &findKey, &sendKey, &speed, &hold, &vibrato, &amount, &formant,
+    for (auto* c : std::initializer_list<juce::Component*> { &section, &view, &presets, &keyBox, &scale, &findKey, &sendKey, &speed, &hold, &vibrato, &amount, &formant, &flex, &humanise, &slides,
                                                               &graph, &capture, &correct, &resetNotes, &clearNotes, &splitNote, &joinNotes, &zoomOut, &zoomIn, &fit, &followPlay, &straighten, &glide })
         addAndMakeVisible (c);
     showView();
@@ -519,7 +521,7 @@ void TunePage::showView()
 {
     const bool graphView = (int) proc.getParam (ids::tuneMode) == 1;
     shownMode = graphView ? 1 : 0;
-    for (auto* c : std::initializer_list<juce::Component*> { &speed, &hold, &vibrato, &amount, &formant }) c->setVisible (! graphView);
+    for (auto* c : std::initializer_list<juce::Component*> { &speed, &hold, &vibrato, &amount, &formant, &flex, &humanise, &slides }) c->setVisible (! graphView);
     for (auto* c : std::initializer_list<juce::Component*> { &graph, &capture, &correct, &resetNotes, &clearNotes, &splitNote, &joinNotes, &zoomOut, &zoomIn, &fit, &followPlay, &straighten, &glide })
         c->setVisible (graphView);
     repaint();
@@ -780,9 +782,9 @@ void TunePage::resized()
         right.removeFromTop (10);
         keysArea = right.removeFromTop (104);
         right.removeFromTop (12);
-        layoutRow (right.removeFromTop (96), { &speed, &hold, &vibrato }, 8);
+        layoutRow (right.removeFromTop (96), { &speed, &flex, &hold, &slides }, 6);
         right.removeFromTop (8);
-        layoutRow (right.removeFromTop (96).withSizeKeepingCentre (250, 96), { &amount, &formant }, 8);
+        layoutRow (right.removeFromTop (96), { &humanise, &vibrato, &amount, &formant }, 6);
     }
     // ---- graph view
     {

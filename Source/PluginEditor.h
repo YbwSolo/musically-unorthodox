@@ -13,6 +13,7 @@
 #include "ui/FXPage.h"
 #include "ui/MasterPage.h"
 #include "ui/LearnPage.h"
+#include "ui/BrainPage.h"
 #include "ui/SettingsPanel.h"
 
 namespace mu
@@ -46,6 +47,7 @@ private:
     FXPage fxPage;
     MasterPage masterPage;
     LearnPage learnPage;
+    BrainPage brainPage;
     SettingsPanel settings;
     int tab = 0;
     float pageAnim = 1.0f, slideFrom = 0.0f;

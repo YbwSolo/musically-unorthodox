@@ -35,6 +35,10 @@ MUProcessor::MUProcessor()
     pDlOn = p (ids::dlOn); pDlMix = p (ids::dlMix); pDlSync = p (ids::dlSync); pDlNote = p (ids::dlNote); pDlTime = p (ids::dlTime); pDlFeedback = p (ids::dlFeedback);
     pDlTone = p (ids::dlTone); pDlWidth = p (ids::dlWidth); pDlDuck = p (ids::dlDuck);
     pHmOn = p (ids::hmOn); pHmVoicing = p (ids::hmVoicing); pHmMix = p (ids::hmMix); pHmWidth = p (ids::hmWidth);
+    pTuneFlex = p (ids::tuneFlex); pTuneHumanise = p (ids::tuneHumanise); pTuneSlides = p (ids::tuneSlides); pHmHumanise = p (ids::hmHumanise);
+    pRvSize = p (ids::rvSize); pRvDiffusion = p (ids::rvDiffusion); pRvModDepth = p (ids::rvModDepth); pRvModRate = p (ids::rvModRate);
+    pRvLowDecay = p (ids::rvLowDecay); pRvEarly = p (ids::rvEarly); pRvFreeze = p (ids::rvFreeze); pRvShimmer = p (ids::rvShimmer);
+    pDlStyle = p (ids::dlStyle); pDlPattern = p (ids::dlPattern); pDlDrive = p (ids::dlDrive); pDlWobble = p (ids::dlWobble); pDlLowCut = p (ids::dlLowCut);
     pPsOn = p (ids::psOn); pPsSemis = p (ids::psSemis); pPsCharacter = p (ids::psCharacter); pPsMix = p (ids::psMix);
     pPhOn = p (ids::phOn); pPhAmount = p (ids::phAmount); pPhTone = p (ids::phTone); pPhDrive = p (ids::phDrive);
     pLfOn = p (ids::lfOn); pLfCrush = p (ids::lfCrush); pLfWobble = p (ids::lfWobble); pLfMix = p (ids::lfMix);
@@ -109,6 +113,7 @@ void MUProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     outGain.reset (sampleRate, 0.03);
     masterTrimGain.reset (sampleRate, 0.5);
     trimGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (pTrim->load()));
+    inputProbe.prepare (sampleRate, getTotalNumOutputChannels());
     outGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (pOut->load()));
     masterTrimGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (masterTrimDb.load()));
     pullParameters();
@@ -183,6 +188,7 @@ void MUProcessor::pullParameters()
     tn.enabled = pTuneOn->load() > 0.5f; tn.key = (int) pTuneKey->load(); tn.scale = (int) pTuneScale->load(); tn.speedMs = pTuneSpeed->load();
     tn.amount = pTuneAmount->load() * 0.01f; tn.keepVibrato = pTuneVibrato->load() * 0.01f; tn.lowLatency = lowLatency;
     tn.mode = (int) pTuneMode->load(); tn.hold = pTuneHold->load() * 0.01f; tn.formantSemis = pTuneFormant->load(); tn.noteMask = (int) pTuneNotes->load();
+    tn.flexCents = pTuneFlex->load(); tn.humanise = pTuneHumanise->load() * 0.01f; tn.keepSlides = pTuneSlides->load() * 0.01f;
     tuner.setSettings (tn);
 
     DoublerSettings db;
@@ -194,18 +200,21 @@ void MUProcessor::pullParameters()
     rv.enabled = pRvOn->load() > 0.5f; rv.mix = pRvMix->load() * 0.01f; rv.autoTime = pRvAuto->load() > 0.5f; rv.length = (int) pRvLength->load();
     rv.decaySeconds = pRvDecay->load(); rv.preDelayMs = pRvPre->load(); rv.tone = pRvTone->load() * 0.01f; rv.duck = pRvDuck->load() * 0.01f;
     rv.type = (int) pRvType->load(); rv.lowCutHz = pRvLowCut->load(); rv.width = pRvWidth->load() * 0.01f;
+    rv.size = pRvSize->load() * 0.01f; rv.diffusion = pRvDiffusion->load() * 0.01f; rv.modDepth = pRvModDepth->load() * 0.01f; rv.modRate = pRvModRate->load();
+    rv.lowDecay = pRvLowDecay->load() * 0.01f; rv.early = pRvEarly->load() * 0.01f; rv.freeze = pRvFreeze->load() > 0.5f; rv.shimmer = pRvShimmer->load() * 0.01f;
     rv.bpm = hostBpm.load (std::memory_order_relaxed);
     reverb.setSettings (rv);
 
     EchoSettings dl;
     dl.enabled = pDlOn->load() > 0.5f; dl.mix = pDlMix->load() * 0.01f; dl.sync = pDlSync->load() > 0.5f; dl.note = (int) pDlNote->load(); dl.timeMs = pDlTime->load();
     dl.feedback = pDlFeedback->load() * 0.01f; dl.tone = pDlTone->load() * 0.01f; dl.width = pDlWidth->load() * 0.01f; dl.duck = pDlDuck->load() * 0.01f; dl.bpm = rv.bpm;
+    dl.style = (int) pDlStyle->load(); dl.pattern = (int) pDlPattern->load(); dl.drive = pDlDrive->load() * 0.01f; dl.wobble = pDlWobble->load() * 0.01f; dl.lowCutHz = pDlLowCut->load();
     echo.setSettings (dl);
 
     PitchFXSettings pf;
     pf.shiftOn = pPsOn->load() > 0.5f; pf.semitones = pPsSemis->load(); pf.character = pPsCharacter->load() * 0.01f; pf.shiftMix = pPsMix->load() * 0.01f;
     pf.harmonyOn = pHmOn->load() > 0.5f; pf.voicing = (int) pHmVoicing->load(); pf.harmonyMix = pHmMix->load() * 0.01f; pf.harmonyWidth = pHmWidth->load() * 0.01f;
-    pf.key = tn.key; pf.scale = tn.scale; pf.noteMask = tn.noteMask;
+    pf.key = tn.key; pf.scale = tn.scale; pf.noteMask = tn.noteMask; pf.humanise = pHmHumanise->load() * 0.01f;
     pitchFx.setSettings (pf);
 
     PhoneSettings ph;
@@ -284,8 +293,13 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         const bool canDelta = n <= deltaBuffer.getNumSamples() && numCh <= deltaBuffer.getNumChannels();
         bool deltaOnly = false;
 
+        // The balance trim is this track's fader: it comes after all the processing, so balancing the song never
+        // changes how hard the compressor, de-esser, gate or saturation are being driven. (Songs saved by earlier
+        // builds had it in front; they keep that until they are next balanced, so they open sounding the same.)
         trimGain.setTargetValue (juce::Decibels::decibelsToGain (pTrim->load()));
-        applySmoothedGain (trimGain);
+        const bool trimFirst = trimBeforeChain.load (std::memory_order_relaxed);
+        if (trimFirst) applySmoothedGain (trimGain);
+        inputProbe.process (buffer);
         tuner.process (buffer);
         gate.process (buffer);
 
@@ -353,6 +367,7 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             applySmoothedGain (outGain);
         }
 
+        if (! trimFirst) applySmoothedGain (trimGain);
         guard.process (buffer);                        // tracks only: catches the odd peak before it leaves
         if (master) mixMeter.process (buffer);         // the mix as it arrives, before any mastering gain
         masterTrimGain.setTargetValue (juce::Decibels::decibelsToGain (master && ! bus->isLowLatency() ? masterTrimDb.load() : 0.0f));
@@ -555,7 +570,40 @@ juce::String MUProcessor::getParamText (const juce::String& id) const
     return {};
 }
 
-void MUProcessor::setTrimDb (float db) { setParam (ids::trim, juce::jlimit (-24.0f, 24.0f, db)); }
+void MUProcessor::setTrimDb (float db)
+{
+    if (trimBeforeChain.load()) moveTrimAfterChain();
+    setParam (ids::trim, juce::jlimit (-24.0f, 24.0f, db));
+}
+
+// A song from an earlier build has its trim in front of the processing. Moving it behind without changing the
+// sound means every level-dependent setting has to move by the same amount the other way.
+void MUProcessor::moveTrimAfterChain()
+{
+    const float t = getTrimDb();
+    auto shift = [this, t] (const juce::String& id, float lo, float hi) { setParam (id, juce::jlimit (lo, hi, getParam (id) - t)); };
+    if (std::abs (t) > 0.05f)
+    {
+        shift (ids::compThreshold, -60.0f, 0.0f);
+        shift (ids::dsThreshold, -60.0f, 0.0f);
+        shift (ids::gateThreshold, -80.0f, 0.0f);
+        shift (ids::riderTarget, -40.0f, -6.0f);
+        for (int b = 0; b < kNumEQBands; ++b) shift (ids::eqBandThr (b), -60.0f, 0.0f);
+    }
+    trimBeforeChain.store (false);
+}
+
+float MUProcessor::toolLevel() const
+{
+    const float in = inputProbe.getLevel();
+    return in > -70.0f ? in : loudness.getShortTerm() - faderDb();
+}
+
+// What comes after the processing: the level-dependent tools hear the track without it.
+float MUProcessor::faderDb() const
+{
+    return (trimBeforeChain.load() ? 0.0f : getTrimDb()) + getParam (ids::outputGain);
+}
 
 bool MUProcessor::fillBandsDb (std::array<float, kAnalysisBands>& out) const
 {
@@ -715,13 +763,11 @@ juce::String MUProcessor::tamePeaks()
         done = "Compressor switched on. " + note;
     }
     else
-    {
-        // already compressing: lean on it a little harder, by as much as the peaks are over (up to 6 dB)
-        const float step = juce::jlimit (1.5f, 6.0f, over);
-        setParam (ids::compThreshold, juce::jlimit (-60.0f, 0.0f, getParam (ids::compThreshold) - step));
-        setParam (ids::compRatio, juce::jlimit (1.0f, 20.0f, juce::jmax (getParam (ids::compRatio), 4.0f)));
-        done = "Compressor threshold lowered by " + juce::String (step, 1) + " dB.";
-    }
+        // Already compressing. Squeezing harder is what flattens a voice and thickens the low mids, so the
+        // compressor is left alone: the peak guard catches the odd peak, and if the track is simply too hot
+        // the balance turns the song down around it.
+        done = "The compressor is already working and was left as it is; the peak guard is on.";
+    juce::ignoreUnused (over);
     setParam (ids::trackGuard, 1.0f);
     resetMeasurement();
     return done;
@@ -845,6 +891,7 @@ juce::String MUProcessor::applyModulePreset (int index)
         else if (single) setParam (ids::tuneScale, (float) juce::jlimit (0, 4, (int) apvts.state.getProperty ("scaleBeforeRobot", 2)));
     }
     apvts.state.setProperty ("preset_" + p.module, p.name, nullptr);
+    rememberLoaded (p.module, scopeParams (p.module));
     return p.name + ": " + p.blurb;
 }
 
@@ -975,10 +1022,19 @@ float MUProcessor::secondsHeard() const
     return (float) (spectrum.getLongTermFrames() * (double) SpectrumAnalyzer::kHop / fs);
 }
 
+void MUProcessor::startListening()   { spectrum.startListen(); }
+void MUProcessor::cancelListening()  { spectrum.stopListen(); }
+
 std::vector<Suggestion> MUProcessor::analyse (juce::String& status)
 {
     std::vector<Suggestion> out;
-    const float heard = secondsHeard();
+    // A listening pass, if one has just been made, is what the analysis is based on: a known stretch of sound,
+    // silence left out, with how each band behaved over it. Without one it falls back on the running average.
+    BandArray bands {}, swing {};
+    const float listened = spectrum.getListenSeconds();
+    const bool fromPass = listened >= 3.0f && spectrum.listenBands (bands, swing);
+    spectrum.stopListen();
+    const float heard = fromPass ? listened : secondsHeard();
     if (heard < 3.0f)
     {
         status = heard < 0.2f ? "Nothing has played yet. Start playback on the loudest part of the song, wait a few seconds, then analyse."
@@ -986,10 +1042,9 @@ std::vector<Suggestion> MUProcessor::analyse (juce::String& status)
         return out;
     }
 
-    BandArray bands {};
-    fillBandsDb (bands);
+    if (! fromPass) fillBandsDb (bands);
     const auto role = getEffectiveRole();
-    out = analyseTone (bands, role);
+    out = analyseTone (bands, role, fromPass ? &swing : nullptr);
 
     // Clashes with other tracks in the session that involve this one (the master sees all of them).
     const bool master = role == Role::Master;
@@ -1005,10 +1060,11 @@ std::vector<Suggestion> MUProcessor::analyse (juce::String& status)
     }
     if (out.size() > 6) out.resize (6);
 
+    const juce::String basis = fromPass ? "Listened to " + juce::String (listened, 0) + " s of this track. " : juce::String();
     if (out.empty())
-        status = "Nothing stands out. The tone of this track is in the normal range for " + roleNames()[(int) role].toLowerCase() + ", so leave the EQ alone unless your ears say otherwise.";
+        status = basis + "Nothing stands out. The tone of this track is in the normal range for " + roleNames()[(int) role].toLowerCase() + ", so leave the EQ alone unless your ears say otherwise.";
     else
-        status = juce::String ((int) out.size()) + (out.size() == 1 ? " thing" : " things") + " worth a look, most important first. Read why, then apply the ones you agree with.";
+        status = basis + juce::String ((int) out.size()) + (out.size() == 1 ? " thing" : " things") + " worth a look, most important first. Read why, then apply the ones you agree with.";
     return out;
 }
 
@@ -1154,7 +1210,7 @@ juce::String MUProcessor::tutorTrackNotes()
 
     juce::String status;
     const auto found = analyse (status);
-    s << "\nMix Brain suggestions right now (EQ tab, Analyse button): ";
+    s << "\nSuggestions right now (EQ tab, Analyse button): ";
     if (secondsHeard() < 3.0f) s << "none yet, because not enough audio has been played. ";
     else if (found.empty()) s << "none. Nothing stands out for this kind of track. ";
     else
@@ -1282,8 +1338,11 @@ juce::String MUProcessor::autoCompressor()
     int style = 0;
     switch (role)
     {
-        case Role::Vocal:        style = 1; ratio = 4.0f; att = 3.0f;  rel = 60.0f;  knee = 3.0f; break;
-        case Role::BackingVocal: style = 2; ratio = 5.0f; att = 5.0f;  rel = 90.0f;  knee = 6.0f; break;
+        // Voices get the two-stage Vocal style: a 3:1 leveller slow enough to let consonants through, with a fast
+        // catcher behind it for the peaks. The detector ignores everything under 110 Hz, so plosives and
+        // close-mic boom do not push the whole voice down.
+        case Role::Vocal:        style = 4; ratio = 3.0f; att = 12.0f; rel = 110.0f; knee = 8.0f; scHp = 110.0f; break;
+        case Role::BackingVocal: style = 4; ratio = 4.0f; att = 8.0f;  rel = 120.0f; knee = 8.0f; scHp = 120.0f; break;
         case Role::Kick:         style = 1; ratio = 4.0f; att = 20.0f; rel = 60.0f;  knee = 4.0f; break;
         case Role::Bass808:      style = 2; ratio = 4.0f; att = 25.0f; rel = 160.0f; knee = 6.0f; break;
         case Role::Drums:        style = 3; ratio = 3.0f; att = 20.0f; rel = 120.0f; knee = 6.0f; scHp = 100.0f; break;
@@ -1303,27 +1362,33 @@ juce::String MUProcessor::autoCompressor()
     setParam (ids::compEnabled, 1.0f);
     juce::String note;
     fitThresholds (role, note);
-    static const char* styles[] = { "Clean", "Punch", "Smooth", "Glue" };
-    return "Set for " + roleNames()[(int) role].toLowerCase() + ": " + styles[style] + ", " + juce::String (ratio, 1) + ":1, threshold " + getParamText (ids::compThreshold) + ".";
+    return "Set for " + roleNames()[(int) role].toLowerCase() + ": " + Compressor::styleNames()[style] + ", " + juce::String (ratio, 1) + ":1, threshold " + getParamText (ids::compThreshold) + ".";
 }
 
 // Places the thresholds relative to how loud the track actually is, so a preset gives the amount of
 // gain reduction it was designed for whatever level the track was recorded at.
 void MUProcessor::fitThresholds (Role presetRole, juce::String& note)
 {
-    const float level = loudness.getShortTerm();
-    if (level <= -60.0f)
+    if (loudness.getShortTerm() <= -60.0f)
     {
         if (getParam (ids::compEnabled) > 0.5f) note = " Play the track and load the preset again to fit its thresholds to your level.";
         return;
     }
+    // the level the tools themselves hear: the track as it comes in, before any of them has touched it
+    const float post = faderDb();
+    const float level = toolLevel();
     if (getParam (ids::compEnabled) > 0.5f)
     {
         const auto style = (CompStyle) (int) getParam (ids::compStyle);
         const float ratio = juce::jmax (1.1f, getParam (ids::compRatio));
         const bool vocal = presetRole == Role::Vocal || presetRole == Role::BackingVocal;
         float thr;
-        if (style == CompStyle::Smooth || style == CompStyle::Glue)
+        if (style == CompStyle::Vocal)
+            // Measured on real voices: with the threshold 2 dB under the three-second loudness, the leveller
+            // takes about 4 dB off the loud-to-soft range and the catcher 2 to 3 dB off the peaks, which evens
+            // a voice out without flattening it.
+            thr = level - 2.0f;
+        else if (style == CompStyle::Smooth || style == CompStyle::Glue)
         {
             // RMS detectors: aim for a typical amount of reduction on the average level.
             const float wanted = style == CompStyle::Glue ? (presetRole == Role::Master ? 1.5f : 2.5f) : (vocal ? 4.0f : 3.0f);
@@ -1340,7 +1405,7 @@ void MUProcessor::fitThresholds (Role presetRole, juce::String& note)
         if (getParam (ids::eqBandEnabled (b)) > 0.5f && getParam (ids::eqBandDyn (b)) > 0.5f)
         {
             // dynamic bands listen to their own frequency region, which sits below the full-band level
-            const float bandLevel = spectrum.hasLongTerm() ? spectrum.longTermBandDbAt (getParam (ids::eqBandFreq (b))) : level - 12.0f;
+            const float bandLevel = spectrum.hasLongTerm() ? spectrum.longTermBandDbAt (getParam (ids::eqBandFreq (b))) - post : level - 12.0f;
             setParam (ids::eqBandThr (b), juce::jlimit (-60.0f, 0.0f, bandLevel + 3.0f));
         }
     note = " Thresholds fitted to this track (" + juce::String (level, 1) + " LUFS).";
@@ -1359,7 +1424,161 @@ juce::String MUProcessor::applyChainPreset (int index)
     spectrum.resetLongTerm();
     if (p.role == Role::Master) { masterTrimDb.store (0.0f); autoLevelHeld.store (false); }
     resetMeasurement();                 // readings taken with the old chain no longer describe this track
+    rememberLoaded ("chain", scopeParams ("chain"));
     return p.name + " loaded." + note;
+}
+
+// ---- Presets of your own --------------------------------------------------------------------------
+// Which controls a preset holds. The whole chain is everything that shapes the sound (the same set A/B switches:
+// not the role, the bypass, the balance trim or the song's key). A tool's preset holds that tool's controls.
+std::vector<juce::String> MUProcessor::scopeParams (const juce::String& scope) const
+{
+    std::vector<juce::String> ids;
+    if (scope == "chain") { for (auto* p : abParams) ids.push_back (p->getParameterID()); return ids; }
+    for (auto& preset : modulePresets())
+        if (preset.module == scope)
+            for (auto& v : preset.values)
+                if (v.id != kRootOnly && std::find (ids.begin(), ids.end(), v.id) == ids.end()) ids.push_back (v.id);
+    return ids;
+}
+
+bool MUProcessor::isFactoryName (const juce::String& scope, const juce::String& name)
+{
+    if (scope == "chain") return findChainPreset (name) >= 0;
+    for (auto& p : modulePresets()) if (p.module == scope && p.name == name) return true;
+    return false;
+}
+
+juce::String MUProcessor::scopePresetName (const juce::String& scope) const
+{
+    return scope == "chain" ? currentPreset : getModulePresetName (scope);
+}
+
+void MUProcessor::rememberLoaded (const juce::String& scope, const std::vector<juce::String>& ids)
+{
+    auto& kept = loadedPreset[scope];
+    kept.clear();
+    for (auto& id : ids) if (apvts.getParameter (id) != nullptr) kept.push_back ({ id, getParam (id) });
+}
+
+bool MUProcessor::presetEdited (const juce::String& scope) const
+{
+    const auto found = loadedPreset.find (scope);
+    if (found == loadedPreset.end() || scopePresetName (scope).isEmpty()) return false;
+    for (auto& v : found->second)
+        if (auto* p = apvts.getParameter (v.id))
+            if (std::abs (p->convertTo0to1 (getParam (v.id)) - p->convertTo0to1 (v.value)) > 0.002f) return true;
+    return false;
+}
+
+juce::String MUProcessor::saveUserPreset (const juce::String& scope, const juce::String& typedName, bool replaceExisting, bool* ok)
+{
+    if (ok != nullptr) *ok = false;
+    UserPreset p;
+    p.scope = scope; p.name = UserPresets::cleanName (typedName); p.pluginVersion = MU_VERSION_STRING;
+    if (p.name.isEmpty()) return "Give the preset a name first.";
+    if (isFactoryName (scope, p.name)) return "\"" + p.name + "\" is the name of a built-in preset. Choose a name of your own.";
+    const auto ids = scopeParams (scope);
+    for (auto& id : ids) if (apvts.getParameter (id) != nullptr) p.values.push_back ({ id, getParam (id) });
+    // a whole chain remembers how loud the track was, so its thresholds can follow a quieter or louder track later
+    if (scope == "chain" && loudness.getShortTerm() > -60.0f) p.level = toolLevel();
+    const auto result = UserPresets::save (p, replaceExisting);
+    if (result.failed()) return result.getErrorMessage();
+    if (scope == "chain") { currentPreset = p.name; apvts.state.setProperty ("chainPresetName", currentPreset, nullptr); }
+    else apvts.state.setProperty ("preset_" + scope, p.name, nullptr);
+    rememberLoaded (scope, ids);
+    if (ok != nullptr) *ok = true;
+    return "Saved \"" + p.name + "\" to your presets. It is a file of its own, so it is there in every song.";
+}
+
+juce::String MUProcessor::applyUserPreset (const UserPreset& preset)
+{
+    const auto allowed = scopeParams (preset.scope);
+    if (allowed.empty()) return "That preset is for a tool this version of the plugin does not have.";
+    int set = 0, skipped = preset.skipped;
+    for (auto& v : preset.values)
+    {
+        auto* param = apvts.getParameter (v.id);
+        // a preset can only move the controls of what it says it is for
+        if (param == nullptr || std::find (allowed.begin(), allowed.end(), v.id) == allowed.end()) { ++skipped; continue; }
+        const auto range = param->getNormalisableRange();
+        setParam (v.id, juce::jlimit (range.start, range.end, v.value));
+        ++set;
+    }
+    if (set == 0) return "Nothing in that preset matches this version of the plugin.";
+    juce::String note;
+    if (preset.scope == "chain")
+    {
+        currentPreset = preset.name;
+        apvts.state.setProperty ("chainPresetName", currentPreset, nullptr);
+        // Thresholds were set for the track the preset was saved on. If this one is louder or quieter, move them
+        // by the difference, so the compressor, de-esser, gate and rider work as hard as they did there.
+        if (preset.level > -200.0f && loudness.getShortTerm() > -60.0f)
+        {
+            const float shift = toolLevel() - preset.level;
+            if (std::abs (shift) > 1.0f)
+            {
+                auto move = [this, shift] (const juce::String& id, float lo, float hi) { setParam (id, juce::jlimit (lo, hi, getParam (id) + shift)); };
+                move (ids::compThreshold, -60.0f, 0.0f); move (ids::dsThreshold, -60.0f, 0.0f); move (ids::gateThreshold, -80.0f, 0.0f); move (ids::riderTarget, -40.0f, -6.0f);
+                for (int b = 0; b < kNumEQBands; ++b) move (ids::eqBandThr (b), -60.0f, 0.0f);
+                note = " This track is " + juce::String (std::abs (shift), 1) + " dB " + (shift > 0.0f ? "louder" : "quieter") + " than the one it was saved on, so the thresholds were moved by that much.";
+            }
+        }
+        spectrum.resetLongTerm();
+        resetMeasurement();
+    }
+    else apvts.state.setProperty ("preset_" + preset.scope, preset.name, nullptr);
+    rememberLoaded (preset.scope, allowed);
+    if (skipped > 0) note << " " << skipped << (skipped == 1 ? " setting in it is" : " settings in it are") << " for controls this version does not have and " << (skipped == 1 ? "was" : "were") << " left out.";
+    return "\"" + preset.name + "\" loaded (one of your presets)." + note;
+}
+
+juce::String MUProcessor::loadUserPreset (const juce::String& scope, const juce::String& name)
+{
+    UserPreset p;
+    if (! UserPresets::find (scope, name, p)) return "That preset is no longer in your presets folder.";
+    return applyUserPreset (p);
+}
+
+juce::String MUProcessor::deleteUserPreset (const juce::String& scope, const juce::String& name)
+{
+    UserPreset p;
+    if (! UserPresets::find (scope, name, p)) return "That preset is already gone.";
+    const auto result = UserPresets::remove (p);
+    if (result.failed()) return result.getErrorMessage();
+    if (scopePresetName (scope) == name)
+    {
+        if (scope == "chain") { currentPreset.clear(); apvts.state.setProperty ("chainPresetName", currentPreset, nullptr); }
+        else apvts.state.removeProperty ("preset_" + scope, nullptr);
+        loadedPreset.erase (scope);
+    }
+    return "\"" + name + "\" deleted. Your settings were not changed.";
+}
+
+juce::String MUProcessor::renameUserPreset (const juce::String& scope, const juce::String& name, const juce::String& newName)
+{
+    UserPreset p;
+    if (! UserPresets::find (scope, name, p)) return "That preset is no longer in your presets folder.";
+    const auto clean = UserPresets::cleanName (newName);
+    if (isFactoryName (scope, clean)) return "\"" + clean + "\" is the name of a built-in preset. Choose a name of your own.";
+    const auto result = UserPresets::rename (p, clean);
+    if (result.failed()) return result.getErrorMessage();
+    if (scopePresetName (scope) == name)
+    {
+        if (scope == "chain") { currentPreset = p.name; apvts.state.setProperty ("chainPresetName", currentPreset, nullptr); }
+        else apvts.state.setProperty ("preset_" + scope, p.name, nullptr);
+    }
+    return "Renamed to \"" + p.name + "\".";
+}
+
+juce::String MUProcessor::importUserPreset (const juce::File& file, bool load)
+{
+    UserPreset p;
+    const auto result = UserPresets::importFile (file, p);
+    if (result.failed()) return result.getErrorMessage();
+    if (scopeParams (p.scope).empty()) { UserPresets::remove (p); return "That preset is for a tool this version of the plugin does not have."; }
+    const juce::String what = p.scope == "chain" ? juce::String ("a whole-chain preset") : "a preset for " + p.scope;
+    return "Imported \"" + p.name + "\", " + what + ". " + (load ? applyUserPreset (p) : juce::String ("It is in your presets now."));
 }
 
 void MUProcessor::applyMasterMode (int mode)
@@ -1453,6 +1672,7 @@ void MUProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("chainPresetName", currentPreset, nullptr);
     state.setProperty ("version", MU_VERSION_STRING, nullptr);
     state.setProperty ("uiTabs", 8, nullptr);
+    state.setProperty ("trimAfter", ! trimBeforeChain.load(), nullptr);
     {
         const juce::ScopedLock sl (graphLock);
         const auto notes = graph.toString();
@@ -1470,10 +1690,16 @@ void MUProcessor::setStateInformation (const void* data, int sizeInBytes)
             auto tree = juce::ValueTree::fromXml (*xml);
             apvts.replaceState (tree);
             autoBalanceMode = (bool) tree.getProperty ("autoBalanceMode", false);
+            // A song saved before these controls existed was tuned without them: keep it that way.
+            bool hasSlides = false;
+            for (int i = 0; i < tree.getNumChildren(); ++i) hasSlides = hasSlides || tree.getChild (i).getProperty ("id").toString() == ids::tuneSlides;
+            if (! hasSlides) { setParam (ids::tuneFlex, 0.0f); setParam (ids::tuneHumanise, 0.0f); setParam (ids::tuneSlides, 0.0f); setParam (ids::hmHumanise, 0.0f); }
+            // builds before 12 applied the balance trim in front of the processing
+            trimBeforeChain.store (! (bool) tree.getProperty ("trimAfter", false) && std::abs (getTrimDb()) > 0.05f && ! isMasterInstance());
             // songs saved before Tune had its own tab counted the tabs differently
             int savedTab = (int) tree.getProperty ("uiTab", 0);
             if ((int) tree.getProperty ("uiTabs", 7) < 8 && savedTab >= 4) ++savedTab;
-            currentTab.store (juce::jlimit (0, 7, savedTab));
+            currentTab.store (juce::jlimit (0, 8, savedTab));
             {
                 const juce::ScopedLock sl (graphLock);
                 const auto notes = tree.getProperty ("tuneGraph", juce::String()).toString();

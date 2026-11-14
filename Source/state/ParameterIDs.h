@@ -139,6 +139,9 @@ namespace ids
     inline const juce::String tuneHold    { "tuneHold" };
     inline const juce::String tuneFormant { "tuneFormant" };
     inline const juce::String tuneNotes   { "tuneNotes" };      // the Custom scale: twelve bits, bit 0 = C
+    inline const juce::String tuneFlex    { "tuneFlex" };       // cents either side of a note that are left as sung
+    inline const juce::String tuneHumanise { "tuneHumanise" };  // held notes are corrected more gently
+    inline const juce::String tuneSlides  { "tuneSlides" };     // slides between notes are left alone
 
     // Peak guard on a track (the master has its own limiter)
     inline const juce::String trackGuard  { "trackGuard" };
@@ -163,6 +166,14 @@ namespace ids
     inline const juce::String rvType   { "rvType" };
     inline const juce::String rvLowCut { "rvLowCut" };
     inline const juce::String rvWidth  { "rvWidth" };
+    inline const juce::String rvSize   { "rvSize" };
+    inline const juce::String rvDiffusion { "rvDiffusion" };
+    inline const juce::String rvModDepth { "rvModDepth" };
+    inline const juce::String rvModRate { "rvModRate" };
+    inline const juce::String rvLowDecay { "rvLowDecay" };
+    inline const juce::String rvEarly  { "rvEarly" };
+    inline const juce::String rvFreeze { "rvFreeze" };
+    inline const juce::String rvShimmer { "rvShimmer" };
 
     // Delay
     inline const juce::String dlOn       { "dlOn" };
@@ -174,12 +185,18 @@ namespace ids
     inline const juce::String dlTone     { "dlTone" };
     inline const juce::String dlWidth    { "dlWidth" };
     inline const juce::String dlDuck     { "dlDuck" };
+    inline const juce::String dlStyle    { "dlStyle" };
+    inline const juce::String dlPattern  { "dlPattern" };
+    inline const juce::String dlDrive    { "dlDrive" };
+    inline const juce::String dlWobble   { "dlWobble" };
+    inline const juce::String dlLowCut   { "dlLowCut" };
 
     // Harmony
     inline const juce::String hmOn      { "hmOn" };
     inline const juce::String hmVoicing { "hmVoicing" };
     inline const juce::String hmMix     { "hmMix" };
     inline const juce::String hmWidth   { "hmWidth" };
+    inline const juce::String hmHumanise { "hmHumanise" };
 
     // Shift
     inline const juce::String psOn        { "psOn" };

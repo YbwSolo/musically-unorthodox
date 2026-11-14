@@ -20,16 +20,22 @@ FXPage::FXPage (MUProcessor& p, std::function<void (const juce::String&)> status
       dblVoices (p, ids::dblVoices, { "Double", "Stack" }, ids::dblVoices),
       dblMix (p, ids::dblMix, "Level", ids::dblMix), dblDetune (p, ids::dblDetune, "Detune", ids::dblDetune), dblTiming (p, ids::dblTiming, "Looseness", ids::dblTiming), dblWidth (p, ids::dblWidth, "Width", ids::dblWidth),
       dlSync (p, ids::dlSync, "Timed to tempo", "switch", ids::dlSync),
-      dlNote (p, ids::dlNote, { "1/2", "1/4", "1/8 dotted", "1/8", "1/8 triplet", "1/16" }, ids::dlNote),
+      dlNote (p, ids::dlNote, Echo::noteNames(), ids::dlNote),
+      dlPattern (p, ids::dlPattern, Echo::patternNames(), ids::dlPattern), dlStyle (p, ids::dlStyle, Echo::styleNames(), ids::dlStyle),
       dlMix (p, ids::dlMix, "Level", ids::dlMix), dlTime (p, ids::dlTime, "Time", ids::dlTime), dlFeedback (p, ids::dlFeedback, "Repeats", ids::dlFeedback),
       dlTone (p, ids::dlTone, "Tone", ids::dlTone), dlWidth (p, ids::dlWidth, "Ping-pong", ids::dlWidth), dlDuck (p, ids::dlDuck, "Duck", ids::dlDuck),
-      rvType (p, ids::rvType, { "Room", "Plate", "Hall" }, ids::rvType),
+      dlDrive (p, ids::dlDrive, "Drive", ids::dlDrive), dlWobble (p, ids::dlWobble, "Wobble", ids::dlWobble), dlLowCut (p, ids::dlLowCut, "Low cut", ids::dlLowCut),
+      rvType (p, ids::rvType, Reverb::typeNames(), ids::rvType),
       rvAuto (p, ids::rvAuto, "Timed to tempo", "switch", ids::rvAuto),
       rvLength (p, ids::rvLength, { "1 beat", "2 beats", "4 beats" }, ids::rvLength),
+      rvFreeze (p, ids::rvFreeze, "Freeze", "switch", ids::rvFreeze),
       rvMix (p, ids::rvMix, "Level", ids::rvMix), rvDecay (p, ids::rvDecay, "Decay", ids::rvDecay), rvPre (p, ids::rvPre, "Pre-delay", ids::rvPre),
       rvTone (p, ids::rvTone, "Tone", ids::rvTone), rvDuck (p, ids::rvDuck, "Duck", ids::rvDuck), rvLowCut (p, ids::rvLowCut, "Low cut", ids::rvLowCut), rvWidth (p, ids::rvWidth, "Width", ids::rvWidth),
+      rvSize (p, ids::rvSize, "Size", ids::rvSize), rvDiffusion (p, ids::rvDiffusion, "Diffusion", ids::rvDiffusion), rvEarly (p, ids::rvEarly, "Early", ids::rvEarly),
+      rvLowDecay (p, ids::rvLowDecay, "Low decay", ids::rvLowDecay), rvModDepth (p, ids::rvModDepth, "Movement", ids::rvModDepth), rvModRate (p, ids::rvModRate, "Move rate", ids::rvModRate),
+      rvShimmer (p, ids::rvShimmer, "Shimmer", ids::rvShimmer),
       hmVoicing (p, ids::hmVoicing, { "Third up", "Fifth up", "Third + fifth", "Octave up", "Octave down", "Third below", "Choir" }, ids::hmVoicing),
-      hmMix (p, ids::hmMix, "Level", ids::hmMix), hmWidth (p, ids::hmWidth, "Width", ids::hmWidth),
+      hmMix (p, ids::hmMix, "Level", ids::hmMix), hmWidth (p, ids::hmWidth, "Width", ids::hmWidth), hmHumanise (p, ids::hmHumanise, "Humanise", ids::hmHumanise),
       psSemis (p, ids::psSemis, "Pitch", ids::psSemis), psCharacter (p, ids::psCharacter, "Voice size", ids::psCharacter), psMix (p, ids::psMix, "Mix", ids::psMix),
       phAmount (p, ids::phAmount, "Amount", ids::phAmount), phTone (p, ids::phTone, "Width", ids::phTone), phDrive (p, ids::phDrive, "Drive", ids::phDrive),
       lfCrush (p, ids::lfCrush, "Crush", ids::lfCrush), lfWobble (p, ids::lfWobble, "Wobble", ids::lfWobble), lfMix (p, ids::lfMix, "Mix", ids::lfMix),
@@ -48,20 +54,34 @@ FXPage::FXPage (MUProcessor& p, std::function<void (const juce::String&)> status
 
     // the order matches fxModules(): doubler, delay, reverb, harmony, shift, phone, lo-fi, motion, chop
     ui = {
-        { { &dblVoices }, { 190 }, { &dblMix, &dblDetune, &dblTiming, &dblWidth } },
-        { { &dlSync, &dlNote }, { 158, 470 }, { &dlMix, &dlTime, &dlFeedback, &dlTone, &dlWidth, &dlDuck } },
-        { { &rvType, &rvAuto, &rvLength, &rvFit }, { 200, 158, 220, 140 }, { &rvMix, &rvDecay, &rvPre, &rvTone, &rvDuck, &rvLowCut, &rvWidth } },
-        { { &hmVoicing }, { 760 }, { &hmMix, &hmWidth } },
-        { {}, {}, { &psSemis, &psCharacter, &psMix } },
-        { {}, {}, { &phAmount, &phTone, &phDrive } },
-        { {}, {}, { &lfCrush, &lfWobble, &lfMix } },
-        { { &mdType }, { 260 }, { &mdRate, &mdDepth, &mdMix } },
-        { { &chRate }, { 420 }, { &chDepth, &chShape } } };
+        { { &dblVoices }, { 190 }, { &dblMix, &dblDetune, &dblTiming, &dblWidth }, {} },
+        { { &dlSync, &dlNote, &dlPattern, &dlStyle }, { 158, 130, 250, 814 }, { &dlMix, &dlTime, &dlFeedback, &dlTone, &dlWidth, &dlDuck }, { &dlDrive, &dlWobble, &dlLowCut } },
+        { { &rvType, &rvAuto, &rvLength, &rvFreeze, &rvFit }, { 814, 158, 220, 96, 140 }, { &rvMix, &rvDecay, &rvPre, &rvWidth, &rvTone, &rvDuck, &rvLowCut },
+          { &rvSize, &rvDiffusion, &rvEarly, &rvLowDecay, &rvModDepth, &rvModRate, &rvShimmer } },
+        { { &hmVoicing }, { 760 }, { &hmMix, &hmWidth, &hmHumanise }, {} },
+        { {}, {}, { &psSemis, &psCharacter, &psMix }, {} },
+        { {}, {}, { &phAmount, &phTone, &phDrive }, {} },
+        { {}, {}, { &lfCrush, &lfWobble, &lfMix }, {} },
+        { { &mdType }, { 260 }, { &mdRate, &mdDepth, &mdMix }, {} },
+        { { &chRate }, { 420 }, { &chDepth, &chShape }, {} } };
     for (auto& m : ui)
     {
         for (auto* c : m.top) addChildComponent (c);
         for (auto* k : m.knobs) addChildComponent (k);
+        for (auto* k : m.more) addChildComponent (k);
     }
+    // the finer controls of the reverb and the delay stay out of the way until they are asked for
+    showMore = (bool) proc.apvts.state.getProperty ("fxMore", false);
+    styleButton (moreButton, "More", false, "fx.more");
+    moreButton.setClickingTogglesState (true);
+    moreButton.setToggleState (showMore, juce::dontSendNotification);
+    moreButton.onClick = [this]
+    {
+        showMore = moreButton.getToggleState();
+        proc.apvts.state.setProperty ("fxMore", showMore, nullptr);
+        select (selected);
+    };
+    addChildComponent (moreButton);
 
     sounds.names = [] { juce::StringArray n; for (auto& s : soundPresets()) n.add (s.name); return n; };
     sounds.current = [this] { return proc.getSoundName(); };
@@ -73,6 +93,7 @@ FXPage::FXPage (MUProcessor& p, std::function<void (const juce::String&)> status
         const auto list = modulePresetsFor (fxModules()[(size_t) selected].id);
         if (i >= 0 && i < (int) list.size()) setStatus (proc.applyModulePreset (list[(size_t) i]));
     };
+    presets.enableOwnPresets (proc, [this] { return fxModules()[(size_t) selected].id; }, setStatus);
     addAndMakeVisible (sounds); addAndMakeVisible (presets);
     select (juce::jlimit (0, (int) fxModules().size() - 1, (int) proc.apvts.state.getProperty ("fxModule", 0)));
     sendLookAndFeelChange();
@@ -87,7 +108,10 @@ void FXPage::select (int index)
         const bool show = (int) m == selected;
         for (auto* c : ui[m].top) c->setVisible (show);
         for (auto* k : ui[m].knobs) k->setVisible (show);
+        for (auto* k : ui[m].more) k->setVisible (show && showMore);
     }
+    moreButton.setVisible (! ui[(size_t) selected].more.empty());
+    moreButton.setButtonText (showMore ? "Fewer controls" : "More controls");
     presets.refresh();
     resized();
     repaint();
@@ -118,6 +142,13 @@ void FXPage::tick (float dt)
     const bool synced = proc.getParam (ids::dlSync) > 0.5f;
     dlTime.setDimmed (synced);
     dlNote.setAlpha (synced ? 1.0f : 0.35f);
+    const int echoStyle = (int) proc.getParam (ids::dlStyle), echoPattern = (int) proc.getParam (ids::dlPattern);
+    dlDrive.setDimmed (echoStyle != 1 && echoStyle != 2);          // only Tape and Analog saturate
+    dlWidth.setDimmed (echoPattern != 0);                          // only Ping-pong bounces
+    const int space = (int) proc.getParam (ids::rvType);
+    rvShimmer.setDimmed (space != Reverb::Shimmer);
+    rvEarly.setDimmed (space == Reverb::Plate || space == Reverb::Ambient || space == Reverb::Gated);
+    rvModDepth.setDimmed (space == Reverb::Gated); rvModRate.setDimmed (space == Reverb::Gated); rvLowDecay.setDimmed (space == Reverb::Gated);
     repaint (well);
     repaint (rail);
 }
@@ -249,25 +280,51 @@ void FXPage::drawEcho (juce::Graphics& g, juce::Rectangle<float> r)
     // the dry sound, then each echo: left ones above the line, right ones below, shorter as they fade
     g.setColour (text); g.fillRect (xFor (0.0f) - 1.5f, plot.getY() + 4.0f, 3.0f, plot.getHeight() - 8.0f);
     const float open = on ? juce::jlimit (0.3f, 1.0f, juce::Decibels::decibelsToGain (echoDuck)) : 0.35f;
-    float gain = 1.0f;
-    for (int k = 1; (float) k * time <= total && gain > 0.02f; ++k)
+    const int pattern = (int) proc.getParam (ids::dlPattern), style = (int) proc.getParam (ids::dlStyle);
+    auto bar = [&] (float ms, float level, bool up, int repeat)
     {
-        const bool leftSide = (k % 2) == 1;
-        const float x = xFor ((float) k * time), h = (plot.getHeight() * 0.5f - 6.0f) * gain;
-        // with ping-pong down, each echo appears on both sides
-        const float mine = 1.0f, other = 1.0f - width;
-        g.setColour (on ? yellow.withAlpha (0.35f + 0.65f * open) : textMute);
-        g.fillRoundedRectangle (juce::Rectangle<float> (x - 3.0f, leftSide ? midY - h * mine : midY, 6.0f, h * mine), 2.0f);
-        if (other > 0.02f) g.fillRoundedRectangle (juce::Rectangle<float> (x - 3.0f, leftSide ? midY : midY - h * other, 6.0f, h * other), 2.0f);
-        gain *= fb;
-        if (fb < 0.01f) break;
+        const float x = xFor (ms), h = (plot.getHeight() * 0.5f - 6.0f) * level;
+        // Diffused: every repeat is wider than the one before; Tape and Analog: every repeat a little duller
+        const float w = style == 3 ? 6.0f + 7.0f * (float) repeat : 6.0f;
+        const float fade = (style == 1 || style == 2) ? juce::jmax (0.45f, 1.0f - 0.12f * (float) repeat) : 1.0f;
+        g.setColour (on ? yellow.withAlpha ((0.35f + 0.65f * open) * fade * (style == 3 ? 0.75f : 1.0f)) : textMute);
+        g.fillRoundedRectangle (juce::Rectangle<float> (x - w * 0.5f, up ? midY - h : midY, w, h), 2.0f);
+    };
+    if (pattern == 0)
+    {
+        float gain = 1.0f;
+        for (int k = 1; (float) k * time <= total && gain > 0.02f; ++k)
+        {
+            const bool leftSide = (k % 2) == 1;
+            bar ((float) k * time, gain, leftSide, k - 1);
+            if (width < 0.98f) bar ((float) k * time, gain * (1.0f - width), ! leftSide, k - 1);        // with ping-pong down, each echo appears on both sides
+            gain *= fb;
+            if (fb < 0.01f) break;
+        }
+    }
+    else
+    {
+        // Straight: the same echoes on both sides. Dual: the right side keeps its own, shorter time.
+        for (int side = 0; side < 2; ++side)
+        {
+            const float t = (pattern == 2 && side == 1) ? time * 0.75f : time;
+            float gain = 1.0f;
+            for (int k = 1; (float) k * t <= total && gain > 0.02f; ++k)
+            {
+                bar ((float) k * t, gain, side == 0, k - 1);
+                gain *= fb;
+                if (fb < 0.01f) break;
+            }
+        }
     }
 
     const bool synced = proc.getParam (ids::dlSync) > 0.5f;
     const juce::String sum = proc.hasHostTempo() ? "60,000 / " + juce::String (bpm, bpm == std::floor (bpm) ? 0 : 1) + " BPM = " + juce::String (juce::roundToInt (beat)) + " ms a beat"
                                                  : juce::String ("No tempo from the host yet: using 120 BPM");
-    const juce::String timing = synced ? Echo::noteNames()[(int) proc.getParam (ids::dlNote)] + " note = " + juce::String (juce::roundToInt (time)) + " ms between echoes"
-                                       : juce::String (juce::roundToInt (time)) + " ms between echoes (" + juce::String (time / beat, 2) + " of a beat)";
+    const juce::String timing = Echo::styleNames()[style] + ": "
+                              + (synced ? Echo::noteNames()[(int) proc.getParam (ids::dlNote)] + " note = " + juce::String (juce::roundToInt (time)) + " ms between echoes"
+                                        : juce::String (juce::roundToInt (time)) + " ms between echoes (" + juce::String (time / beat, 2) + " of a beat)")
+                              + (pattern == 2 ? ", " + juce::String (juce::roundToInt (time * 0.75f)) + " ms on the right" : juce::String());
     auto top = r.reduced (16.0f, 8.0f).removeFromTop (16.0f);
     g.setFont (body (11.5f)); g.setColour (on ? textDim : textMute);
     g.drawText (timing, top.removeFromRight (top.getWidth() * 0.5f), juce::Justification::centredRight, true);
@@ -288,7 +345,7 @@ void FXPage::drawReverb (juce::Graphics& g, juce::Rectangle<float> r)
     const float pre = proc.getReverb().currentPreDelayMs(), decay = proc.getReverb().currentDecaySeconds() * 1000.0f;
     const int type = (int) proc.getParam (ids::rvType);
     const auto plot = r.reduced (16.0f, 10.0f).withTrimmedTop (22.0f).withTrimmedBottom (16.0f);
-    const float total = juce::jmax (beat * 2.2f, (pre + decay) * 1.12f);
+    const float total = juce::jmax (beat * 2.2f, (pre + decay * juce::jmax (1.0f, proc.getParam (ids::rvLowDecay) * 0.01f)) * 1.12f);
     auto xFor = [&] (float ms) { return plot.getX() + plot.getWidth() * ms / total; };
 
     // the beats of the song
@@ -300,29 +357,55 @@ void FXPage::drawReverb (juce::Graphics& g, juce::Rectangle<float> r)
         g.setColour (textMute);
         if (b > 0) g.drawText ("beat " + juce::String (b + 1), juce::Rectangle<float> (x - 30.0f, plot.getBottom() + 2.0f, 60.0f, 12.0f), juce::Justification::centred);
     }
-    // the dry sound, the gap, the first reflections (strong in a room, absent on a plate), then the tail falling away
+    // The dry sound, the gap, the first reflections of this space, then the tail: mids in yellow, with the lows and
+    // the highs drawn as thinner lines so their own decay times can be seen.
     g.setColour (text); g.fillRect (xFor (0.0f) - 1.5f, plot.getY() + 2.0f, 3.0f, plot.getHeight() - 2.0f);
     const float open = on ? juce::jlimit (0.25f, 1.0f, juce::Decibels::decibelsToGain (duck)) : 0.3f;
-    static const float earlyMs[] = { 7.3f, 13.1f, 21.7f, 33.4f, 47.9f }, earlyGain[] = { 0.50f, 0.42f, 0.34f, 0.26f, 0.19f };
-    const float earlyLevel = type == 0 ? 1.5f : type == 1 ? 0.0f : 0.6f, scale = type == 0 ? 0.55f : type == 2 ? 1.4f : 1.0f;
+    const float size = proc.getParam (ids::rvSize) * 0.01f, earlyAmount = proc.getParam (ids::rvEarly) * 0.02f;
+    const bool frozen = proc.getParam (ids::rvFreeze) > 0.5f;
+    // when the first reflections start and how far apart they are (ms), and how long the tail takes to build
+    static const float firstMs[Reverb::NumTypes] = { 3.1f, 0.0f, 12.7f, 6.1f, 22.3f, 0.0f, 6.1f, 12.7f, 0.0f };
+    static const float lastMs[Reverb::NumTypes]  = { 34.3f, 0.0f, 86.3f, 53.3f, 135.1f, 0.0f, 53.3f, 86.3f, 0.0f };
+    static const float earlyTop[Reverb::NumTypes] = { 0.80f, 0.0f, 0.45f, 0.62f, 0.34f, 0.0f, 0.55f, 0.22f, 0.0f };
+    static const float buildOf[Reverb::NumTypes] = { 0.015f, 0.012f, 0.06f, 0.03f, 0.11f, 0.22f, 0.03f, 0.10f, 0.0f };
     g.setColour (on ? yellow.withAlpha (0.8f * open) : textMute);
-    for (int e = 0; e < 5 && earlyLevel > 0.0f; ++e)
-        g.fillRect (xFor (pre + earlyMs[e] * scale) - 1.0f, plot.getBottom() - plot.getHeight() * juce::jmin (0.95f, earlyGain[e] * earlyLevel), 2.0f, plot.getHeight() * juce::jmin (0.95f, earlyGain[e] * earlyLevel));
-    juce::Path tail;
-    const float x0 = xFor (pre), x1 = xFor (pre + decay);
-    // a hall takes a moment to build; a room and a plate are at full strength at once
-    const float build = type == 2 ? 0.07f : 0.015f;
-    tail.startNewSubPath (x0, plot.getBottom());
-    for (int i = 0; i <= 80; ++i)
+    for (int e = 0; e < 8 && earlyTop[type] > 0.0f; ++e)
     {
-        const float f = (float) i / 80.0f;
-        const float rise = juce::jlimit (0.0f, 1.0f, f / build);
-        tail.lineTo (x0 + (x1 - x0) * f, plot.getBottom() - plot.getHeight() * 0.86f * rise * std::pow (1.0f - f, 2.2f));
+        const float at = firstMs[type] + (lastMs[type] - firstMs[type]) * std::pow ((float) e / 7.0f, 1.25f);
+        const float h = plot.getHeight() * juce::jmin (0.95f, earlyTop[type] * earlyAmount * (1.0f - 0.09f * (float) e));
+        g.fillRect (xFor (pre + at * size) - 1.0f, plot.getBottom() - h, 2.0f, h);
     }
-    tail.lineTo (x1, plot.getBottom());
+    const float x0 = xFor (pre);
+    auto tailPath = [&] (float lengthMs, float height)
+    {
+        juce::Path t;
+        const float x1 = xFor (pre + lengthMs);
+        t.startNewSubPath (x0, plot.getBottom());
+        for (int i = 0; i <= 80; ++i)
+        {
+            const float f = (float) i / 80.0f;
+            const float rise = buildOf[type] > 0.0f ? juce::jlimit (0.0f, 1.0f, f / buildOf[type]) : 1.0f;
+            const float level = frozen ? rise : type == Reverb::Gated ? (0.8f + 0.2f * f) : rise * std::pow (1.0f - f, 2.2f);
+            t.lineTo (x0 + (x1 - x0) * f, plot.getBottom() - plot.getHeight() * height * level);
+        }
+        t.lineTo (x1, plot.getBottom());
+        return t;
+    };
+    const float shownLength = frozen ? total : type == Reverb::Gated ? Reverb::gateSeconds (decay * 0.001f) * 1000.0f : decay;
+    auto tail = tailPath (shownLength, 0.86f);
     tail.closeSubPath();
     g.setColour (yellow.withAlpha (0.20f * open)); g.fillPath (tail);
     g.setColour (on ? yellow.withAlpha (0.35f + 0.65f * open) : textMute); g.strokePath (tail, juce::PathStrokeType (1.6f));
+    if (! frozen && type != Reverb::Gated)
+    {
+        static const float highOf[Reverb::NumTypes] = { 0.80f, 1.0f, 0.85f, 0.95f, 0.70f, 0.90f, 0.60f, 0.90f, 1.0f };
+        const float lows = decay * proc.getParam (ids::rvLowDecay) * 0.01f, highs = decay * (0.25f + 0.55f * proc.getParam (ids::rvTone) * 0.01f) * highOf[type];
+        g.setColour (text.withAlpha (on ? 0.55f : 0.2f)); g.strokePath (tailPath (lows, 0.70f), juce::PathStrokeType (1.0f));
+        g.setColour (textDim.withAlpha (on ? 0.8f : 0.3f)); g.strokePath (tailPath (highs, 0.55f), juce::PathStrokeType (1.0f));
+        g.setFont (body (10.0f));
+        g.setColour (text.withAlpha (0.6f)); g.drawText ("lows " + juce::String (lows * 0.001f, 1) + " s", juce::Rectangle<float> (plot.getRight() - 190.0f, plot.getY() + 16.0f, 90.0f, 12.0f), juce::Justification::centredRight);
+        g.setColour (textDim); g.drawText ("highs " + juce::String (highs * 0.001f, 1) + " s", juce::Rectangle<float> (plot.getRight() - 92.0f, plot.getY() + 16.0f, 92.0f, 12.0f), juce::Justification::centredRight);
+    }
 
     // the maths, spelled out
     const bool timed = proc.getParam (ids::rvAuto) > 0.5f;
@@ -612,22 +695,30 @@ void FXPage::resized()
     titleArea = head;
     p.removeFromBottom (14);
     const auto& m = ui[(size_t) selected];
-    auto knobs = p.removeFromBottom (96);
+    if (! m.more.empty()) { head.removeFromRight (4); moreButton.setBounds (head.removeFromRight (118).withSizeKeepingCentre (118, 26)); head.removeFromRight (12); titleArea = head; }
+    auto place = [] (juce::Rectangle<int> area, const std::vector<Knob*>& list)
+    {
+        const int count = (int) list.size();
+        const int cell = juce::jmin (118, (area.getWidth() - (count - 1) * 8) / juce::jmax (1, count));
+        auto row = area.withSizeKeepingCentre (cell * count + 8 * (count - 1), area.getHeight());
+        for (auto* k : list) { k->setBounds (row.removeFromLeft (cell)); row.removeFromLeft (8); }
+    };
+    if (showMore && ! m.more.empty()) { place (p.removeFromBottom (96), m.more); p.removeFromBottom (6); }
+    place (p.removeFromBottom (96), m.knobs);
     p.removeFromBottom (10);
     if (! m.top.empty())
     {
+        // left to right, starting a second row when the next one does not fit
         auto top = p.removeFromTop (28);
         for (size_t i = 0; i < m.top.size(); ++i)
         {
-            m.top[i]->setBounds (top.removeFromLeft (juce::jmin (m.topWidths[i], top.getWidth())));
+            const int w = juce::jmin (m.topWidths[i], p.getWidth());
+            if (w > top.getWidth()) { p.removeFromTop (8); top = p.removeFromTop (28); }
+            m.top[i]->setBounds (top.removeFromLeft (w));
             top.removeFromLeft (12);
         }
         p.removeFromTop (10);
     }
     well = p;
-    const int count = (int) m.knobs.size();
-    const int cell = juce::jmin (118, (knobs.getWidth() - (count - 1) * 8) / juce::jmax (1, count));
-    auto row = knobs.withSizeKeepingCentre (cell * count + 8 * (count - 1), knobs.getHeight());
-    for (auto* k : m.knobs) { k->setBounds (row.removeFromLeft (cell)); row.removeFromLeft (8); }
 }
 }

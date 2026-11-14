@@ -79,6 +79,23 @@ private:
     std::unique_ptr<ParamToggle> power;
 };
 
+// A choice with too many options for a row of segments: a button that shows the current one and opens the list.
+class Choice : public juce::Component, private juce::Timer
+{
+public:
+    Choice (MUProcessor&, const juce::String& paramId, const juce::StringArray& items, const juce::String& helpKey = {});
+    void resized() override { button.setBounds (getLocalBounds()); }
+
+private:
+    void timerCallback() override;
+    void showMenu();
+    MUProcessor& proc;
+    juce::String id;
+    juce::StringArray items;
+    juce::TextButton button;
+    int shown = -1;
+};
+
 class IconButton : public juce::Button
 {
 public:
@@ -99,6 +116,9 @@ public:
     std::function<juce::StringArray()> names;      // the list, in order
     std::function<juce::String()> current;         // the one that is loaded; empty, or a name outside the list, is fine
     std::function<void (int)> choose;
+    // Turns on "My presets" for this strip: the person's own saved presets for one tool (or for the whole chain)
+    // are listed after the built-in ones, with Save as, Rename, Delete, Import and Export under them.
+    void enableOwnPresets (MUProcessor& p, std::function<juce::String()> scopeOf, std::function<void (const juce::String&)> say);
     void refresh();                                // keeps the label in step; call it from the page's tick
     void resized() override;
 
@@ -108,7 +128,20 @@ private:
     juce::TextButton previous, name, next;
     juce::String shown, empty;
     bool first = true;
+    MUProcessor* proc = nullptr;
+    std::function<juce::String()> scope;
+    std::function<void (const juce::String&)> status;
 };
+
+// The menu entries and prompts for someone's own presets, shared by the tool strips and the header's Presets menu.
+namespace ownpresets
+{
+    enum Item { SaveAs = 9001, Save, Rename, Delete, Import, Export, ShowFolder, FirstOwn = 10000 };
+    // adds "My presets" and the actions to a menu; returns the names in the order they were added
+    juce::StringArray addToMenu (juce::PopupMenu& menu, MUProcessor& proc, const juce::String& scope);
+    // carries out a menu choice (prompts for a name or a file where one is needed); returns false if it was not one of these
+    bool handle (int result, juce::Component& near, MUProcessor& proc, const juce::String& scope, const juce::StringArray& own, std::function<void (const juce::String&)> say);
+}
 
 // Lays components out left to right in equal cells.
 void layoutRow (juce::Rectangle<int> area, std::initializer_list<juce::Component*> items, int gap = 6);

@@ -6,7 +6,7 @@
 
 namespace mu
 {
-enum class CompStyle : int { Clean = 0, Punch, Smooth, Glue };
+enum class CompStyle : int { Clean = 0, Punch, Smooth, Glue, Vocal };
 
 struct CompressorSettings
 {
@@ -23,12 +23,17 @@ struct CompressorSettings
     float sidechainHpHz = 20.0f; // <= 25 Hz means off
 };
 
-// Feed-forward stereo-linked compressor with four behaviours:
+// Feed-forward stereo-linked compressor with five behaviours:
 //   Clean  - hybrid peak/RMS detector, transparent (VCA-like)
-//   Punch  - peak detector, lets the release snap back, adds a little harmonic bite (FET-like)
-//   Smooth - RMS detector with a two-stage, programme-dependent release (opto-like levelling)
+//   Punch  - peak detector, fast attack, lets the release snap back (FET-like timing, no added distortion)
+//   Smooth - RMS detector with a programme-dependent release (opto-like levelling)
 //   Glue   - RMS detector, slow programme-dependent release, made for buses and the master
-// The detector can be high-passed so kicks and 808s do not make the whole signal pump.
+//   Vocal  - two compressors in one, the way a vocal is usually treated: a slow leveller that evens out the
+//            phrases, followed by a fast catcher that only touches the peaks the leveller lets through. Neither
+//            has to work hard, so the voice stays open instead of being flattened by one heavy compressor.
+// The level is measured and the gain is smoothed in decibels. A short hold on the peak reading keeps the gain
+// still for the length of one cycle of a low note; without it the gain rides every cycle and that is heard as
+// thickening in the low mids. The detector can be high-passed so kicks, 808s and plosives do not drive it.
 class Compressor
 {
 public:
@@ -38,6 +43,8 @@ public:
     void reset();
     void setSettings (const CompressorSettings& s) noexcept { target = s; }
     void process (juce::AudioBuffer<float>& buffer) noexcept;
+
+    static juce::StringArray styleNames() { return { "Clean", "Punch", "Smooth", "Glue", "Vocal" }; }
 
     float getGainReductionDb() const noexcept { return grMeter.load (std::memory_order_relaxed); }
     float getInputDb() const noexcept { return inMeter.load (std::memory_order_relaxed); }
@@ -53,8 +60,12 @@ private:
     int channels = 2;
     CompressorSettings target, live;
     juce::AudioBuffer<float> dry;
-    float envelope = 0.0f;        // detector level (linear)
-    float gainSmooth = 0.0f;      // smoothed gain reduction (dB, <= 0)
+    float held = 0.0f;            // peak reading with a short hold (linear)
+    int holdLeft = 0, holdSamples = 384;
+    float catchHeld = 0.0f; int catchHoldLeft = 0;
+    float levelGain = 0.0f;       // the main compressor's gain (dB, <= 0)
+    float catchGain = 0.0f;       // Vocal style: the peak catcher's gain (dB, <= 0)
+    float gainSmooth = 0.0f;      // the two together: what is applied and metered (dB, <= 0)
     float slowGr = 0.0f;          // long average of the reduction, drives programme-dependent release
     float rmsState = 0.0f;
     float adaptiveRelCoef = 0.0f;

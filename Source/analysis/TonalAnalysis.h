@@ -29,7 +29,9 @@ BandArray analysisBandCentres();
 BandArray roleTargetCurve (Role role);
 
 // Compares a track's long-term spectrum with the usual shape for its role and returns the clear deviations.
-std::vector<Suggestion> analyseTone (const BandArray& measuredDb, Role role);
+// swingDb (optional, from a listening pass): how much each band's share of the sound comes and goes. It decides
+// whether a cut should be fixed (the build-up is always there) or dynamic (it only appears on some notes or words).
+std::vector<Suggestion> analyseTone (const BandArray& measuredDb, Role role, const BandArray* swingDb = nullptr);
 
 // Describes a masking clash in words for the track that is asking.
 Suggestion describeClash (const MaskingClash& clash, Role winnerRole, Role loserRole, bool askerIsLoser);

@@ -28,6 +28,7 @@ void Compressor::prepare (double sampleRate, int maxBlockSize, int numChannels)
     makeupSmooth.reset (fs, 0.05);
     mixSmooth.reset (fs, 0.05);
     histInterval = juce::jmax (1, (int) (fs * 0.01));
+    holdSamples = juce::jmax (1, (int) (fs * 0.008));        // one half-cycle of anything down to about 60 Hz
     levelHist.fill (-100.0f); grHist.fill (0.0f);
     scHz = -1.0f;
     reset();
@@ -35,7 +36,8 @@ void Compressor::prepare (double sampleRate, int maxBlockSize, int numChannels)
 
 void Compressor::reset()
 {
-    envelope = 0.0f; gainSmooth = 0.0f; slowGr = 0.0f; rmsState = 0.0f;
+    held = 0.0f; holdLeft = 0; catchHeld = 0.0f; catchHoldLeft = 0;
+    levelGain = 0.0f; catchGain = 0.0f; gainSmooth = 0.0f; slowGr = 0.0f; rmsState = 0.0f;
     for (auto& f : scFilters) f.reset();
     grMeter.store (0.0f);
 }
@@ -66,7 +68,7 @@ void Compressor::process (juce::AudioBuffer<float>& buffer) noexcept
 
     if (! live.enabled)
     {
-        gainSmooth = 0.0f; slowGr = 0.0f;
+        gainSmooth = 0.0f; levelGain = 0.0f; catchGain = 0.0f; slowGr = 0.0f;
         grMeter.store (0.0f, std::memory_order_relaxed);
         outMeter.store (inMeter.load (std::memory_order_relaxed), std::memory_order_relaxed);
         pushHistory (inPeak, 0.0f, n);
@@ -83,69 +85,87 @@ void Compressor::process (juce::AudioBuffer<float>& buffer) noexcept
     }
 
     const auto style = live.style;
+    const bool vocal = style == CompStyle::Vocal;
     const bool peakDetect = style == CompStyle::Punch;
-    const bool rmsDetect = style == CompStyle::Smooth || style == CompStyle::Glue;
+    const bool rmsDetect = style == CompStyle::Smooth || style == CompStyle::Glue || vocal;
     const float attMs = juce::jmax (0.05f, live.attackMs) * (style == CompStyle::Punch ? 0.6f : 1.0f);
     const float attCoef = std::exp (-1.0f / (float) (fs * 0.001 * attMs));
     const float baseRel = juce::jmax (1.0f, live.releaseMs);
-    const float rmsMs = style == CompStyle::Glue ? 30.0f : style == CompStyle::Smooth ? 15.0f : 5.0f;
+    const float rmsMs = style == CompStyle::Glue ? 30.0f : (style == CompStyle::Smooth || vocal) ? 15.0f : 5.0f;
     const float rmsCoef = std::exp (-1.0f / (float) (fs * 0.001 * rmsMs));
     const float slowCoef = std::exp (-1.0f / (float) (fs * 0.6));
+    const float dropCoef = 1.0f - std::exp (-1.0f / (float) (fs * 0.0015));
     const float makeup = live.autoMakeup ? autoMakeupDb (live.thresholdDb, live.ratio, live.kneeDb) : live.makeupDb;
-    const float knee = style == CompStyle::Smooth ? juce::jmax (live.kneeDb, 10.0f) : live.kneeDb;
+    const float knee = (style == CompStyle::Smooth || vocal) ? juce::jmax (live.kneeDb, 8.0f) : live.kneeDb;
     makeupSmooth.setTargetValue (juce::Decibels::decibelsToGain (makeup));
     mixSmooth.setTargetValue (juce::jlimit (0.0f, 1.0f, live.mix));
 
-    const bool adaptiveRelease = style == CompStyle::Smooth || style == CompStyle::Glue;
+    // Programme-dependent release: the longer it has been compressing, the slower it lets go, so single peaks
+    // recover fast while sustained loud passages stay smooth. Punch keeps its fixed, snappy release.
+    const bool adaptiveRelease = style != CompStyle::Punch;
     const float fixedRelCoef = std::exp (-1.0f / (float) (fs * 0.001 * baseRel * (style == CompStyle::Punch ? 0.7f : 1.0f)));
     if (adaptiveRelCoef <= 0.0f) adaptiveRelCoef = fixedRelCoef;
+
+    // Vocal style, second stage: catches what is still more than 10 dB above the threshold after levelling
+    const float catchThr = live.thresholdDb + 10.0f;
+    const float catchAtt = std::exp (-1.0f / (float) (fs * 0.0003));
+    const float catchRel = std::exp (-1.0f / (float) (fs * 0.050));
 
     float minGain = 0.0f;
     for (int i = 0; i < n; ++i)
     {
-        float peak = 0.0f, sq = 0.0f;
+        float peak = 0.0f, sq = 0.0f, rawPeak = 0.0f;
         for (int c = 0; c < ch; ++c)
         {
             float v = buffer.getSample (c, i);
+            rawPeak = juce::jmax (rawPeak, std::abs (v));
             if (useSc) v = scFilters[(size_t) c].process (v, scCoeffs);
             peak = juce::jmax (peak, std::abs (v));
             sq += v * v;
         }
+        // peak reading that stays put for one cycle of the lowest notes, then falls quickly to the sound
+        if (peak >= held) { held = peak; holdLeft = holdSamples; }
+        else if (holdLeft > 0) --holdLeft;
+        else held += (peak - held) * dropCoef;
         rmsState = rmsCoef * rmsState + (1.0f - rmsCoef) * (sq / (float) ch);
-        const float rms = std::sqrt (rmsState);
-        const float det = peakDetect ? peak : rmsDetect ? rms * 1.4142f : juce::jmax (peak, rms);
+        const float rms = std::sqrt (rmsState) * 1.4142f;
+        const float det = peakDetect ? held : rmsDetect ? rms : juce::jmax (held, rms);
 
-        // Programme-dependent release: the longer it has been compressing, the slower it lets go,
-        // so single peaks recover fast while sustained loud passages stay smooth.
-        float relCoef = fixedRelCoef;
         if (adaptiveRelease && (i & 15) == 0)
         {
-            const float relMs = style == CompStyle::Smooth ? baseRel * (0.5f + 3.5f * juce::jlimit (0.0f, 1.0f, -slowGr / 6.0f))
-                                                           : baseRel * (1.0f + 3.0f * juce::jlimit (0.0f, 1.0f, -slowGr / 4.0f));
+            const float deep = juce::jlimit (0.0f, 1.0f, -slowGr / (style == CompStyle::Glue ? 4.0f : 6.0f));
+            const float relMs = style == CompStyle::Glue  ? baseRel * (1.0f + 3.0f * deep)
+                              : style == CompStyle::Clean ? baseRel * (0.8f + 1.7f * deep)
+                                                          : baseRel * (0.5f + 3.5f * deep);
             adaptiveRelCoef = std::exp (-1.0f / (float) (fs * 0.001 * relMs));
         }
-        if (adaptiveRelease) relCoef = adaptiveRelCoef;
+        const float relCoef = adaptiveRelease ? adaptiveRelCoef : fixedRelCoef;
 
-        envelope = det > envelope ? attCoef * envelope + (1.0f - attCoef) * det
-                                  : relCoef * envelope + (1.0f - relCoef) * det;
-        const float levelDb = juce::Decibels::gainToDecibels (envelope, -100.0f);
+        // static curve on the level in dB, then attack and release on the gain itself
+        const float levelDb = juce::Decibels::gainToDecibels (det, -100.0f);
         const float g = computeGainDb (levelDb, live.thresholdDb, live.ratio, knee);
-        gainSmooth += (g - gainSmooth) * 0.2f;
-        slowGr = slowCoef * slowGr + (1.0f - slowCoef) * gainSmooth;
+        levelGain = g < levelGain ? attCoef * levelGain + (1.0f - attCoef) * g
+                                  : relCoef * levelGain + (1.0f - relCoef) * g;
+        if (vocal)
+        {
+            // The catcher hears the voice as the leveller leaves it, and hears all of it: the leveller ignores
+            // the lows so a plosive does not duck the whole word, but a peak is a peak whatever it is made of.
+            const float after = rawPeak * juce::Decibels::decibelsToGain (levelGain);
+            if (after >= catchHeld) { catchHeld = after; catchHoldLeft = holdSamples; }
+            else if (catchHoldLeft > 0) --catchHoldLeft;
+            else catchHeld += (after - catchHeld) * dropCoef;
+            const float gc = juce::jmax (-9.0f, computeGainDb (juce::Decibels::gainToDecibels (catchHeld, -100.0f), catchThr, 6.0f, 3.0f));
+            catchGain = gc < catchGain ? catchAtt * catchGain + (1.0f - catchAtt) * gc
+                                       : catchRel * catchGain + (1.0f - catchRel) * gc;
+        }
+        else catchGain = 0.0f;
+        gainSmooth = levelGain + catchGain;
+        slowGr = slowCoef * slowGr + (1.0f - slowCoef) * levelGain;
         minGain = juce::jmin (minGain, gainSmooth);
         const float lin = juce::Decibels::decibelsToGain (gainSmooth) * makeupSmooth.getNextValue();
         const float mix = mixSmooth.getNextValue();
         for (int c = 0; c < ch; ++c)
-        {
-            float wet = buffer.getSample (c, i) * lin;
-            if (style == CompStyle::Punch)
-            {
-                // A touch of odd-harmonic bite that grows with how hard it is working.
-                const float amt = juce::jlimit (0.0f, 0.25f, -gainSmooth * 0.02f);
-                wet = wet * (1.0f - amt) + amt * std::tanh (wet * 1.6f) / 1.6f * 1.25f;
-            }
-            buffer.setSample (c, i, wet * mix + dry.getSample (c, i) * (1.0f - mix));
-        }
+            buffer.setSample (c, i, buffer.getSample (c, i) * lin * mix + dry.getSample (c, i) * (1.0f - mix));
     }
     grMeter.store (minGain, std::memory_order_relaxed);
     float outPeak = 0.0f;

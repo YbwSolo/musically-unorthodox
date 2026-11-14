@@ -86,7 +86,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> keyAtt;
     Segmented scale;
     juce::TextButton findKey, sendKey;
-    Knob speed, hold, vibrato, amount, formant;
+    Knob speed, hold, vibrato, amount, formant, flex, humanise, slides;
 
     // graph view
     TuneGraphView graph;

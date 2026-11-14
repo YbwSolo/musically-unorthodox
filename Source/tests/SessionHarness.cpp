@@ -5,6 +5,7 @@
 #include <juce_events/juce_events.h>
 #include <cstdio>
 #include "PluginProcessor.h"
+#include "state/UserPresets.h"
 #include "ai/TutorKnowledge.h"
 #include "SyntheticStems.h"
 #include <unistd.h>
@@ -132,7 +133,7 @@ int main()
 
         const auto msg = vocal->applyChainPreset (findChainPreset ("Rap vocal - punchy"));
         check (msg.contains ("fitted"), "Vocal chain fits its thresholds to the measured level", msg);
-        check (vocal->getParam (ids::compEnabled) > 0.5f && vocal->getParam (ids::dsOn) > 0.5f && vocal->getParam (ids::riderOn) > 0.5f && (int) vocal->getParam (ids::compStyle) == 1, "Vocal chain switches its modules on");
+        check (vocal->getParam (ids::compEnabled) > 0.5f && vocal->getParam (ids::dsOn) > 0.5f && vocal->getParam (ids::riderOn) > 0.5f && (int) vocal->getParam (ids::compStyle) == 4, "Vocal chain switches its modules on");
         check (vocal->getCurrentPresetName() == "Rap vocal - punchy", "Current preset is remembered");
         beat->applyChainPreset (findChainPreset ("Beat - make room for the vocal"));
         check (beat->getParam (ids::vsEnabled) > 0.5f, "Beat chain turns Vocal space on");
@@ -772,7 +773,7 @@ int main()
                "Every tool preset loads and switches its tool on", juce::String (count) + " presets" + (failed.isEmpty() ? juce::String() : ", failed: " + failed));
         const auto tunePresets = modulePresetsFor ("tune");
         int robot = -1, natural = -1;
-        for (int i : tunePresets) { if (modulePresets()[(size_t) i].name == "Robot") robot = i; if (modulePresets()[(size_t) i].name == "Natural") natural = i; }
+        for (int i : tunePresets) { if (modulePresets()[(size_t) i].name == "Robotic vocal") robot = i; if (modulePresets()[(size_t) i].name == "Natural vocal") natural = i; }
         vocal->setParam (ids::tuneScale, 2.0f);
         vocal->applyModulePreset (robot);
         const bool oneNote = (int) vocal->getParam (ids::tuneScale) == Tuner::kCustomScale && (int) vocal->getParam (ids::tuneNotes) == (1 << 7);
@@ -916,6 +917,131 @@ int main()
         runSeconds (0.4);
         ed.reset();
         check (true, "Editor opens and closes on every tab");
+    }
+
+    // ---- build 12: the balance trim sits after the processing, and presets of your own
+    {
+        auto near = [] (float a, float b, float tolerance) { return std::abs (a - b) <= tolerance; };
+        vocal->setParam (ids::role, (float) Role::Vocal);
+        vocal->applyChainPreset (findChainPreset ("Clean slate"));
+        vocal->setTrimDb (0.0f); vocal->setParam (ids::outputGain, 0.0f);
+        remeasure(); runSeconds (5.0);
+        vocal->applyChainPreset (findChainPreset ("Rap vocal - punchy"));
+        runSeconds (1.0); remeasure(); runSeconds (5.0);
+        const float before = vocal->getLoudness().getShortTerm();
+        const float thresholdWas = vocal->getParam (ids::compThreshold);
+        vocal->setTrimDb (8.0f);
+        runSeconds (1.0); remeasure(); runSeconds (5.0);
+        const float after = vocal->getLoudness().getShortTerm();
+        check (std::abs ((after - before) - 8.0f) < 1.0f && std::abs (vocal->getParam (ids::compThreshold) - thresholdWas) < 0.01f && ! vocal->isTrimBeforeChain(),
+               "Balancing a track up by 8 dB makes it 8 dB louder and leaves its compressor working exactly as it was", juce::String (after - before, 2) + " dB louder");
+
+        // a song saved by an earlier build had the trim in front: it opens sounding the same, and moves over when next balanced
+        // (a saved state is an 8-byte header, then the settings as XML text; take the new marker out of it)
+        juce::MemoryBlock saved; vocal->getStateInformation (saved);
+        auto text = juce::String::fromUTF8 ((const char*) saved.getData() + 8, (int) saved.getSize() - 8);
+        std::unique_ptr<juce::XmlElement> xml (juce::XmlDocument::parse (text));
+        xml->removeAttribute ("trimAfter");
+        const auto stripped = xml->toString (juce::XmlElement::TextFormat().singleLine());
+        juce::MemoryOutputStream rebuilt;
+        rebuilt.writeInt (0x21324356); rebuilt.writeInt ((int) stripped.getNumBytesAsUTF8()); rebuilt.write (stripped.toRawUTF8(), stripped.getNumBytesAsUTF8()); rebuilt.writeByte (0);
+        vocal->setStateInformation (rebuilt.getData(), (int) rebuilt.getDataSize());
+        runSeconds (1.0); remeasure(); runSeconds (5.0);
+        const bool wasInFront = vocal->isTrimBeforeChain();
+        const float oldWay = vocal->getLoudness().getShortTerm();
+        const float oldThreshold = vocal->getParam (ids::compThreshold);
+        vocal->setTrimDb (8.0f);                                    // the balance touches it: same trim, now behind the processing
+        runSeconds (1.0); remeasure(); runSeconds (5.0);
+        const float newWay = vocal->getLoudness().getShortTerm();
+        check (wasInFront && ! vocal->isTrimBeforeChain() && std::abs (newWay - oldWay) < 1.5f && std::abs (vocal->getParam (ids::compThreshold) - (oldThreshold - 8.0f)) < 0.01f,
+               "A song from an earlier build keeps its trim in front until it is next balanced, then moves it behind without changing the sound",
+               juce::String (newWay - oldWay, 2) + " dB difference; threshold " + juce::String (oldThreshold, 1) + " -> " + juce::String (vocal->getParam (ids::compThreshold), 1) + " dB");
+        vocal->setTrimDb (0.0f);
+
+        // Analyse listens first
+        vocal->startListening();
+        runSeconds (4.0);
+        juce::String said;
+        vocal->analyse (said);
+        check (said.startsWith ("Listened to") && ! vocal->isListening(), "Analyse reports how much of the track it listened to before deciding", said.substring (0, 80));
+
+        // ---- presets of your own
+        auto presetRoot = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("mu-preset-test");
+        presetRoot.deleteRecursively();
+        UserPresets::setFolderForTesting (presetRoot);
+        remeasure(); runSeconds (4.0);
+        vocal->setParam (ids::compRatio, 6.5f); vocal->setParam (ids::rvOn, 1.0f); vocal->setParam (ids::rvType, (float) Reverb::Chamber); vocal->setParam (ids::rvSize, 140.0f);
+        bool ok = false;
+        const auto savedAs = vocal->saveUserPreset ("chain", "  My rap: chain?  ", false, &ok);
+        UserPreset onDisk;
+        const bool found = UserPresets::find ("chain", "My rap chain", onDisk);
+        const auto json = juce::JSON::parse (onDisk.file.loadFileAsString());
+        check (ok && found && onDisk.file.isAChildOf (presetRoot) && (int) json.getProperty ("formatVersion", 0) == UserPresets::kFormatVersion && json.getProperty ("format", {}).toString() == UserPresets::kFormatName
+               && onDisk.values.size() > 100 && vocal->getCurrentPresetName() == "My rap chain" && ! vocal->presetEdited ("chain"),
+               "The whole chain saves as a preset of your own: a versioned file in the presets folder, with a name safe for any disk", savedAs + " (" + juce::String ((int) onDisk.values.size()) + " settings)");
+        bool roleKept = true; for (auto& v : onDisk.values) roleKept = roleKept && v.id != ids::role && v.id != ids::trim && v.id != ids::bypass && v.id != ids::tuneKey;
+        check (roleKept, "A chain preset does not hold the track's role, its balance, its bypass or the song's key");
+        vocal->setParam (ids::compRatio, 2.0f);
+        check (vocal->presetEdited ("chain"), "Moving a control marks the loaded preset as changed");
+        vocal->setParam (ids::rvType, 0.0f); vocal->setParam (ids::rvSize, 100.0f);
+        const auto loaded = vocal->loadUserPreset ("chain", "My rap chain");
+        check (near (vocal->getParam (ids::compRatio), 6.5f, 0.01f) && (int) vocal->getParam (ids::rvType) == (int) Reverb::Chamber && near (vocal->getParam (ids::rvSize), 140.0f, 0.1f) && ! vocal->presetEdited ("chain"),
+               "Loading it puts every control back", loaded);
+        check (! (vocal->saveUserPreset ("chain", "My rap chain", false, &ok), ok) && ! (vocal->saveUserPreset ("chain", "Rap vocal - punchy", false, &ok), ok) && ! (vocal->saveUserPreset ("chain", " .. ", false, &ok), ok),
+               "Save as refuses a name that is taken, the name of a built-in preset, and an empty name");
+        // on a quieter track the thresholds follow
+        const float thrSaved = vocal->getParam (ids::compThreshold);
+        const float gainWas = vocalGain; vocalGain *= 0.5f;
+        runSeconds (1.0); remeasure(); runSeconds (5.0);
+        const auto quieter = vocal->loadUserPreset ("chain", "My rap chain");
+        check (near (vocal->getParam (ids::compThreshold), thrSaved - 6.0f, 1.5f) && quieter.contains ("quieter"), "Loaded on a track 6 dB quieter, the chain's thresholds move down with it", quieter);
+        vocalGain = gainWas;
+
+        // one tool: only that tool's controls
+        vocal->setParam (ids::rvMix, 33.0f); vocal->setParam (ids::rvShimmer, 77.0f); vocal->setParam (ids::compRatio, 3.0f);
+        vocal->saveUserPreset ("reverb", "Big chamber", false, &ok);
+        vocal->setParam (ids::rvMix, 5.0f); vocal->setParam (ids::rvShimmer, 10.0f); vocal->setParam (ids::compRatio, 9.0f);
+        vocal->loadUserPreset ("reverb", "Big chamber");
+        check (ok && near (vocal->getParam (ids::rvMix), 33.0f, 0.1f) && near (vocal->getParam (ids::rvShimmer), 77.0f, 0.1f) && near (vocal->getParam (ids::compRatio), 9.0f, 0.01f)
+               && vocal->getModulePresetName ("reverb") == "Big chamber" && UserPresets::list ("reverb").size() == 1 && UserPresets::list ("chain").size() == 1,
+               "A tool's preset holds that tool's controls and nothing else");
+
+        // rename, export, delete, import
+        const auto renamed = vocal->renameUserPreset ("reverb", "Big chamber", "Huge chamber");
+        UserPreset huge; const bool haveHuge = UserPresets::find ("reverb", "Huge chamber", huge);
+        check (haveHuge && UserPresets::list ("reverb").size() == 1 && vocal->getModulePresetName ("reverb") == "Huge chamber", "A preset can be renamed", renamed);
+        const auto exported = presetRoot.getChildFile ("to-send").getChildFile ("for a friend.mupreset");
+        exported.getParentDirectory().createDirectory();
+        check (haveHuge && UserPresets::exportTo (huge, exported).wasOk() && exported.existsAsFile(), "A preset can be exported to a file");
+        const auto deleted = vocal->deleteUserPreset ("reverb", "Huge chamber");
+        check (UserPresets::list ("reverb").empty() && vocal->getModulePresetName ("reverb").isEmpty() && near (vocal->getParam (ids::rvMix), 33.0f, 0.1f), "Deleting a preset removes the file and leaves the settings alone", deleted);
+        vocal->setParam (ids::rvMix, 1.0f);
+        const auto imported = vocal->importUserPreset (exported, true);
+        check (UserPresets::list ("reverb").size() == 1 && near (vocal->getParam (ids::rvMix), 33.0f, 0.1f), "An exported file imports on another setup and loads", imported);
+
+        // files that should not be trusted
+        auto bad = [&] (const juce::String& name, const juce::String& text) { const auto f = presetRoot.getChildFile ("to-send").getChildFile (name); f.replaceWithText (text); return vocal->importUserPreset (f, true); };
+        const float mixBefore = vocal->getParam (ids::rvMix), ratioBefore = vocal->getParam (ids::compRatio);
+        const auto notJson = bad ("a.mupreset", "this is not a preset");
+        const auto wrongKind = bad ("b.mupreset", "{ \"format\": \"something-else\", \"formatVersion\": 1, \"scope\": \"reverb\", \"name\": \"x\", \"values\": { \"rvMix\": 90 } }");
+        const auto tooNew = bad ("c.mupreset", "{ \"format\": \"musically-unorthodox-preset\", \"formatVersion\": 99, \"scope\": \"reverb\", \"name\": \"x\", \"values\": { \"rvMix\": 90 } }");
+        const auto noValues = bad ("d.mupreset", "{ \"format\": \"musically-unorthodox-preset\", \"formatVersion\": 1, \"scope\": \"reverb\", \"name\": \"x\", \"values\": { } }");
+        const auto noTool = bad ("e.mupreset", "{ \"format\": \"musically-unorthodox-preset\", \"formatVersion\": 1, \"scope\": \"teleporter\", \"name\": \"x\", \"values\": { \"rvMix\": 90 } }");
+        check (near (vocal->getParam (ids::rvMix), mixBefore, 0.01f) && notJson.contains ("not a preset") && wrongKind.contains ("not a Musically Unorthodox preset") && tooNew.contains ("newer version")
+               && noValues.contains ("no settings") && noTool.contains ("does not have") && UserPresets::list ("reverb").size() == 1,
+               "Files that are not presets, are damaged, or come from a newer version are refused with a reason and change nothing", tooNew);
+        // a tool's preset cannot reach outside its tool, and wild values are brought back into range
+        const auto sneaky = bad ("f.mupreset", "{ \"format\": \"musically-unorthodox-preset\", \"formatVersion\": 1, \"scope\": \"reverb\", \"name\": \"Sneaky\", \"values\": "
+                                               "{ \"rvMix\": 5000, \"compRatio\": 20, \"role\": 3, \"notAControl\": 1 } }");
+        check (near (vocal->getParam (ids::rvMix), 100.0f, 0.01f) && near (vocal->getParam (ids::compRatio), ratioBefore, 0.01f) && (int) vocal->getParam (ids::role) == (int) Role::Vocal && sneaky.contains ("left out"),
+               "A reverb preset can only move reverb controls, and a value outside a control's range is brought inside it", sneaky);
+        // nothing half-written is ever left behind
+        int strays = 0; for (auto& f : presetRoot.findChildFiles (juce::File::findFiles, true)) if (! f.hasFileExtension (".mupreset")) ++strays;
+        check (strays == 0, "Saving leaves no temporary files behind");
+        UserPresets::setFolderForTesting ({});
+        presetRoot.deleteRecursively();
+        vocal->applyChainPreset (findChainPreset ("Clean slate"));
+        vocal->setParam (ids::role, (float) Role::Auto);
     }
 
     // ---- tear down in a mixed order to exercise slot reuse

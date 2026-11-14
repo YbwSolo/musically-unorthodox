@@ -9,11 +9,12 @@ MUEditor::MUEditor (MUProcessor& p)
       header (p), rail (p), info (p),
       mixPage (p, status), eqPage (p, status), dynamicsPage (p, status), tonePage (p), tunePage (p, status), fxPage (p, status), masterPage (p, status),
       learnPage (p, status, [this] (int t) { showTab (t); }),
+      brainPage (p, status),
       settings (p)
 {
     setLookAndFeel (&lnf);
     addAndMakeVisible (root);
-    for (auto* c : std::initializer_list<juce::Component*> { &mixPage, &eqPage, &dynamicsPage, &tonePage, &tunePage, &fxPage, &masterPage, &learnPage }) root.addChildComponent (c);
+    for (auto* c : std::initializer_list<juce::Component*> { &mixPage, &eqPage, &dynamicsPage, &tonePage, &tunePage, &fxPage, &masterPage, &learnPage, &brainPage }) root.addChildComponent (c);
     root.addAndMakeVisible (header);
     root.addAndMakeVisible (rail);
     root.addAndMakeVisible (info);
@@ -74,6 +75,7 @@ juce::Component* MUEditor::page (int t)
         case HeaderBar::Tune:     return &tunePage;
         case HeaderBar::FX:       return &fxPage;
         case HeaderBar::Master:   return &masterPage;
+        case HeaderBar::Brain:    return &brainPage;
         default:                  return &learnPage;
     }
 }
@@ -116,6 +118,7 @@ void MUEditor::timerCallback()
         case HeaderBar::Tune:     tunePage.tick (dt); break;
         case HeaderBar::FX:       fxPage.tick (dt); break;
         case HeaderBar::Master:   masterPage.tick (dt); break;
+        case HeaderBar::Brain:    brainPage.tick (dt); break;
         default:                  learnPage.tick (dt); break;
     }
     if (settings.isVisible()) settings.refresh();

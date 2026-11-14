@@ -18,6 +18,7 @@ const Part kVoicings[7][PitchFX::kHarmonyVoices] = {
 const float kVoiceDelayMs[PitchFX::kHarmonyVoices] = { 11.0f, 17.0f, 23.0f };
 const float kVoiceCents[PitchFX::kHarmonyVoices] = { 4.0f, -5.0f, 3.0f };
 const float kVoicePan[PitchFX::kHarmonyVoices] = { -1.0f, 1.0f, 0.0f };
+const float kVoiceSize[PitchFX::kHarmonyVoices] = { 0.05f, -0.04f, -0.07f };      // each voice a slightly different size of singer
 }
 
 int PitchFX::numVoices (int voicing) noexcept
@@ -70,7 +71,8 @@ void PitchFX::reset()
         ratio[(size_t) v] = ratioGoal[(size_t) v] = 1.0f; hp[(size_t) v] = 0.0f;
         shownHarmony[(size_t) v].store (-1);
     }
-    voiced = false; shiftLevel = 0.0f; harmonyLevel = 0.0f; consonantGain = 1.0f;
+    voiced = false; shiftLevel = 0.0f; harmonyLevel = 0.0f; consonantGain = 1.0f; snap = true; unsureFrames = 0;
+    for (int v = 0; v < kHarmonyVoices; ++v) { driftPhase[(size_t) v] = 1.7f * (float) v; driftCents[(size_t) v] = 0.0f; driftMs[(size_t) v] = 0.0f; }
     period = (float) (fs / 200.0);
     sungNote.store (0.0f);
 }
@@ -85,13 +87,14 @@ void PitchFX::process (juce::AudioBuffer<float>& buffer) noexcept
     const int ch = juce::jmin (channels, buffer.getNumChannels());
     float* left = buffer.getWritePointer (0);
     float* right = ch > 1 ? buffer.getWritePointer (1) : nullptr;
-    const float shiftRatio = std::pow (2.0f, juce::jlimit (-12.0f, 12.0f, settings.semitones) / 12.0f);
+    const float shiftRatio = std::pow (2.0f, juce::jlimit (-24.0f, 24.0f, settings.semitones) / 12.0f);
     // with the character at zero the voice keeps its size; turned either way, the size follows by up to an octave
     const float formant = std::pow (2.0f, juce::jlimit (-1.0f, 1.0f, settings.character));
     const float shiftTarget = settings.shiftOn ? juce::jlimit (0.0f, 1.0f, settings.shiftMix) : 0.0f;
     const int voices = settings.harmonyOn ? numVoices (settings.voicing) : 0;
     const float harmonyTarget = settings.harmonyOn ? settings.harmonyMix * (voices > 1 ? 0.8f : 1.0f) : 0.0f;
     const float glide = 1.0f - std::exp (-1.0f / (float) (fs * 0.012));
+    const float periodGlide = 1.0f - std::exp (-1.0f / (float) (fs * 0.003));
     const float hpCoeff = std::exp (-juce::MathConstants<float>::twoPi * 150.0f / (float) fs);
     const float shiftDelay = (float) (fs * 0.012);
     float gainL[kHarmonyVoices], gainR[kHarmonyVoices];
@@ -109,8 +112,11 @@ void PitchFX::process (juce::AudioBuffer<float>& buffer) noexcept
         if (detector.push (mono))
         {
             const float f = detector.frequency();
-            voiced = f > 0.0f && detector.clarity() > 0.5f;
-            if (voiced)
+            const bool pitched = f > 0.0f && detector.clarity() > 0.5f;
+            // carry on through a 10 or 20 ms gap in the detector's answers, as Tune does
+            if (pitched) { if (! voiced) snap = true; voiced = true; unsureFrames = 0; }
+            else if (voiced && ++unsureFrames > 2) { voiced = false; unsureFrames = 0; }
+            if (pitched)
             {
                 period = (float) (fs / (double) f);
                 const float note = 69.0f + 12.0f * std::log2 (f / 440.0f);
@@ -125,7 +131,23 @@ void PitchFX::process (juce::AudioBuffer<float>& buffer) noexcept
                     ratioGoal[(size_t) v] = h >= 0 ? std::pow (2.0f, ((float) (h - lead) + kVoiceCents[v] * 0.01f) / 12.0f) : 1.0f;
                 }
             }
-            else sungNote.store (0.0f, std::memory_order_relaxed);
+            else if (! voiced) sungNote.store (0.0f, std::memory_order_relaxed);
+        }
+        if (snap) { periodNow = period; snap = false; } else periodNow += (period - periodNow) * periodGlide;
+        // Humanise: real backing singers are never exactly together. Each voice wanders a few cents and a few
+        // milliseconds around the lead, slowly and each at its own speed, and is a slightly different size.
+        if (++driftCount >= 64)
+        {
+            driftCount = 0;
+            static const float speeds[kHarmonyVoices] = { 0.23f, 0.31f, 0.17f };
+            for (int v = 0; v < kHarmonyVoices; ++v)
+            {
+                driftPhase[(size_t) v] += juce::MathConstants<float>::twoPi * speeds[v] * 64.0f / (float) fs;
+                if (driftPhase[(size_t) v] > 1000.0f) driftPhase[(size_t) v] -= 1000.0f * std::floor (driftPhase[(size_t) v] / 1000.0f);
+                const float a = driftPhase[(size_t) v];
+                driftCents[(size_t) v] = settings.humanise * 9.0f * (0.6f * std::sin (a) + 0.4f * std::sin (a * 2.37f + 1.0f));
+                driftMs[(size_t) v] = settings.humanise * 7.0f * (0.5f + 0.5f * std::sin (a * 0.71f + 2.0f * (float) v));
+            }
         }
         shiftLevel += (shiftTarget - shiftLevel) * 0.002f;
         harmonyLevel += (harmonyTarget - harmonyLevel) * 0.002f;
@@ -135,7 +157,7 @@ void PitchFX::process (juce::AudioBuffer<float>& buffer) noexcept
         if (settings.shiftOn || shiftLevel > 1.0e-4f)
         {
             float shifted = 0.0f;
-            engine.render (shiftVoice, period, voiced, shiftRatio, shiftDelay, &shifted, formant);
+            engine.renderSync (shiftVoice, periodNow, voiced, shiftRatio, shiftDelay, &shifted, formant);
             outL = dryL * (1.0f - shiftLevel) + shifted * shiftLevel;
             outR = dryR * (1.0f - shiftLevel) + shifted * shiftLevel;
         }
@@ -146,7 +168,9 @@ void PitchFX::process (juce::AudioBuffer<float>& buffer) noexcept
             {
                 ratio[(size_t) v] += (ratioGoal[(size_t) v] - ratio[(size_t) v]) * glide;
                 float out = 0.0f;
-                engine.render (harmony[(size_t) v], period, voiced, ratio[(size_t) v], (float) (fs * 0.001 * kVoiceDelayMs[v]), &out);
+                const float wander = std::pow (2.0f, driftCents[(size_t) v] / 1200.0f);
+                engine.renderSync (harmony[(size_t) v], periodNow, voiced, ratio[(size_t) v] * wander, (float) (fs * 0.001 * (kVoiceDelayMs[v] + driftMs[(size_t) v])), &out,
+                                   1.0f + settings.humanise * kVoiceSize[v]);
                 hp[(size_t) v] = hpCoeff * hp[(size_t) v] + (1.0f - hpCoeff) * out;
                 out -= hp[(size_t) v];
                 addL += out * gainL[v]; addR += out * gainR[v];

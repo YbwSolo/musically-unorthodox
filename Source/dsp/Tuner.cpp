@@ -18,7 +18,7 @@ void Tuner::reset()
     detector.reset();
     engine.reset();
     engine.resetVoice (voice, (float) (settings.lowLatency ? delayLow : delay));
-    voiced = false; ratio = 1.0f; shift = 0.0f; target = -1; switchFrames = 0; lastCaptured = -1;
+    voiced = false; ratio = 1.0f; shift = 0.0f; target = -1; switchFrames = 0; lastCaptured = -1; unsureFrames = 0; framesOnNote = 0; snap = true; sliding = 0.0f; recentCount = 0;
     period = (float) (fs / 200.0);
     detectedNote.store (0.0f); outputNote.store (0.0f); targetNote.store (-1);
 }
@@ -92,11 +92,17 @@ void Tuner::control (double seconds) noexcept
 
     if (! pitched)
     {
-        voiced = false; ratio = 1.0f; shift = 0.0f; target = -1; switchFrames = 0;
+        // A note does not stop for 10 or 20 ms and start again: that is a rough patch in the voice or a miss by the
+        // detector. Carrying on as before through it stops the tuning cutting in and out inside a word.
+        if (voiced && ++unsureFrames <= 2) return;
+        voiced = false; ratio = 1.0f; shift = 0.0f; target = -1; switchFrames = 0; unsureFrames = 0; framesOnNote = 0; snap = true;
         detectedNote.store (0.0f, std::memory_order_relaxed); outputNote.store (0.0f, std::memory_order_relaxed); targetNote.store (-1, std::memory_order_relaxed);
         return;
     }
     const bool starting = ! voiced;
+    unsureFrames = 0;
+    // how far the detector's answer can be trusted: a clean note scores near 1, a breathy or creaky one much less
+    const bool sure = detector.clarity() >= 0.7f;
 
     // remember which notes are sung, for key finding
     const int pc = (((int) std::lround (note) % 12) + 12) % 12;
@@ -119,10 +125,18 @@ void Tuner::control (double seconds) noexcept
     {
         // The slow version of the pitch is the centre of the note; the difference from it is vibrato and slides.
         // A real move to another note (well away from the current one for 40 ms) starts a new centre straight away.
-        if (starting) { slowNote = note; farFrames = 0; }
+        if (starting) { slowNote = note; sliding = 0.0f; farFrames = 0; recentCount = 0; }
         if (target >= 0 && std::abs (note - (float) target) > 0.8f) { if (++farFrames >= 4) { slowNote = note; farFrames = 0; } }
         else farFrames = 0;
         slowNote += (note - slowNote) * 0.08f;                                  // about 120 ms
+        // How fast the voice is travelling: how far it has moved in the last 180 ms. That is about one cycle of
+        // vibrato, which ends where it began and so counts for little; a slide between notes, or the rise and
+        // fall of a spoken line, ends somewhere else.
+        const int span = juce::jmin (recentCount, (int) recent.size());
+        const float was = span > 0 ? recent[(size_t) ((recentAt - span + (int) recent.size() * 2) % (int) recent.size())] : note;
+        recent[(size_t) recentAt] = note; recentAt = (recentAt + 1) % (int) recent.size(); ++recentCount;
+        const float speedNow = span >= 6 ? std::abs (note - was) / ((float) span * 0.01f) : 0.0f;
+        sliding += (speedNow - sliding) * 0.35f;
         // what gets corrected: the note as sung (keep vibrato = 0) or only its centre (keep vibrato = 1)
         const float reference = note + settings.keepVibrato * (slowNote - note);
 
@@ -139,14 +153,37 @@ void Tuner::control (double seconds) noexcept
             else switchFrames = 0;
         }
         else switchFrames = 0;
+        framesOnNote = candidate == target ? framesOnNote + 1 : 0;
         target = candidate;
 
-        const float wanted = juce::jlimit (-7.0f, 7.0f, ((float) target - reference) * settings.amount);
-        if (starting || settings.speedMs < 1.0f) shift = wanted;
-        else shift += (wanted - shift) * (1.0f - std::exp (-10.0f / settings.speedMs));
+        float off = (float) target - reference;
+        // Flex: a note that is already close enough is left as the singer sang it; correction fades in beyond that
+        const float flex = settings.flexCents * 0.01f;
+        if (flex > 0.0f && std::abs (off) < flex * 1.5f)
+        {
+            const float x = juce::jlimit (0.0f, 1.0f, (std::abs (off) - flex * 0.5f) / flex);
+            off *= x * x * (3.0f - 2.0f * x);
+        }
+        // Keep slides: a voice on its way from one note to the next is not on a wrong note, it is between notes.
+        // Pulling it to the scale there is what makes gentle tuning sound like a machine, so the correction lets go
+        // while the pitch is travelling (faster than about 3 semitones a second) and comes back once it settles.
+        // (Keep slides and Humanise belong to gentle tuning. Under 20 ms of speed they fade out, and at zero they
+        // do nothing, so turning Speed all the way down always gives the full hard-tune effect.)
+        const float gentle = juce::jlimit (0.0f, 1.0f, settings.speedMs / 20.0f);
+        const float moving = juce::jlimit (0.0f, 1.0f, (sliding - 3.0f) / 4.0f);
+        off *= 1.0f - settings.keepSlides * gentle * moving * moving * (3.0f - 2.0f * moving);
+        const float wanted = juce::jlimit (-7.0f, 7.0f, off * settings.amount);
+        // Humanise: once a note has been held for a fifth of a second it is corrected more slowly, so a long note
+        // keeps its natural drift while short notes are still caught quickly
+        const float held = juce::jlimit (0.0f, 1.0f, ((float) framesOnNote - 12.0f) / 25.0f);
+        const float speed = settings.speedMs + settings.humanise * gentle * 160.0f * held;
+        if (starting || speed < 1.0f) shift = wanted;
+        else if (sure) shift += (wanted - shift) * (1.0f - std::exp (-10.0f / speed));
+        // an answer that cannot be trusted changes nothing: the correction in force carries on
     }
 
     voiced = true;
+    if (starting) snap = true;
     ratio = std::pow (2.0f, shift / 12.0f);
     period = (float) (fs / (double) f);
     detectedNote.store (note, std::memory_order_relaxed);
@@ -167,14 +204,23 @@ void Tuner::process (juce::AudioBuffer<float>& buffer, bool passThrough) noexcep
     const int ch = juce::jmin (channels, buffer.getNumChannels());
     const float d = (float) (settings.lowLatency ? delayLow : delay);
     float* data[2] = { buffer.getWritePointer (0), ch > 1 ? buffer.getWritePointer (1) : nullptr };
+    // The detector answers every 10 ms. Handing its answers to the engine as they come would move the pitch in
+    // 10 ms stair-steps, so the period of the voice and the period being aimed for both glide over a few
+    // milliseconds. The aimed-for period is smoothed on its own, so on a hard-tuned note it does not move at all,
+    // however much the detector's reading of the voice wobbles.
+    const float glide = 1.0f - std::exp (-1.0f / (float) (fs * 0.003));
     for (int i = 0; i < n; ++i)
     {
         float mono = 0.0f;
         for (int c = 0; c < ch; ++c) { engine.write (c, data[c][i]); mono += data[c][i]; }
         if (detector.push (mono / (float) ch)) control (blockTime + (double) i / fs);
+        const float outGoal = period / ratio;
+        if (snap) { periodNow = period; outPeriodNow = outGoal; snap = false; }
+        else { periodNow += (period - periodNow) * glide; outPeriodNow += (outGoal - outPeriodNow) * glide; }
         float out[2] = { 0.0f, 0.0f };
-        if (passThrough) engine.render (voice, (float) (fs / 200.0), false, 1.0f, d, out);
-        else             engine.render (voice, period, voiced, ratio, d, out, formant);
+        if (passThrough) engine.renderSync (voice, (float) (fs / 200.0), false, 1.0f, d, out);
+        else if (settings.legacySlicing) engine.render (voice, period, voiced, ratio, d, out, formant);
+        else             engine.renderSync (voice, periodNow, voiced, periodNow / outPeriodNow, d, out, formant);
         for (int c = 0; c < ch; ++c) data[c][i] = out[c];
         engine.advance();
     }

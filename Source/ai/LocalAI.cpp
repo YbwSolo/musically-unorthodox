@@ -118,6 +118,19 @@ void LocalAI::installBuiltIn()
     startThread();
 }
 
+// The model is chosen first, then downloaded. If the tutor is in the middle of looking for what is installed,
+// the download starts as soon as that has finished.
+void LocalAI::installModel (const juce::String& id)
+{
+    if (getStatus().setup == Setup::Unsupported) return;
+    if (id.isNotEmpty()) settings->set ("tutorModel", id);
+    lastUpgradeCheck = 0;
+    setSetup (Setup::Downloading, "Getting ready...");
+    if (isThreadRunning()) { installNext.store (true); return; }
+    job.store (Install);
+    startThread();
+}
+
 void LocalAI::cancelInstall()
 {
     if (getStatus().setup == Setup::Downloading) signalThreadShouldExit();
@@ -147,6 +160,7 @@ void LocalAI::run()
         case Install: doInstall(); break;
         default: break;
     }
+    if (installNext.exchange (false) && ! threadShouldExit()) doInstall();
 }
 
 //==================================================================== where the tutor lives
@@ -211,6 +225,16 @@ void LocalAI::readOffer (const Installed* have)
     status.otherId.clear(); status.otherName.clear();
     for (auto& m : pack.models)
         if (m.sha256 != pack.modelSha256) { status.otherId = m.id; status.otherName = m.name; }
+    const int memoryGb = juce::roundToInt ((double) juce::SystemStats::getMemorySizeInMegabytes() / 1024.0);
+    status.choices.clear();
+    for (auto& m : pack.models)
+    {
+        Status::Choice c;
+        c.id = m.id; c.name = m.name; c.bytes = m.bytes; c.minMemoryGb = m.minMemoryGb; c.appleSilicon = m.appleSilicon;
+        c.fits = memoryGb >= m.minMemoryGb && (archFolder() == "arm64" || ! m.appleSilicon);
+        c.chosen = m.sha256 == pack.modelSha256;
+        status.choices.push_back (c);
+    }
 }
 
 //==================================================================== feed

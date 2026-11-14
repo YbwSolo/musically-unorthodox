@@ -87,6 +87,7 @@ target_sources(MusicallyUnorthodox PRIVATE
     Source/state/ParameterLayout.cpp
     Source/state/ChainPresets.cpp
     Source/state/ModulePresets.cpp
+    Source/state/UserPresets.cpp
     Source/session/SessionBus.cpp
     Source/update/Updater.cpp
     Source/ai/LocalAI.cpp
@@ -99,6 +100,7 @@ target_sources(MusicallyUnorthodox PRIVATE
     Source/ui/Widgets.cpp
     Source/ui/HelpText.cpp
     Source/ui/FXPage.cpp
+    Source/ui/BrainPage.cpp
     Source/ui/TunePage.cpp
     Source/ui/HeaderBar.cpp
     Source/ui/MeterRail.cpp
@@ -152,6 +154,27 @@ if(MU_BUILD_TESTS)
         juce::juce_core
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
+endif()
+
+if(MU_BUILD_TESTS)
+    # Runs a raw recording through one tool so its output can be measured (and listened to) outside a host.
+    add_executable(MUVoiceLab Source/tests/VoiceLab.cpp Source/dsp/SpectrumAnalyzer.cpp ${MU_DSP_SOURCES})
+    target_include_directories(MUVoiceLab PRIVATE Source)
+    target_compile_definitions(MUVoiceLab PRIVATE JUCE_STANDALONE_APPLICATION=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODULE_AVAILABLE_juce_dsp=1)
+    target_link_libraries(MUVoiceLab PRIVATE juce::juce_dsp juce::juce_audio_basics juce::juce_core juce::juce_recommended_config_flags)
+    # Optional: a folder holding an earlier version of a tool (OldCompressor.h/.cpp), to compare old against new.
+    if(MU_LAB_OLD_DIR)
+        target_sources(MUVoiceLab PRIVATE ${MU_LAB_OLD_DIR}/OldCompressor.cpp)
+        target_include_directories(MUVoiceLab PRIVATE ${MU_LAB_OLD_DIR})
+        target_compile_definitions(MUVoiceLab PRIVATE MU_LAB_OLD=1)
+    endif()
+endif()
+
+if(MU_BUILD_TESTS)
+    add_executable(MUMixLab Source/tests/MixLab.cpp)
+    target_include_directories(MUMixLab PRIVATE Source)
+    target_link_libraries(MUMixLab PRIVATE MusicallyUnorthodox MUAssets juce::juce_audio_utils juce::juce_dsp)
+    target_compile_definitions(MUMixLab PRIVATE JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1)
 endif()
 
 if(MU_BUILD_TESTS)

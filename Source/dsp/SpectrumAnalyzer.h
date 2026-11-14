@@ -37,6 +37,19 @@ public:
     bool hasLongTerm() const { return longTermFrames > 40; }
     int getLongTermFrames() const { return longTermFrames; }
 
+    // A listening pass: from startListen() on, every frame that has sound in it is kept, so the analysis can look
+    // at a known stretch of the track (and at how each band behaves over that stretch) instead of whatever
+    // happened to be playing in the last few seconds. Message thread.
+    static constexpr int kListenMax = 1500;            // about 32 s of sound
+    void startListen();
+    void stopListen() { listening = false; }
+    bool isListening() const { return listening; }
+    float getListenSeconds() const { return (float) ((double) listenFrames * kHop / fs); }
+    // meanDb: the average level of each band over the pass. swingDb: how much each band's share of the sound
+    // moves from its usual value to its loud moments (a build-up that is always there scores low, one that comes
+    // and goes with certain notes or words scores high). False if there is no pass to report.
+    bool listenBands (std::array<float, kNumBands>& meanDb, std::array<float, kNumBands>& swingDb) const;
+
     // Finds narrow peaks sticking out of the smoothed long-term spectrum (for "Clean harsh").
     std::vector<Resonance> findResonances (float minHz, float maxHz, float minProminenceDb) const;
 
@@ -60,5 +73,9 @@ private:
     std::array<float, kNumBands> bandLo {}, bandHi {};
     int longTermFrames = 0;
     std::array<float, kFFTSize / 2> longTermBinLinear {};
+    bool listening = false;
+    int listenFrames = 0;
+    std::array<double, kNumBands> listenSum {};
+    std::vector<float> listenShare;                    // kListenMax x kNumBands: each band's level against the frame's total
 };
 }

@@ -24,6 +24,7 @@ private:
         std::vector<juce::Component*> top;        // switches and choices, laid out left to right above the display
         std::vector<int> topWidths;
         std::vector<Knob*> knobs;
+        std::vector<Knob*> more;                  // the finer controls, shown when More is on
     };
     void select (int index);
     juce::Rectangle<int> rowBounds (int index) const;
@@ -47,11 +48,12 @@ private:
     // doubler
     Segmented dblVoices; Knob dblMix, dblDetune, dblTiming, dblWidth;
     // delay
-    ParamToggle dlSync; Segmented dlNote; Knob dlMix, dlTime, dlFeedback, dlTone, dlWidth, dlDuck;
+    ParamToggle dlSync; Choice dlNote; Segmented dlPattern, dlStyle; Knob dlMix, dlTime, dlFeedback, dlTone, dlWidth, dlDuck, dlDrive, dlWobble, dlLowCut;
     // reverb
-    Segmented rvType; ParamToggle rvAuto; Segmented rvLength; juce::TextButton rvFit; Knob rvMix, rvDecay, rvPre, rvTone, rvDuck, rvLowCut, rvWidth;
+    Segmented rvType; ParamToggle rvAuto; Segmented rvLength; ParamToggle rvFreeze; juce::TextButton rvFit; Knob rvMix, rvDecay, rvPre, rvTone, rvDuck, rvLowCut, rvWidth;
+    Knob rvSize, rvDiffusion, rvEarly, rvLowDecay, rvModDepth, rvModRate, rvShimmer;
     // harmony
-    Segmented hmVoicing; Knob hmMix, hmWidth;
+    Segmented hmVoicing; Knob hmMix, hmWidth, hmHumanise;
     // shift
     Knob psSemis, psCharacter, psMix;
     // phone
@@ -63,6 +65,8 @@ private:
     // chop
     Segmented chRate; Knob chDepth, chShape;
 
+    juce::TextButton moreButton;
+    bool showMore = false;
     juce::Rectangle<int> rail, panel, well, railList, monoNote, titleArea;
     float duck = 0.0f, echoDuck = 0.0f, sweep = 0.0f, harmonyCentre = 60.0f;
     std::array<float, 4> voiceCents {}, voiceDelay {};

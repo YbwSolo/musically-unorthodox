@@ -16,6 +16,7 @@ struct PitchFXSettings
     int voicing = 0;             // see PitchFX::voicingNames()
     float harmonyMix = 0.45f;    // 0..1
     float harmonyWidth = 0.8f;   // 0..1
+    float humanise = 0.4f;       // 0..1: how much the harmony voices differ from the lead in timing, tuning and tone
 
     int key = 0, scale = 0, noteMask = 0xFFF;       // shared with Tune
 };
@@ -53,7 +54,10 @@ private:
     std::array<GrainEngine::Voice, kHarmonyVoices> harmony;
     std::array<float, kHarmonyVoices> ratio {}, ratioGoal {}, hp {};
     bool voiced = false;
-    float period = 240.0f, shiftLevel = 0.0f, harmonyLevel = 0.0f, consonantGain = 1.0f;
+    float period = 240.0f, periodNow = 240.0f, shiftLevel = 0.0f, harmonyLevel = 0.0f, consonantGain = 1.0f;
+    std::array<float, kHarmonyVoices> driftPhase {}, driftCents {}, driftMs {};
+    int driftCount = 0, unsureFrames = 0;
+    bool snap = true;
     std::atomic<float> sungNote { 0.0f };
     std::array<std::atomic<int>, kHarmonyVoices> shownHarmony {};
 };

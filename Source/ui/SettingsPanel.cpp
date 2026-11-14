@@ -96,10 +96,10 @@ void SettingsPanel::refresh()
               + "The one you have keeps working until the new one is in place.";
         aiLabel = ai.upgradeBytes > 0 ? "Download it" : "Update tutor";
     }
-    else if (ai.setup == Setup::Ready)   { aiNow = "On. Ask it questions from the Mix Brain panel on the EQ tab. It runs on this computer (" + ai.model + "), so it works without the internet and nothing you ask leaves the room."; aiLabel = "Remove"; }
+    else if (ai.setup == Setup::Ready)   { aiNow = "On. Ask it questions on the Mix Brain tab. It runs on this computer (" + ai.model + "), so it works without the internet and nothing you ask leaves the room."; aiLabel = "Remove"; }
     else if (ai.setup == Setup::Unsupported)
     {
-        aiNow = ai.available ? "On, through Ollama (" + ai.model + "). Ask it questions from the Mix Brain panel on the EQ tab." : juce::String ("The built-in AI tutor is available on Mac.");
+        aiNow = ai.available ? "On, through Ollama (" + ai.model + "). Ask it questions on the Mix Brain tab." : juce::String ("The built-in AI tutor is available on Mac.");
         aiLabel = "Look again";
     }
     else

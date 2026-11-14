@@ -80,6 +80,21 @@ BalancePlan computeBalance (const std::vector<TrackInfo>& tracks, const BalanceT
             shift -= (projectedTp - t.masterTruePeak);
     }
 
+    // Channel headroom: a track whose own peaks would end up over the top of its channel is not a job for a
+    // harder compressor, it means the song as a whole is being asked to sit too high. Everything comes down
+    // together by what that track needs, so the balance is kept and nothing is squashed to fit.
+    for (size_t i = 0; i < parts.size(); ++i)
+    {
+        auto* p = parts[i];
+        if (! p->acceptsBalance) continue;
+        const float peakNow = juce::jmax (p->truePeakDb, p->peakOverDb > 0.0f ? -1.0f + p->peakOverDb : -100.0f);
+        if (peakNow < -60.0f) continue;
+        const float after = peakNow + (desired[i] + shift - p->levelLufs);
+        const float need = juce::jmin (9.0f, after - t.trackTruePeak);
+        if (need > plan.headroomDb + 0.05f) { plan.headroomDb = need; plan.headroomTrack = p->name; }
+    }
+    shift -= plan.headroomDb;
+
     // 4. Moves, clamped. The clamp is per track so one wild track cannot drag the session.
     float maxAbs = 0.0f;
     for (size_t i = 0; i < parts.size(); ++i)
@@ -115,6 +130,8 @@ BalancePlan computeBalance (const std::vector<TrackInfo>& tracks, const BalanceT
     s << "Projected master " << juce::String (plan.projectedMasterLufs, 1) << " LUFS";
     if (plan.projectedMasterTruePeak > -60.0f) s << " / " << juce::String (plan.projectedMasterTruePeak, 1) << " dBTP";
     s << " (target " << juce::String (t.masterLufs, 1) << " LUFS, " << juce::String (t.masterTruePeak, 1) << " dBTP).";
+    if (plan.headroomDb > 0.3f)
+        s << " The whole song sits " << juce::String (plan.headroomDb, 1) << " dB lower than the target so the peaks of \"" << plan.headroomTrack << "\" have room; the master makes the loudness back up.";
     if (maxAbs >= t.maxMoveDb - 0.01f) s << " Some moves hit the " << juce::String (juce::roundToInt (t.maxMoveDb)) << " dB limit - check those tracks' own levels.";
     plan.summary = s;
     return plan;

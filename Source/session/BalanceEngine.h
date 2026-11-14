@@ -18,6 +18,7 @@ struct TrackInfo
     bool playing = false;           // sound is passing through right now
     float truePeakDb = -100.0f;
     float trimDb = 0.0f;            // current balance trim applied inside the instance
+    float peakOverDb = 0.0f;        // how far the track's own peaks are over the top of its channel right now (0 = fine)
     bool acceptsBalance = true;
     bool active = false;
     std::array<float, kAnalysisBands> bandsDb {};
@@ -36,6 +37,8 @@ struct BalancePlan
     bool hasMaster = false;
     bool usable = false;
     juce::String summary;
+    float headroomDb = 0.0f;        // how far the whole song was turned down so no single track clips its channel
+    juce::String headroomTrack;
 };
 
 struct MaskingClash
@@ -51,6 +54,7 @@ struct BalanceTargets
 {
     float masterLufs = -18.0f;
     float masterTruePeak = -6.0f;
+    float trackTruePeak = -2.0f;    // no single track's peaks may be left higher than this on its own channel
     float maxMoveDb = 12.0f;
     std::array<float, (size_t) Role::NumRoles> offsets = defaultOffsets();
 

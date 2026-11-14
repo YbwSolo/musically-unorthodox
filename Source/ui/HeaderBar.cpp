@@ -5,7 +5,7 @@
 namespace mu
 {
 using namespace theme;
-static const char* const kTabNames[] = { "MIX", "EQ", "DYNAMICS", "TONE", "TUNE", "FX", "MASTER", "LEARN" };
+static const char* const kTabNames[] = { "MIX", "EQ", "DYNAMICS", "TONE", "TUNE", "FX", "MASTER", "LEARN", "MIX BRAIN" };
 
 HeaderBar::HeaderBar (MUProcessor& p) : proc (p)
 {
@@ -52,6 +52,7 @@ void HeaderBar::showPresetMenu()
     menu.setLookAndFeel (&getLookAndFeel());     // menus open in their own window, so hand them the brand look
     const auto& presets = chainPresets();
     const auto current = proc.getCurrentPresetName();
+    menu.addSectionHeader ("Built in");
     for (auto& category : chainPresetCategories())
     {
         juce::PopupMenu sub;
@@ -66,10 +67,12 @@ void HeaderBar::showPresetMenu()
             }
         menu.addSubMenu (category, sub, true, nullptr, hasCurrent);
     }
+    const auto own = ownpresets::addToMenu (menu, proc, "chain");
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetButton).withMinimumWidth (presetButton.getWidth()),
-        [safe = juce::Component::SafePointer<HeaderBar> (this)] (int result)
+        [safe = juce::Component::SafePointer<HeaderBar> (this), own] (int result)
         {
             if (safe == nullptr || result <= 0) return;
+            if (ownpresets::handle (result, *safe, safe->proc, "chain", own, safe->onStatus)) return;
             const auto& all = chainPresets();
             const auto note = safe->proc.applyChainPreset (result - 1);
             if (safe->onStatus) safe->onStatus (all[(size_t) (result - 1)].blurb + " " + note.fromFirstOccurrenceOf ("loaded.", false, false).trim());
@@ -121,7 +124,8 @@ void HeaderBar::tick (float dt)
     if (proc.getBus().isLowLatency() != shownLowLatency) { shownLowLatency = ! shownLowLatency; repaint(); }
     if ((int) proc.getListenCheck() != shownCheck) { shownCheck = (int) proc.getListenCheck(); repaint(); }
 
-    const auto name = proc.getCurrentPresetName();
+    auto name = proc.getCurrentPresetName();
+    if (name.isNotEmpty() && proc.presetEdited ("chain")) name << " *";        // changed since it was loaded
     if (name != shownPreset)
     {
         shownPreset = name;

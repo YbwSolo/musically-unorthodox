@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <map>
 #include "state/ParameterIDs.h"
 #include "state/ParameterLayout.h"
 #include "state/ChainPresets.h"
@@ -26,10 +27,12 @@
 #include "dsp/PitchFX.h"
 #include "dsp/ColourFX.h"
 #include "dsp/PeakGuard.h"
+#include "dsp/LevelProbe.h"
 #include "dsp/KeyFinder.h"
 #include "dsp/TuneGraph.h"
 #include "analysis/ReverbAdvisor.h"
 #include "state/ModulePresets.h"
+#include "state/UserPresets.h"
 #include "update/Updater.h"
 #include "ai/LocalAI.h"
 #include "state/LocalSettings.h"
@@ -122,6 +125,9 @@ public:
     LocalSettings& getSettings() { return *settings; }
     juce::String tutorPrompt (const juce::String& question);   // everything the AI tutor is told before it answers
     juce::String tutorTrackNotes();                            // the measured part: this track and the session
+    // The Mix Brain tab's conversation, kept here so it is still there when the window is closed and opened again.
+    struct BrainExchange { juce::String question, answer; bool failed = false; };
+    std::vector<BrainExchange> brainTalk;                      // message thread only
     juce::StringPairArray tutorFacts();                        // measurements turned into finished sentences for the guide notes
     const LoudnessMeter& getLoudness() const { return loudness; }                // what leaves the plugin
     const LoudnessMeter& getMixMeter() const { return mixMeter; }                // master only: the mix before the mastering stage
@@ -208,6 +214,12 @@ public:
 
     // Mix Brain
     std::vector<Suggestion> analyse (juce::String& status);
+    // Analyse listens first: a pass of kListenSeconds of actual sound, measured from the moment it is asked for.
+    static constexpr float kListenSeconds = 8.0f;
+    void startListening();
+    void cancelListening();
+    bool isListening() const { return spectrum.isListening(); }
+    float listenedSeconds() const { return spectrum.getListenSeconds(); }
     juce::String applySuggestion (const Suggestion& s);
     float secondsHeard() const;
 
@@ -224,9 +236,24 @@ public:
     void learnAndBalance (float seconds = 20.0f);
     juce::String autoCompressor();     // sets the compressor from role + measured level
     juce::String applyChainPreset (int index);
+
+    // ---- presets of your own. scope is "chain" for the whole plugin, or a tool's id ("tune", "reverb", ...).
+    std::vector<juce::String> scopeParams (const juce::String& scope) const;        // which controls a preset of that scope holds
+    juce::String scopePresetName (const juce::String& scope) const;                  // what is loaded there now (built-in or your own)
+    bool presetEdited (const juce::String& scope) const;                             // a control has moved since that preset was loaded
+    juce::String saveUserPreset (const juce::String& scope, const juce::String& name, bool replaceExisting, bool* ok = nullptr);
+    juce::String applyUserPreset (const UserPreset& preset);
+    juce::String loadUserPreset (const juce::String& scope, const juce::String& name);
+    juce::String deleteUserPreset (const juce::String& scope, const juce::String& name);
+    juce::String renameUserPreset (const juce::String& scope, const juce::String& name, const juce::String& newName);
+    juce::String importUserPreset (const juce::File& file, bool load);
+    static bool isFactoryName (const juce::String& scope, const juce::String& name);
     void applyMasterMode (int mode);
     void resetEQ();
     void resetTrim();
+    void moveTrimAfterChain();
+    float faderDb() const;             // balance trim + output gain: the gain that follows the processing
+    bool isTrimBeforeChain() const { return trimBeforeChain.load(); }
     void resetMeters();
     void setParam (const juce::String& id, float value);
     float getParam (const juce::String& id) const;
@@ -318,6 +345,11 @@ private:
     // cached parameter pointers
     using AF = std::atomic<float>*;
     AF pRole = nullptr, pBypass = nullptr, pTrim = nullptr, pOut = nullptr, pAutoBal = nullptr;
+    std::atomic<bool> trimBeforeChain { false };
+    LevelProbe inputProbe;                // the level of the track as it reaches the tools
+    float toolLevel() const;              // that level, or the output level without the fader if nothing has been heard at the input yet
+    std::map<juce::String, std::vector<ParamValue>> loadedPreset;      // per scope: the values the loaded preset set, to tell when they have been changed
+    void rememberLoaded (const juce::String& scope, const std::vector<juce::String>& ids);
     AF pTargetLufs = nullptr, pTargetTp = nullptr, pMasterAutoTrim = nullptr, pPeakGuard = nullptr, pMaxGain = nullptr;
     std::array<AF, (size_t) Role::NumRoles> pRoleOff {};
     AF pGateOn = nullptr, pGateThr = nullptr, pGateRange = nullptr, pGateAtt = nullptr, pGateRel = nullptr, pGateHold = nullptr;
@@ -338,6 +370,9 @@ private:
     AF pTuneMode = nullptr, pTuneHold = nullptr, pTuneFormant = nullptr, pTuneNotes = nullptr, pTrackGuard = nullptr;
     AF pDlOn = nullptr, pDlMix = nullptr, pDlSync = nullptr, pDlNote = nullptr, pDlTime = nullptr, pDlFeedback = nullptr, pDlTone = nullptr, pDlWidth = nullptr, pDlDuck = nullptr;
     AF pHmOn = nullptr, pHmVoicing = nullptr, pHmMix = nullptr, pHmWidth = nullptr;
+    AF pTuneFlex = nullptr, pTuneHumanise = nullptr, pTuneSlides = nullptr, pHmHumanise = nullptr;
+    AF pRvSize = nullptr, pRvDiffusion = nullptr, pRvModDepth = nullptr, pRvModRate = nullptr, pRvLowDecay = nullptr, pRvEarly = nullptr, pRvFreeze = nullptr, pRvShimmer = nullptr;
+    AF pDlStyle = nullptr, pDlPattern = nullptr, pDlDrive = nullptr, pDlWobble = nullptr, pDlLowCut = nullptr;
     AF pPsOn = nullptr, pPsSemis = nullptr, pPsCharacter = nullptr, pPsMix = nullptr;
     AF pPhOn = nullptr, pPhAmount = nullptr, pPhTone = nullptr, pPhDrive = nullptr;
     AF pLfOn = nullptr, pLfCrush = nullptr, pLfWobble = nullptr, pLfMix = nullptr;
