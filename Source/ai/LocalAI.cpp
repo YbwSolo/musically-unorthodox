@@ -50,6 +50,8 @@ LocalAI::LocalAI() : juce::Thread ("MU tutor"), feedBase (MU_UPDATE_BASE_URL)
     extraArgs = juce::SystemStats::getEnvironmentVariable ("MU_TUTOR_ARGS", {});
     const auto dir = juce::SystemStats::getEnvironmentVariable ("MU_TUTOR_DIR", {});
     if (dir.isNotEmpty()) { testFolder = juce::File (dir); testing = true; }
+    const auto feed = juce::SystemStats::getEnvironmentVariable ("MU_TUTOR_FEED", {});
+    if (feed.isNotEmpty()) { feedBase = feed; testing = true; }
    #if ! JUCE_MAC
     if (! testing) status.setup = Setup::Unsupported;
    #endif
@@ -87,11 +89,20 @@ void LocalAI::refresh()
     startThread();
 }
 
-void LocalAI::ask (const juce::String& systemPrompt, const juce::String& question)
+void LocalAI::forgetConversation()
+{
+    const juce::ScopedLock sl (lock);
+    history.clear();
+}
+
+void LocalAI::ask (const juce::String& systemPrompt, const juce::String& question, int conversation)
 {
     if (isThreadRunning()) return;
     {
         const juce::ScopedLock sl (lock);
+        const auto now = juce::Time::currentTimeMillis();
+        if (conversation != historyOwner || now - historyTime > 10 * 60 * 1000) history.clear();
+        historyOwner = conversation; historyTime = now;
         pendingSystem = systemPrompt; pendingQuestion = question;
         status.busy = true; status.error.clear();
     }
@@ -160,7 +171,7 @@ juce::File LocalAI::installFolder() const
     return {};
 }
 
-bool LocalAI::findInstalled (juce::File& helper, juce::File& model, juce::String& modelName) const
+bool LocalAI::findInstalled (Installed& out) const
 {
     for (auto& path : candidateFolders())
     {
@@ -170,10 +181,36 @@ bool LocalAI::findInstalled (juce::File& helper, juce::File& model, juce::String
         const auto h = folder.getChildFile ("helper").getChildFile (archFolder()).getChildFile ("llama-server");
         const auto m = folder.getChildFile (manifest.getProperty ("model", "").toString());
         if (! h.existsAsFile() || ! m.existsAsFile() || m.getSize() != (juce::int64) manifest.getProperty ("modelBytes", 0)) continue;
-        helper = h; model = m; modelName = manifest.getProperty ("modelName", "built-in model").toString();
+        out.helper = h; out.model = m;
+        out.modelName = manifest.getProperty ("modelName", "built-in model").toString();
+        out.version = manifest.getProperty ("version", "").toString();
         return true;
     }
     return false;
+}
+
+// Once in a while, read the release feed: which model this computer would get, whether there is another to
+// choose, and whether what is installed (if anything) is different from what is on offer now.
+void LocalAI::readOffer (const Installed* have)
+{
+    const auto now = juce::Time::currentTimeMillis();
+    if (lastUpgradeCheck != 0 && now - lastUpgradeCheck < (juce::int64) 6 * 3600 * 1000) return;
+    lastUpgradeCheck = now;
+    juce::String feed;
+    httpStatus (feedBase + "/latest.json", 8000, &feed);
+    TutorPack pack;
+    if (! parseTutorFeed (feed, pack, testing)) return;
+    choose (pack);
+    const bool newModel = have != nullptr && have->model.getFileName() != "model-" + pack.modelSha256.substring (0, 12) + ".gguf";
+    const bool newHelper = have != nullptr && have->version != pack.version;
+    const juce::ScopedLock sl (lock);
+    status.upgradeAvailable = newModel || newHelper;
+    status.upgradeName = pack.modelName;
+    status.upgradeBytes = newModel ? pack.modelBytes : 0;
+    status.offerName = pack.modelName; status.offerBytes = pack.modelBytes;
+    status.otherId.clear(); status.otherName.clear();
+    for (auto& m : pack.models)
+        if (m.sha256 != pack.modelSha256) { status.otherId = m.id; status.otherName = m.name; }
 }
 
 //==================================================================== feed
@@ -181,19 +218,58 @@ bool LocalAI::parseTutorFeed (const juce::String& json, TutorPack& out, bool any
 {
     const auto t = juce::JSON::parse (json).getProperty ("tutor", juce::var());
     if (! t.isObject()) return false;
-    const auto m = t.getProperty ("model", juce::var());
     out.version = t.getProperty ("version", "").toString();
     out.file = t.getProperty ("file", "").toString();
     out.sha256 = t.getProperty ("sha256", "").toString().toLowerCase();
-    out.modelName = m.getProperty ("name", "").toString();
-    out.modelUrl = m.getProperty ("url", "").toString();
-    out.modelSha256 = m.getProperty ("sha256", "").toString().toLowerCase();
-    out.modelBytes = (juce::int64) m.getProperty ("bytes", 0);
-    // the helper is joined onto our own release address, so it must be a plain file name; the model may only
-    // come from the one model host we expect
+    out.models.clear();
+    auto read = [&] (const juce::var& m)
+    {
+        TutorModel model;
+        model.id = m.getProperty ("id", "light").toString();
+        model.name = m.getProperty ("name", "").toString();
+        model.url = m.getProperty ("url", "").toString();
+        model.sha256 = m.getProperty ("sha256", "").toString().toLowerCase();
+        model.bytes = (juce::int64) m.getProperty ("bytes", 0);
+        model.minMemoryGb = (int) m.getProperty ("minMemoryGb", 0);
+        model.appleSilicon = (bool) m.getProperty ("appleSilicon", false);
+        // a model may only come from the one model host we expect
+        if ((anyModelHost || model.url.startsWith ("https://huggingface.co/")) && model.sha256.length() == 64 && model.bytes > 0) out.models.push_back (model);
+    };
+    const auto list = t.getProperty ("models", juce::var());
+    if (auto* models = list.getArray()) for (auto& m : *models) read (m);
+    if (out.models.empty()) read (t.getProperty ("model", juce::var()));          // older feeds name a single model
+    if (out.models.empty()) return false;
+    const auto& first = out.models.front();
+    out.modelName = first.name; out.modelUrl = first.url; out.modelSha256 = first.sha256; out.modelBytes = first.bytes;
+    // the helper is joined onto our own release address, so it must be a plain file name
     const bool safeFile = out.file.isNotEmpty() && out.file.containsOnly (kPlainName) && ! out.file.startsWith (".");
-    const bool safeModel = anyModelHost || out.modelUrl.startsWith ("https://huggingface.co/");
-    return safeFile && safeModel && out.version.isNotEmpty() && out.sha256.length() == 64 && out.modelSha256.length() == 64 && out.modelBytes > 0;
+    return safeFile && out.version.isNotEmpty() && out.sha256.length() == 64;
+}
+
+int LocalAI::pickModel (const std::vector<TutorModel>& models, const juce::String& preferredId, bool appleSilicon, int memoryGb)
+{
+    if (preferredId.isNotEmpty())
+        for (size_t i = 0; i < models.size(); ++i) if (models[i].id == preferredId) return (int) i;
+    int best = 0;
+    for (size_t i = 0; i < models.size(); ++i)
+        if (memoryGb >= models[i].minMemoryGb && (appleSilicon || ! models[i].appleSilicon)) best = (int) i;       // listed lightest first
+    return best;
+}
+
+void LocalAI::choose (TutorPack& pack) const
+{
+    auto preferred = juce::SystemStats::getEnvironmentVariable ("MU_TUTOR_MODEL", {});
+    if (preferred.isEmpty()) preferred = settings->get ("tutorModel");
+    const int memoryGb = juce::roundToInt ((double) juce::SystemStats::getMemorySizeInMegabytes() / 1024.0);
+    const auto& m = pack.models[(size_t) pickModel (pack.models, preferred, archFolder() == "arm64", memoryGb)];
+    pack.modelName = m.name; pack.modelUrl = m.url; pack.modelSha256 = m.sha256; pack.modelBytes = m.bytes;
+}
+
+void LocalAI::preferModel (const juce::String& id)
+{
+    settings->set ("tutorModel", id);
+    lastUpgradeCheck = 0;
+    refresh();
 }
 
 juce::String LocalAI::sha256Of (const juce::File& f)
@@ -274,6 +350,7 @@ void LocalAI::doInstall()
     if (! parseTutorFeed (feed, pack, testing))
     { fail (feed.isEmpty() ? "Could not reach the download server. Check the internet connection and try again."
                            : "The AI tutor is not ready to download yet. Update the plugin first, then try again."); return; }
+    choose (pack);
 
     const auto folder = installFolder();
     if (folder == juce::File()) { fail ("There is nowhere on this computer the tutor can be saved."); return; }
@@ -322,6 +399,11 @@ void LocalAI::doInstall()
     manifest->setProperty ("modelName", pack.modelName);
     manifest->setProperty ("modelBytes", pack.modelBytes);
     folder.getChildFile ("tutor.json").replaceWithText (juce::JSON::toString (juce::var (manifest)));
+    {
+        const juce::ScopedLock sl (lock);
+        status.upgradeAvailable = false;
+    }
+    lastUpgradeCheck = juce::Time::currentTimeMillis();
     detect();
 }
 
@@ -339,7 +421,8 @@ bool LocalAI::startServer (int port, bool cpuOnly)
     const int threads = juce::jlimit (2, 8, juce::SystemStats::getNumPhysicalCpus() / 2);
     juce::StringArray args { helperPath.getFullPathName(), "-m", modelPath.getFullPathName(), "--host", "127.0.0.1", "--port", juce::String (port),
                              "-c", "4096", "-np", "1", "-t", juce::String (threads), "-a", kAlias, "--no-webui",
-                             "--sleep-idle-seconds", "240" };       // gives its memory back when nobody is asking
+                             "--sleep-idle-seconds", "240",         // gives its memory back when nobody is asking
+                             "--reasoning", "off" };                // answer directly: no thinking out loud first
     if (cpuOnly) args.addArray ({ "-ngl", "0" });
     args.addTokens (extraArgs, false);
     if (! server.start (args, 0)) return false;
@@ -383,7 +466,15 @@ juce::String LocalAI::chooseModel (const juce::StringArray& installed, const juc
     return {};
 }
 
-juce::String LocalAI::buildRequest (const juce::String& model, const juce::String& systemPrompt, const juce::String& question)
+static juce::Array<juce::var> conversationMessages (const juce::String& systemPrompt, const juce::String& question, const LocalAI::Earlier& earlier)
+{
+    juce::Array<juce::var> messages { message ("system", systemPrompt) };
+    for (auto& turn : earlier) { messages.add (message ("user", turn.first)); messages.add (message ("assistant", turn.second)); }
+    messages.add (message ("user", question));
+    return messages;
+}
+
+juce::String LocalAI::buildRequest (const juce::String& model, const juce::String& systemPrompt, const juce::String& question, const Earlier& earlier)
 {
     auto* options = new juce::DynamicObject();
     options->setProperty ("temperature", 0.2);
@@ -391,19 +482,19 @@ juce::String LocalAI::buildRequest (const juce::String& model, const juce::Strin
     auto* root = new juce::DynamicObject();
     root->setProperty ("model", model);
     root->setProperty ("stream", false);
-    root->setProperty ("messages", juce::Array<juce::var> { message ("system", systemPrompt), message ("user", question) });
+    root->setProperty ("messages", conversationMessages (systemPrompt, question, earlier));
     root->setProperty ("options", juce::var (options));
     return juce::JSON::toString (juce::var (root), true);
 }
 
-juce::String LocalAI::buildChatRequest (const juce::String& systemPrompt, const juce::String& question)
+juce::String LocalAI::buildChatRequest (const juce::String& systemPrompt, const juce::String& question, const Earlier& earlier)
 {
     auto* root = new juce::DynamicObject();
     root->setProperty ("model", kAlias);
     root->setProperty ("stream", false);
     root->setProperty ("temperature", 0.2);
     root->setProperty ("max_tokens", 320);
-    root->setProperty ("messages", juce::Array<juce::var> { message ("system", systemPrompt), message ("user", question) });
+    root->setProperty ("messages", conversationMessages (systemPrompt, question, earlier));
     return juce::JSON::toString (juce::var (root), true);
 }
 
@@ -432,9 +523,11 @@ juce::String LocalAI::parseAnswer (const juce::String& json)
 
 void LocalAI::detect()
 {
-    juce::File helper, model;
-    juce::String builtInName;
-    const bool builtIn = findInstalled (helper, model, builtInName);
+    Installed have;
+    const bool builtIn = findInstalled (have);
+    readOffer (builtIn ? &have : nullptr);
+    const auto helper = have.helper, model = have.model;
+    const auto builtInName = have.modelName;
 
     juce::String ollamaModel;
     bool ollamaEmpty = false;
@@ -457,6 +550,7 @@ void LocalAI::detect()
     status.builtIn = builtIn;
     status.available = builtIn || ollamaModel.isNotEmpty();
     status.model = builtIn ? builtInName : ollamaModel;
+    if (! builtIn) status.upgradeAvailable = false;
     if (builtIn) { status.setup = Setup::Ready; status.setupMessage.clear(); status.progress = 1.0f; }
     else if (status.setup == Setup::Ready || status.setup == Setup::Downloading) { status.setup = Setup::NotInstalled; status.setupMessage.clear(); }
     if (! status.available) status.error = ollamaEmpty ? "" : "Ollama is running but no chat model is installed.";
@@ -467,9 +561,10 @@ void LocalAI::doAsk()
     if (! getStatus().available) detect();
     juce::String model, system, question;
     bool builtIn = false;
+    Earlier earlier;
     {
         const juce::ScopedLock sl (lock);
-        model = status.model; system = pendingSystem; question = pendingQuestion; builtIn = status.builtIn;
+        model = status.model; system = pendingSystem; question = pendingQuestion; builtIn = status.builtIn; earlier = history;
     }
     juce::String answer, error;
     if (model.isEmpty()) error = "The AI tutor is not turned on. Open Settings to turn it on.";
@@ -483,7 +578,7 @@ void LocalAI::doAsk()
            #else
             const juce::String headers;       // JUCE's Linux HTTP code (tests only) corrupts a POST that has extra headers
            #endif
-            const auto url = juce::URL ("http://127.0.0.1:" + juce::String (serverPort) + "/v1/chat/completions").withPOSTData (buildChatRequest (system, question));
+            const auto url = juce::URL ("http://127.0.0.1:" + juce::String (serverPort) + "/v1/chat/completions").withPOSTData (buildChatRequest (system, question, earlier));
             if (auto in = url.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inPostData)
                                                      .withConnectionTimeoutMs (240000).withStatusCode (&code).withExtraHeaders (headers)))
                 answer = parseAnswer (in->readEntireStreamAsString());
@@ -493,7 +588,7 @@ void LocalAI::doAsk()
     else
     {
         int code = 0;
-        const auto url = juce::URL (address + "/api/chat").withPOSTData (buildRequest (model, system, question));
+        const auto url = juce::URL (address + "/api/chat").withPOSTData (buildRequest (model, system, question, earlier));
         // No extra headers: Ollama reads the body as JSON whatever the content type says (its own curl examples send none).
         auto in = url.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inPostData)
                                              .withConnectionTimeoutMs (120000).withStatusCode (&code));
@@ -501,6 +596,11 @@ void LocalAI::doAsk()
         if (answer.isEmpty()) error = "The AI tutor did not answer. Check that Ollama is still running.";
     }
     const juce::ScopedLock sl (lock);
+    if (answer.isNotEmpty())
+    {
+        history.push_back ({ question, answer });
+        if (history.size() > 2) history.erase (history.begin());
+    }
     status.busy = false; status.answer = answer; status.error = error; ++status.answerId;
 }
 }

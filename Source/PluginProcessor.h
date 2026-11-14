@@ -81,7 +81,9 @@ public:
     Updater& getUpdater() { return *updater; }
     LocalAI& getAI() { return *ai; }
     LocalSettings& getSettings() { return *settings; }
-    juce::String tutorPrompt();          // what the AI tutor is told about this track and this plugin
+    juce::String tutorPrompt (const juce::String& question);   // everything the AI tutor is told before it answers
+    juce::String tutorTrackNotes();                            // the measured part: this track and the session
+    juce::StringPairArray tutorFacts();                        // measurements turned into finished sentences for the guide notes
     const LoudnessMeter& getLoudness() const { return loudness; }                // what leaves the plugin
     const LoudnessMeter& getMixMeter() const { return mixMeter; }                // master only: the mix before the mastering stage
     const SpectrumAnalyzer& getSpectrum() const { return spectrum; }          // after the chain

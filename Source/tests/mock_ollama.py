@@ -37,7 +37,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400)
             return
         system = next((m["content"] for m in req["messages"] if m["role"] == "system"), "")
-        question = next((m["content"] for m in req["messages"] if m["role"] == "user"), "")
+        question = next((m["content"] for m in reversed(req["messages"]) if m["role"] == "user"), "")
         self._send({"model": req.get("model"), "done": True,
                     "message": {"role": "assistant",
                                 "content": "<think>checking the notes</think>**Mock answer** to: " + question + " (system prompt " + str(len(system)) + " chars)"}})

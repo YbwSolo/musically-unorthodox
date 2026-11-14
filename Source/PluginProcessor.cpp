@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "ai/TutorKnowledge.h"
 #include "PluginEditor.h"
 
 namespace mu
@@ -565,54 +566,65 @@ juce::String MUProcessor::applySuggestion (const Suggestion& s)
 }
 
 // ---- AI tutor ------------------------------------------------------------------------------------
-juce::String MUProcessor::tutorPrompt()
+juce::String MUProcessor::tutorPrompt (const juce::String& question)
 {
-    juce::String s;
-    s << "You are the tutor inside Musically Unorthodox, a mixing and mastering plugin used by music students.\n"
-         "RULES: Answer in plain English a beginner can follow, in at most 100 words, as ordinary sentences with no markdown, lists or headings. "
-         "Only recommend things this plugin can do, and always say which tab to open. Use only the numbers given under THIS TRACK and never invent numbers. "
-         "If you are not sure, say what to listen for instead.\n\n"
-         "WHERE THINGS ARE\n"
-         "Mix tab: balances the level of every track against the lead vocal and lists collisions between tracks, each with a Fix button.\n"
-         "EQ tab: every EQ move is made here. It has 8 bands, dynamic bands, and the Analyse button, which lists Mix Brain suggestions, each with an Apply button.\n"
-         "Dynamics tab: compressor (styles Clean, Punch, Smooth, Glue), gate, de-esser.\n"
-         "Tone tab: Smooth (tames harsh resonances), saturation, level rider, vocal space, stereo width, mono bass. There is no EQ on the Tone tab.\n"
-         "Master tab: loudness target and limiter, used on the stereo output.\n"
-         "Learn tab: lessons with animated examples.\n\n"
-         "FACTS TO STAY CONSISTENT WITH\n"
-         "An EQ turns one range of frequencies up or down and leaves the rest alone. "
-         "EQ words: boomy is too much below 100 Hz; muddy is too much 200 to 400 Hz; boxy is too much 400 to 800 Hz; nasal is too much around 1 kHz; "
-         "harsh is too much 2 to 5 kHz; sharp S sounds are 5 to 8 kHz; dull is too little above 8 kHz; thin is too little 100 to 250 Hz. "
-         "Cut a problem before boosting anything.\n"
-         "A compressor turns down whatever goes over the threshold, which evens out loud and quiet parts. Ratio sets how much it turns down. "
-         "Attack is NOT a delay: the compressor begins turning down the instant the sound crosses the threshold. Attack is how quickly it reaches the full turn-down. "
-         "A fast attack clamps the very start of each hit; a slow attack lets the punch of the hit through before the level has dropped. "
-         "Release is how long it takes to let the level come back up afterwards. A typical vocal gets 3 to 6 dB of reduction on the loud words. "
-         "On a vocal, start with a fast attack (1 to 10 ms) so every word stays level, and slow it down if the vocal starts to sound flat.\n"
-         "A de-esser only ever turns down. It turns down sharp S sounds between 5 and 8 kHz and goes after the compressor. "
-         "To use it, switch it on and lower its threshold until the S sounds soften. "
-         "A gate turns the track down between phrases to hide background noise. "
-         "Saturation adds harmonics, which makes a sound feel thicker and closer. "
-         "Phone and laptop speakers cannot play much below about 150 Hz, so a deep 808 or sub bass vanishes on them. "
-         "The fix for a bass or 808 that vanishes on small speakers is to switch on Saturation on the Tone tab: it adds harmonics above the note, "
-         "and small speakers can play those, so the bass is heard. Filters and bass boosts do not fix it.\n"
-         "LUFS measures how loud music sounds to a listener over time, not just its peaks. Streaming services play music at about -14 LUFS and simply turn louder songs down, "
-         "so pushing a master louder than that gains nothing. True peak should stay under -1 dB. The Master tab sets this on the stereo output. "
-         "A mix that is not mastered yet should sit near -18 LUFS with peaks under -6 dB.\n"
-         "When one track covers another (for example the beat drowning the vocal), open the Mix tab and press Fix on that collision, "
-         "or open the EQ tab, press Analyse and press Apply on that suggestion. Either one makes a small cut on the covering track only in the range where "
-         "the two clash, so the vocal comes through without the beat getting quieter overall.\n"
-         "When a Mix Brain suggestion below fits the question, point to it: tell the student to open the EQ tab, press Analyse and press Apply on that suggestion.\n\n"
-         "EXAMPLES OF GOOD ANSWERS\n"
-         "Question: What does attack do? Answer: The compressor starts turning the sound down the moment it goes over the threshold. "
-         "Attack sets how quickly it gets to the full turn-down. A fast attack clamps the start of every hit, and a slow attack lets the punch through first. "
-         "Open the Dynamics tab to try it.\n"
-         "Question: My guitar sounds boxy. Answer: Boxy means too much between 400 and 800 Hz. Open the EQ tab, add a bell band in that range and pull it down a few dB "
-         "until it clears up. Pressing Analyse there will also list anything Mix Brain can hear.\n\n"
-         "THIS TRACK\n";
+    return tutor::corePrompt() + tutor::notesFor (question, tutorFacts()) + tutorTrackNotes();
+}
 
+// The comparisons a small model gets wrong are made here, and handed over as plain sentences.
+juce::StringPairArray MUProcessor::tutorFacts()
+{
+    juce::StringPairArray facts;
+    const auto tracks = bus->collectTracks();
+    const auto plan = bus->computePlan (bus->getTargets());
+
+    juce::String balance;
+    if (tracks.size() < 2) balance = "Only one track has the plugin on it so far, so there is nothing to balance yet: put the plugin on the other tracks too.";
+    else if (! plan.usable) balance = "The balance has not been measured yet: play the loudest section of the song for a few seconds first.";
+    else
+    {
+        juce::StringArray moves;
+        for (auto& m : plan.moves)
+            if (std::abs (m.deltaDb) >= 1.0f)
+                moves.add ("\"" + m.name + "\" should come " + (m.deltaDb > 0.0f ? "up " : "down ") + juce::String (std::abs (m.deltaDb), 1) + " dB");
+        balance = moves.isEmpty() ? juce::String ("Measured just now: every track is within 1 dB of where it should sit, so the mix is balanced.")
+                                  : "Measured just now, the mix is not balanced yet: " + moves.joinIntoString (", and ") + ".";
+    }
+    facts.set ("balance", balance);
+
+    juce::String width;
+    if (getTotalNumOutputChannels() < 2) width = "This track is mono, so it cannot be too wide.";
+    else if (secondsHeard() < 3.0f) width = "The width of this track has not been measured yet: play it for a few seconds.";
+    else
+    {
+        const float c = stereo.getCorrelation();
+        width = "Measured on this track: stereo correlation is " + juce::String (c, 2) + ", which means "
+              + (c < 0.0f ? "it is too wide and parts of it will vanish in mono, so bring Stereo width down."
+                 : c < 0.4f ? "it is very wide but still survives in mono; check it in mono by ear."
+                            : "it is not too wide and it works in mono.");
+    }
+    facts.set ("width", width);
+
+    juce::String loud;
+    if (! plan.hasMaster) loud = "The loudness of the whole mix is not being measured yet: put the plugin on the stereo output and set its role to Master.";
+    else
+    {
+        const float l = plan.measuredMasterLufs;
+        loud = "Measured: the whole mix is at " + juce::String (l, 1) + " LUFS, which is "
+             + (l < -16.0f ? "quieter than the -14 LUFS that streaming services play at. That is normal for a mix that has not been mastered yet, and it is not what squashes a mix."
+                : l <= -12.0f ? "about the level streaming services play at, so it does not need to be any louder."
+                              : "louder than the -14 LUFS that streaming services play at, so they will turn it down. Pushing this hard into the limiter is what makes a mix sound squashed.");
+    }
+    facts.set ("mixloudness", loud);
+    return facts;
+}
+
+// What the tutor is told about this track and the session around it. Everything here is measured, not guessed.
+juce::String MUProcessor::tutorTrackNotes()
+{
+    juce::String s ("THIS TRACK\n");
     const auto role = getEffectiveRole();
-    s << "Kind of track: " << roleNames()[(int) role] << ". ";
+    s << "Name: \"" << getDisplayName() << "\". Kind of track: " << roleNames()[(int) role] << ". ";
     if (! isPlaying() && loudness.getIntegrated() < -70.0f) s << "Nothing has been played through it yet, so there are no measurements. ";
     else
         s << "Loudness " << juce::String (loudness.getShortTerm(), 1) << " LUFS short-term, " << juce::String (loudness.getIntegrated(), 1) << " LUFS integrated, true peak "
@@ -650,6 +662,50 @@ juce::String MUProcessor::tutorPrompt()
     {
         int n = 0;
         for (auto& f : found) s << "(" << ++n << ") " << f.title << ". Its Apply button does this: " << f.action << ". ";
+    }
+    if (currentPreset.isNotEmpty()) s << "\nPreset loaded: " << currentPreset << ". ";
+    if (getTotalNumOutputChannels() > 1 && secondsHeard() >= 3.0f)
+    {
+        const float c = stereo.getCorrelation();
+        s << "Stereo correlation " << juce::String (c, 2) << (c < 0.0f ? " (below 0: parts of this track will vanish in mono). " : c < 0.4f ? " (very wide). " : " (safe in mono). ");
+    }
+
+    // the session around it, as the Mix tab sees it
+    const auto tracks = bus->collectTracks();
+    int playing = 0;
+    for (auto& t : tracks) if (t.active) ++playing;
+    s << "\n\nTHE WHOLE SESSION (Mix tab)\n";
+    if (tracks.size() < 2) s << "This is the only track with the plugin on it, so there is nothing to balance it against yet. ";
+    else
+    {
+        s << juce::String ((int) tracks.size()) << " tracks have the plugin on them, " << playing << " playing now: ";
+        int listed = 0;
+        for (auto& t : tracks)
+        {
+            if (listed++ >= 10) break;
+            s << "\"" << t.name << "\" (" << roleNames()[(int) t.role] << (t.active ? ", " + juce::String (t.levelLufs, 1) + " LUFS" : juce::String (", silent")) << "); ";
+        }
+        const auto plan = bus->computePlan (bus->getTargets());
+        juce::StringArray moves;
+        for (auto& m : plan.moves)
+            if (std::abs (m.deltaDb) >= 1.0f)
+                moves.add ("\"" + m.name + "\" should come " + (m.deltaDb > 0.0f ? "up " : "down ") + juce::String (std::abs (m.deltaDb), 1) + " dB");
+        if (! plan.usable) s << "Balance: not enough has been measured yet; play the loudest section. ";
+        else if (moves.isEmpty()) s << "Balance: the levels are already close to where they should sit against the lead vocal. ";
+        else s << "Balance (pressing Balance now on the Mix tab does all of this): " << moves.joinIntoString ("; ") << ". ";
+        if (plan.hasMaster) s << "The whole mix measures " << juce::String (plan.measuredMasterLufs, 1) << " LUFS with a true peak of " << juce::String (plan.measuredMasterTruePeak, 1) << " dB. ";
+        const auto clashes = bus->computeMasking();
+        if (clashes.empty()) s << "Collisions: none. ";
+        else
+        {
+            s << "Collisions (each has a Fix button on the Mix tab): ";
+            int n = 0;
+            for (auto& c : clashes)
+            {
+                if (n++ >= 4) break;
+                s << "\"" << c.nameB << "\" is covering \"" << c.nameA << "\" around " << juce::String (juce::roundToInt (c.freqHz)) << " Hz; ";
+            }
+        }
     }
     return s;
 }

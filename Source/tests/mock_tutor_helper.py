@@ -42,7 +42,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/v1/chat/completions" or req.get("stream") is not False:
             self.send_error(400)
             return
-        question = next((m["content"] for m in req["messages"] if m["role"] == "user"), "")
+        question = next((m["content"] for m in reversed(req["messages"]) if m["role"] == "user"), "")
         self._send({"choices": [{"index": 0, "finish_reason": "stop",
                                  "message": {"role": "assistant",
                                              "content": "### Built-in answer\n* to: " + question + " (model " + os.path.basename(MODEL) + ", ctx " + value("-c") + ")"}}]})

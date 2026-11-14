@@ -847,8 +847,12 @@ void EQPage::askTutor()
 {
     const auto question = askBox.getText().trim();
     if (question.isEmpty() || proc.getAI().getStatus().busy) return;
+    // a follow-up ("why?") is looked up together with the question before it, so the right notes are still found
+    const bool followUp = askedQuestion.isNotEmpty() && juce::Time::currentTimeMillis() - askedAt < 10 * 60 * 1000;
+    const auto lookUp = followUp ? askedQuestion + " " + question : question;
     askedQuestion = question;
-    proc.getAI().ask (proc.tutorPrompt(), question);
+    askedAt = juce::Time::currentTimeMillis();
+    proc.getAI().ask (proc.tutorPrompt (lookUp), question, (int) (juce::pointer_sized_int) &proc);
     askButton.setButtonText ("...");
     setStatus ("The tutor is thinking. The first answer after a break takes a little longer while it wakes up.");
 }

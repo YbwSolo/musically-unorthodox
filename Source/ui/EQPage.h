@@ -62,6 +62,7 @@ private:
     AskEditor askBox;
     juce::TextButton askButton;
     juce::String askedQuestion;
+    juce::int64 askedAt = 0;
     int lastAnswerId = 0;
     bool tutorShown = false;
 };

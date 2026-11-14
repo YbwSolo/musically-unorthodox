@@ -5,6 +5,7 @@
 #include <juce_events/juce_events.h>
 #include <cstdio>
 #include "PluginProcessor.h"
+#include "ai/TutorKnowledge.h"
 #include "SyntheticStems.h"
 #include <unistd.h>
 
@@ -388,10 +389,47 @@ int main()
         const auto parsedRequest = juce::JSON::parse (request);
         check (parsedRequest.isObject() && ! (bool) parsedRequest.getProperty ("stream", true) && parsedRequest["messages"].size() == 2, "Tutor request is valid JSON with streaming off");
 
-        const auto prompt = vocal->tutorPrompt();
+        const auto prompt = vocal->tutorPrompt ("Why does my vocal sound muddy?");
+        const auto trackNotes = vocal->tutorTrackNotes();
         const auto dumpTo = juce::SystemStats::getEnvironmentVariable ("MU_DUMP_TUTOR_PROMPT", {});
-        if (dumpTo.isNotEmpty()) juce::File (dumpTo).replaceWithText (prompt);
-        check (prompt.contains ("Lead vocal") && prompt.contains ("LUFS") && prompt.length() > 600, "Tutor is told about this track", juce::String (prompt.length()) + " characters");
+        const auto facts = vocal->tutorFacts();
+        if (dumpTo.isNotEmpty())
+        {
+            juce::File (dumpTo).replaceWithText (trackNotes);
+            juce::String lines;
+            for (auto& k : facts.getAllKeys()) lines << k << "=" << facts[k] << "\n";
+            juce::File (dumpTo).getSiblingFile ("sample_tutor_facts.txt").replaceWithText (lines);
+        }
+        const auto balanceNotes = tutor::notesFor ("Is my mix balanced right now?", facts);
+        check (facts["balance"].contains ("should come") && balanceNotes.contains (facts["balance"]) && ! balanceNotes.containsChar ('{')
+               && facts["mixloudness"].contains ("LUFS") && facts["width"].contains ("correlation"),
+               "Measurements are turned into finished sentences for the tutor", facts["balance"]);
+        check (trackNotes.contains ("Lead vocal") && trackNotes.contains ("LUFS") && trackNotes.contains ("THE WHOLE SESSION") && trackNotes.contains ("tracks have the plugin"),
+               "Tutor is told about this track and the session around it", juce::String (trackNotes.length()) + " characters");
+        check (prompt.contains ("GUIDE NOTES FOR THIS QUESTION\n") && prompt.contains ("Mud is a build-up") && prompt.lastIndexOf ("GUIDE NOTES FOR THIS QUESTION\n") < prompt.lastIndexOf ("THIS TRACK\n"),
+               "Tutor is handed the guide notes that match the question");
+        {
+            // the right note must come first for the questions students actually ask
+            const std::pair<const char*, const char*> expect[] = {
+                { "Why does my vocal sound muddy?", "Muddy sound" },                 { "My S sounds are really sharp", "Sharp S sounds" },
+                { "The beat is drowning out my vocal", "Vocal gets lost in the beat" }, { "my 808 disappears on phone speakers", "Bass or 808 missing on small speakers" },
+                { "How loud should my song be for Spotify?", "How loud a finished song should be" }, { "the mix is pumping", "Pumping and over-compression" },
+                { "how do I add reverb", "Reverb and delay" },                       { "my kick and 808 are fighting", "Kick and 808 fighting" },
+                { "how do I make my drums punchier", "Punchier drums" },             { "can't hear my vocal over the beat", "Vocal gets lost in the beat" },
+                { "what should I do first, I'm a beginner", "Where to start" },      { "my adlibs are too loud", "Backing vocals and adlibs" } };
+            juce::String wrong;
+            for (auto& e : expect)
+            {
+                const auto titles = tutor::noteTitlesFor (e.first);
+                if (titles.isEmpty() || titles[0] != e.second) wrong << e.first << " -> " << (titles.isEmpty() ? juce::String ("nothing") : titles[0]) << "; ";
+            }
+            check (wrong.isEmpty(), "The guide finds the right note for common questions", wrong);
+            const auto knee = tutor::noteTitlesFor ("what does the knee do?");
+            check (knee.contains ("Knee (Dynamics tab)"), "The guide finds the plugin's own help for a named control", knee.joinIntoString (", "));
+            check (tutor::notesFor ("hello there").isEmpty() && tutor::numMixingNotes() >= 30, "The guide stays out of the way when nothing matches");
+            const auto request = LocalAI::buildChatRequest ("sys", "why?", { { "what is mud?", "Too much 200 to 400 Hz." } });
+            check (juce::JSON::parse (request)["messages"].size() == 4, "A follow-up question is sent with the exchange before it");
+        }
 
         const auto address = juce::SystemStats::getEnvironmentVariable ("MU_TEST_AI_URL", {});
         if (address.isNotEmpty())
@@ -428,6 +466,14 @@ int main()
                    && ! LocalAI::parseTutorFeed (feedText ("tutor.zip", "https://elsewhere.example/m.gguf"), tp)
                    && ! LocalAI::parseTutorFeed ("{ \"build\": 7 }", tp), "Tutor feed rejects paths, other model hosts and feeds without a tutor");
             check (LocalAI::parseAnswer ("{\"choices\":[{\"message\":{\"content\":\"### Tip\\n* Cut 300 Hz\"}}]}") == "Tip\n- Cut 300 Hz", "Built-in tutor answers are read and cleaned");
+            const juce::String two = "{ \"tutor\": { \"version\": \"t1\", \"file\": \"tutor.zip\", \"sha256\": \"" + sha + "\", \"models\": ["
+                "{ \"id\": \"light\", \"name\": \"Light\", \"url\": \"https://huggingface.co/a/l.gguf\", \"sha256\": \"" + sha + "\", \"bytes\": 2000 },"
+                "{ \"id\": \"smart\", \"name\": \"Smart\", \"url\": \"https://huggingface.co/a/s.gguf\", \"sha256\": \"" + juce::String::repeatedString ("ef", 32) + "\", \"bytes\": 3000, \"minMemoryGb\": 16, \"appleSilicon\": true } ] } }";
+            TutorPack both;
+            check (LocalAI::parseTutorFeed (two, both) && both.models.size() == 2 && both.modelName == "Light", "Tutor feed can offer a lighter and a smarter model");
+            check (LocalAI::pickModel (both.models, {}, true, 16) == 1 && LocalAI::pickModel (both.models, {}, true, 8) == 0 && LocalAI::pickModel (both.models, {}, false, 32) == 0
+                   && LocalAI::pickModel (both.models, "smart", false, 8) == 1 && LocalAI::pickModel (both.models, "light", true, 64) == 0,
+                   "The smarter model goes to Macs that can run it, and a chosen model is respected");
         }
         const juce::File helperScript (juce::SystemStats::getEnvironmentVariable ("MU_TEST_TUTOR_HELPER", {}));
         if (helperScript.existsAsFile())
@@ -499,6 +545,26 @@ int main()
                     second.refresh();
                     juce::Thread::sleep (400);
                     check (second.getStatus().available && second.getStatus().builtIn, "Other instances find the installed tutor");
+                }
+                {
+                    // the feed now names a different model: the installed tutor offers the upgrade and takes it
+                    juce::FileOutputStream out (model);
+                    out.writeText ("a newer model", false, false, nullptr);
+                }
+                writeFeed (LocalAI::sha256Of (model));
+                {
+                    LocalAI later;
+                    later.setAddressForTesting ("http://127.0.0.1:9");
+                    later.configureForTesting (feedUrl, home);
+                    later.refresh();
+                    juce::Thread::sleep (500);
+                    auto up = later.getStatus();
+                    check (up.available && up.upgradeAvailable && up.upgradeBytes == model.getSize(), "An installed tutor notices a newer model in the feed");
+                    later.installBuiltIn();
+                    up = settle (later);
+                    int models = 0;
+                    for (const auto& e : juce::RangedDirectoryIterator (home, false, "model-*", juce::File::findFiles)) { ++models; juce::ignoreUnused (e); }
+                    check (up.setup == LocalAI::Setup::Ready && ! up.upgradeAvailable && models == 1, "Upgrading swaps the model and removes the old one", up.setupMessage);
                 }
                 ai.removeBuiltIn();
                 juce::Thread::sleep (600);
