@@ -91,6 +91,25 @@ private:
 
 juce::TextButton& styleButton (juce::TextButton& b, const juce::String& text, bool primary = false, const juce::String& helpKey = {});
 
+// Preset browser for one tool: step back, the name of what is loaded (click it for the whole list), step forward.
+class PresetStrip : public juce::Component
+{
+public:
+    explicit PresetStrip (const juce::String& helpKey = {}, const juce::String& emptyText = "Presets");
+    std::function<juce::StringArray()> names;      // the list, in order
+    std::function<juce::String()> current;         // the one that is loaded; empty, or a name outside the list, is fine
+    std::function<void (int)> choose;
+    void refresh();                                // keeps the label in step; call it from the page's tick
+    void resized() override;
+
+private:
+    void step (int direction);
+    void showMenu();
+    juce::TextButton previous, name, next;
+    juce::String shown, empty;
+    bool first = true;
+};
+
 // Lays components out left to right in equal cells.
 void layoutRow (juce::Rectangle<int> area, std::initializer_list<juce::Component*> items, int gap = 6);
 

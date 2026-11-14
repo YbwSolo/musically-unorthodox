@@ -37,7 +37,9 @@ HelpEntry InfoBar::coach (int tab) const
         case 1: return { "EQ", "Cut what is wrong before boosting what is right. Press Analyse for suggestions, or double-click the display to add a band and drag it." };
         case 2: return { "Dynamics", "Watch the yellow reduction while you listen. It should move with the performance: down on loud words, back up in the gaps." };
         case 3: return { "Tone", "These are finishing tools. Switch each one off and on while the song plays; keep it only if the track sounds better in the mix, not just on its own." };
-        case 4: return { "Master", "Choose where the song is going, play the loudest section, and let the level settle. Then read the release check." };
+        case 4: return { "Tune", "Set the key first: press Find key, or type it in if the beat's name says it. Simple corrects as the song plays. Graph lets you capture a take and move each note by hand." };
+        case 5: return { "FX", "Pick a tool on the left, step through its presets with the arrows, then adjust. The Sounds button at the top loads several tools at once." };
+        case 6: return { "Master", "Choose where the song is going, play the loudest section, and let the level settle. Then read the release check." };
         default: return { "Learn", "Pick a lesson on the left. The diagrams are live: drag them, then press Try it to use the idea on your own track." };
     }
 }

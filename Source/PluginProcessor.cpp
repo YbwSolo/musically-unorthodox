@@ -30,6 +30,17 @@ MUProcessor::MUProcessor()
     pTuneOn = p (ids::tuneOn); pTuneKey = p (ids::tuneKey); pTuneScale = p (ids::tuneScale); pTuneSpeed = p (ids::tuneSpeed); pTuneAmount = p (ids::tuneAmount); pTuneVibrato = p (ids::tuneVibrato);
     pDblOn = p (ids::dblOn); pDblMix = p (ids::dblMix); pDblDetune = p (ids::dblDetune); pDblTiming = p (ids::dblTiming); pDblWidth = p (ids::dblWidth); pDblVoices = p (ids::dblVoices);
     pRvOn = p (ids::rvOn); pRvMix = p (ids::rvMix); pRvAuto = p (ids::rvAuto); pRvLength = p (ids::rvLength); pRvDecay = p (ids::rvDecay); pRvPre = p (ids::rvPre); pRvTone = p (ids::rvTone); pRvDuck = p (ids::rvDuck);
+    pRvType = p (ids::rvType); pRvLowCut = p (ids::rvLowCut); pRvWidth = p (ids::rvWidth);
+    pTuneMode = p (ids::tuneMode); pTuneHold = p (ids::tuneHold); pTuneFormant = p (ids::tuneFormant); pTuneNotes = p (ids::tuneNotes); pTrackGuard = p (ids::trackGuard);
+    pDlOn = p (ids::dlOn); pDlMix = p (ids::dlMix); pDlSync = p (ids::dlSync); pDlNote = p (ids::dlNote); pDlTime = p (ids::dlTime); pDlFeedback = p (ids::dlFeedback);
+    pDlTone = p (ids::dlTone); pDlWidth = p (ids::dlWidth); pDlDuck = p (ids::dlDuck);
+    pHmOn = p (ids::hmOn); pHmVoicing = p (ids::hmVoicing); pHmMix = p (ids::hmMix); pHmWidth = p (ids::hmWidth);
+    pPsOn = p (ids::psOn); pPsSemis = p (ids::psSemis); pPsCharacter = p (ids::psCharacter); pPsMix = p (ids::psMix);
+    pPhOn = p (ids::phOn); pPhAmount = p (ids::phAmount); pPhTone = p (ids::phTone); pPhDrive = p (ids::phDrive);
+    pLfOn = p (ids::lfOn); pLfCrush = p (ids::lfCrush); pLfWobble = p (ids::lfWobble); pLfMix = p (ids::lfMix);
+    pMdOn = p (ids::mdOn); pMdType = p (ids::mdType); pMdRate = p (ids::mdRate); pMdDepth = p (ids::mdDepth); pMdMix = p (ids::mdMix);
+    pChOn = p (ids::chOn); pChRate = p (ids::chRate); pChDepth = p (ids::chDepth); pChShape = p (ids::chShape);
+    tuner.setGraph (&graph);
 
     // A/B covers everything that shapes the sound; routing and session balance stay put.
     for (auto* param : getParameters())
@@ -37,6 +48,7 @@ MUProcessor::MUProcessor()
         {
             const auto id = ranged->getParameterID();
             if (id == ids::role || id == ids::bypass || id == ids::trim || id == ids::autoBalance || id.startsWith ("roleOff_")) continue;
+            if (id == ids::tuneKey || id == ids::tuneScale || id == ids::tuneNotes || id == ids::tuneMode) continue;      // the song's key is not an A/B choice
             abParams.push_back (ranged);
         }
 
@@ -80,7 +92,19 @@ void MUProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     tuner.prepare (sampleRate, samplesPerBlock, ch);
     doubler.prepare (sampleRate, samplesPerBlock, ch);
     reverb.prepare (sampleRate, samplesPerBlock, ch);
+    echo.prepare (sampleRate, samplesPerBlock, ch);
+    pitchFx.prepare (sampleRate, samplesPerBlock, ch);
+    phone.prepare (sampleRate, ch);
+    lofi.prepare (sampleRate, ch);
+    motion.prepare (sampleRate, ch);
+    chop.prepare (sampleRate);
+    guard.prepare (sampleRate);
+    keyFinder.prepare (sampleRate);
+    // the phone-speaker check: nothing below 350 Hz, little above 5 kHz
+    checkHp1.highPass (350.0f, 0.5412f, sampleRate); checkHp2.highPass (350.0f, 1.3066f, sampleRate); checkLp.lowPass (5000.0f, 0.707f, sampleRate);
+    checkHp1.clear(); checkHp2.clear(); checkLp.clear();
     deltaBuffer.setSize (ch, juce::jmax (64, samplesPerBlock), false, true, false);
+    cleanBuffer.setSize (ch, juce::jmax (64, samplesPerBlock), false, true, false);
     trimGain.reset (sampleRate, 0.08);
     outGain.reset (sampleRate, 0.03);
     masterTrimGain.reset (sampleRate, 0.5);
@@ -158,6 +182,7 @@ void MUProcessor::pullParameters()
     TunerSettings tn;
     tn.enabled = pTuneOn->load() > 0.5f; tn.key = (int) pTuneKey->load(); tn.scale = (int) pTuneScale->load(); tn.speedMs = pTuneSpeed->load();
     tn.amount = pTuneAmount->load() * 0.01f; tn.keepVibrato = pTuneVibrato->load() * 0.01f; tn.lowLatency = lowLatency;
+    tn.mode = (int) pTuneMode->load(); tn.hold = pTuneHold->load() * 0.01f; tn.formantSemis = pTuneFormant->load(); tn.noteMask = (int) pTuneNotes->load();
     tuner.setSettings (tn);
 
     DoublerSettings db;
@@ -168,8 +193,35 @@ void MUProcessor::pullParameters()
     ReverbSettings rv;
     rv.enabled = pRvOn->load() > 0.5f; rv.mix = pRvMix->load() * 0.01f; rv.autoTime = pRvAuto->load() > 0.5f; rv.length = (int) pRvLength->load();
     rv.decaySeconds = pRvDecay->load(); rv.preDelayMs = pRvPre->load(); rv.tone = pRvTone->load() * 0.01f; rv.duck = pRvDuck->load() * 0.01f;
+    rv.type = (int) pRvType->load(); rv.lowCutHz = pRvLowCut->load(); rv.width = pRvWidth->load() * 0.01f;
     rv.bpm = hostBpm.load (std::memory_order_relaxed);
     reverb.setSettings (rv);
+
+    EchoSettings dl;
+    dl.enabled = pDlOn->load() > 0.5f; dl.mix = pDlMix->load() * 0.01f; dl.sync = pDlSync->load() > 0.5f; dl.note = (int) pDlNote->load(); dl.timeMs = pDlTime->load();
+    dl.feedback = pDlFeedback->load() * 0.01f; dl.tone = pDlTone->load() * 0.01f; dl.width = pDlWidth->load() * 0.01f; dl.duck = pDlDuck->load() * 0.01f; dl.bpm = rv.bpm;
+    echo.setSettings (dl);
+
+    PitchFXSettings pf;
+    pf.shiftOn = pPsOn->load() > 0.5f; pf.semitones = pPsSemis->load(); pf.character = pPsCharacter->load() * 0.01f; pf.shiftMix = pPsMix->load() * 0.01f;
+    pf.harmonyOn = pHmOn->load() > 0.5f; pf.voicing = (int) pHmVoicing->load(); pf.harmonyMix = pHmMix->load() * 0.01f; pf.harmonyWidth = pHmWidth->load() * 0.01f;
+    pf.key = tn.key; pf.scale = tn.scale; pf.noteMask = tn.noteMask;
+    pitchFx.setSettings (pf);
+
+    PhoneSettings ph;
+    ph.enabled = pPhOn->load() > 0.5f; ph.amount = pPhAmount->load() * 0.01f; ph.tone = pPhTone->load() * 0.01f; ph.drive = pPhDrive->load() * 0.01f;
+    phone.setSettings (ph);
+    LoFiSettings lf;
+    lf.enabled = pLfOn->load() > 0.5f; lf.crush = pLfCrush->load() * 0.01f; lf.wobble = pLfWobble->load() * 0.01f; lf.mix = pLfMix->load() * 0.01f;
+    lofi.setSettings (lf);
+    MotionSettings md;
+    md.enabled = pMdOn->load() > 0.5f; md.type = (int) pMdType->load(); md.rateHz = pMdRate->load(); md.depth = pMdDepth->load() * 0.01f; md.mix = pMdMix->load() * 0.01f;
+    motion.setSettings (md);
+    ChopSettings cs;
+    cs.enabled = pChOn->load() > 0.5f; cs.rate = (int) pChRate->load(); cs.depth = pChDepth->load() * 0.01f; cs.shape = pChShape->load() * 0.01f; cs.bpm = rv.bpm;
+    chop.setSettings (cs);
+
+    guard.setEnabled (role != Role::Master && pTrackGuard->load() > 0.5f);
 
     maximizer.setActive (role == Role::Master && ! lowLatency);
     maximizer.setEnabled (role == Role::Master && ! lowLatency && pPeakGuard->load() > 0.5f);
@@ -189,16 +241,29 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     }
     if (n == 0) return;
 
-    // the song's tempo, for the reverb's timing
+    // the song's tempo and where the song is, for everything that keeps time with it
+    bool playing = false, haveTime = false, haveBeats = false;
+    double seconds = 0.0, quarterNotes = 0.0;
     if (auto* head = getPlayHead())
         if (auto position = head->getPosition())
+        {
             if (auto bpm = position->getBpm())
                 if (*bpm > 20.0) { hostBpm.store (*bpm, std::memory_order_relaxed); hostTempoKnown.store (true, std::memory_order_relaxed); }
+            playing = position->getIsPlaying();
+            if (auto t = position->getTimeInSeconds()) { seconds = *t; haveTime = true; }
+            else if (auto samples = position->getTimeInSamples()) { seconds = (double) *samples / juce::jmax (1.0, getSampleRate()); haveTime = true; }
+            if (auto q = position->getPpqPosition()) { quarterNotes = *q; haveBeats = true; }
+        }
+    hostPlaying.store (playing && haveTime, std::memory_order_relaxed);
+    if (haveTime) hostSeconds.store (seconds, std::memory_order_relaxed);
+    tuner.setTimeline (playing && haveTime, seconds);
+    chop.setTimeline (playing && haveBeats, quarterNotes);
 
     pullParameters();
     const bool bypassed = pBypass->load() > 0.5f;
     const bool master = getEffectiveRole() == Role::Master;
     if (editorsOpen.load (std::memory_order_relaxed) > 0) preSpectrum.pushBlock (buffer);
+    keyFinder.push (buffer.getReadPointer (0), numCh > 1 ? buffer.getReadPointer (1) : nullptr, n);
 
     auto applySmoothedGain = [&] (juce::SmoothedValue<float>& g)
     {
@@ -260,13 +325,35 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             rider.process (buffer);
             vocalSpace.setKeyLevel (bus->getVocalKeyLevel());
             vocalSpace.process (buffer);
-            doubler.process (buffer);
+            // The doubler and the harmony and shift voices all need to hear the clean, single voice to follow its
+            // pitch, so they work side by side on the same sound and their results are added together.
+            const bool pitchVoices = pPsOn->load() > 0.5f || pHmOn->load() > 0.5f;
+            if (pitchVoices && n <= cleanBuffer.getNumSamples() && numCh <= cleanBuffer.getNumChannels())
+            {
+                for (int c = 0; c < numCh; ++c) cleanBuffer.copyFrom (c, 0, buffer, c, 0, n);
+                doubler.process (buffer);                                                   // clean + doubles
+                for (int c = 0; c < numCh; ++c) buffer.addFrom (c, 0, cleanBuffer, c, 0, n, -1.0f);     // doubles only
+                juce::AudioBuffer<float> voices (cleanBuffer.getArrayOfWritePointers(), numCh, n);
+                pitchFx.process (voices);                                                   // the voice (shifted or not) + harmonies
+                for (int c = 0; c < numCh; ++c) buffer.addFrom (c, 0, cleanBuffer, c, 0, n);
+            }
+            else
+            {
+                pitchFx.process (buffer);       // off: lets it reset
+                doubler.process (buffer);
+            }
+            phone.process (buffer);
+            lofi.process (buffer);
+            motion.process (buffer);
+            chop.process (buffer);
+            echo.process (buffer);
             reverb.process (buffer);
             stereo.process (buffer);
             outGain.setTargetValue (juce::Decibels::decibelsToGain (pOut->load()));
             applySmoothedGain (outGain);
         }
 
+        guard.process (buffer);                        // tracks only: catches the odd peak before it leaves
         if (master) mixMeter.process (buffer);         // the mix as it arrives, before any mastering gain
         masterTrimGain.setTargetValue (juce::Decibels::decibelsToGain (master && ! bus->isLowLatency() ? masterTrimDb.load() : 0.0f));
         applySmoothedGain (masterTrimGain);
@@ -290,6 +377,21 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     const auto& shared = master ? mixMeter : loudness;
     bus->publish (slot, shared.getMomentary(), shared.getShortTerm(), shared.getIntegrated(),
                   shared.getTruePeakHold(), shared.getCrestFactorDb(), shared.isActive(), getEffectiveRole());
+
+    // Listening check, master only, after everything has been measured: hear the mix as it would sound in mono
+    // or on a phone speaker. Never during a bounce, so it cannot end up in the exported song.
+    const int check = master && ! isNonRealtime() ? listenCheck.load (std::memory_order_relaxed) : 0;
+    if (check != checkWas) { checkWas = check; checkHp1.clear(); checkHp2.clear(); checkLp.clear(); }
+    if (check != 0 && numCh > 1)
+    {
+        auto* l = buffer.getWritePointer (0); auto* r = buffer.getWritePointer (1);
+        for (int i = 0; i < n; ++i)
+        {
+            float m = 0.5f * (l[i] + r[i]);
+            if (check == (int) ListenCheck::Phone) m = checkLp.run (0, checkHp2.run (0, checkHp1.run (0, m)));
+            l[i] = r[i] = m;
+        }
+    }
 }
 
 void MUProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -326,11 +428,18 @@ void MUProcessor::timerCallback()
     f.highEnergyRatio = spectrum.highEnergyRatio();
     f.centroidHz = spectrum.centroidHz();
     f.crestFactorDb = loudness.getCrestFactorDb();
-    if (f.valid)
+    f.mono = getTotalNumInputChannels() == 1;
+    f.voiceTools = pTuneOn->load() > 0.5f || pHmOn->load() > 0.5f;
+    Role named;
+    if (f.valid || roleFromName (trackName, named))
     {
-        detected = detectRole (f);
+        detected = guessRole (f);
         detectedRoleAtomic.store ((int) detected.role);
     }
+
+    // a capture ends by itself when the song stops
+    if (graph.isCapturing() && captureSeen && ! hostPlaying.load()) stopCapture();
+    if (graph.isCapturing() && hostPlaying.load()) captureSeen = true;
 
     if (isMasterInstance())
     {
@@ -354,8 +463,16 @@ void MUProcessor::timerCallback()
                 // peaks, stop pushing, and back off if it is beyond 8 dB.
                 float worst = 0.0f;
                 for (int i = 0; i < 250; ++i) worst = juce::jmin (worst, maximizer.reductionHistory().get (i));
-                bool held = false;
-                if (error > 0.0f && worst < -6.0f) { error = worst < -8.0f ? juce::jmax (-3.0f, worst + 8.0f) : 0.0f; held = true; }
+                // Once it has stopped pushing it stays stopped until the limiter has clearly eased off (under 4.5 dB),
+                // so the level does not creep up and down as louder and quieter passages go by.
+                bool held = autoLevelHeld.load();
+                if (error > 0.0f)
+                {
+                    if (worst < -6.0f) held = true;
+                    else if (worst > -4.5f) held = false;
+                    if (held) error = worst < -8.0f ? juce::jmax (-3.0f, worst + 8.0f) : 0.0f;
+                }
+                else held = false;
                 autoLevelHeld.store (held);
                 if (std::abs (error) > 0.2f)
                 {
@@ -370,6 +487,18 @@ void MUProcessor::timerCallback()
     }
     else if (std::abs (masterTrimDb.load()) > 0.001f)
         masterTrimDb.store (0.0f);
+}
+
+// The name of the track says more than its sound does: someone who names a track "rap" or "808" has told us.
+RoleGuess MUProcessor::guessRole (const RoleFeatures& f) const
+{
+    Role named;
+    if (roleFromName (trackName, named))
+    {
+        // only the song's output can be the master, and a mono track cannot be a stereo beat
+        if (! (named == Role::Beat && f.mono)) return { named, 0.9f, "from the track's name" };
+    }
+    return detectRole (f);
 }
 
 BalanceTargets MUProcessor::currentTargets() const
@@ -513,14 +642,297 @@ float MUProcessor::cutDbNear (float hz) const
     return deepest;
 }
 
+SongKey MUProcessor::songKey() const
+{
+    // The music knows the key better than a single voice does, so ask the session first: a track name that states
+    // the key, or the master, the beat or an instrument that has been heard.
+    auto k = bus->findSongKey();
+    if (k.found) return k;
+    const auto role = getEffectiveRole();
+    if (role == Role::Vocal || role == Role::BackingVocal)
+    {
+        const auto g = tuner.guessKey();
+        if (g.secondsHeard >= 4.0f) { k.found = true; k.key = g.key; k.minor = g.minor; k.confidence = g.confidence; k.source = getDisplayName(); }
+    }
+    else
+    {
+        const auto g = keyFinder.estimate();
+        if (g.secondsHeard >= 6.0f) { k.found = true; k.key = g.key; k.minor = g.minor; k.confidence = g.confidence; k.source = getDisplayName(); }
+    }
+    return k;
+}
+
 juce::String MUProcessor::findKey()
 {
-    const auto g = tuner.guessKey();
-    if (g.secondsHeard < 4.0f) return "Not enough singing heard yet. Switch Tune on, play a verse or a hook, then press Find key again.";
-    setParam (ids::tuneKey, (float) g.key);
-    setParam (ids::tuneScale, g.minor ? 2.0f : 1.0f);
-    return "Set to " + Tuner::keyNames()[g.key] + (g.minor ? " minor" : " major") + " from " + juce::String (juce::roundToInt (g.secondsHeard)) + " seconds of singing"
-         + (g.confidence < 0.6f ? ". The match is loose, so check it against the key of the beat." : ".");
+    const auto k = songKey();
+    if (! k.found)
+        return "Nothing to go on yet. Play the song for ten seconds with the plugin on the beat or on the Stereo Out, then press Find key again. On a vocal alone, switch Tune on and sing a verse first.";
+    setSongKey (k.key, k.minor);
+    const bool own = k.source == getDisplayName();
+    juce::String s = "Set to " + k.text();
+    if (k.fromName) s << ", read from the name of \"" << k.source << "\".";
+    else if (own && (getEffectiveRole() == Role::Vocal || getEffectiveRole() == Role::BackingVocal)) s << ", worked out from the notes sung on this track. A beat or the master would give a surer answer.";
+    else s << ", heard on \"" << k.source << "\".";
+    if (k.note.isNotEmpty()) s << " " << k.note;
+    else if (! k.fromName && k.confidence < 0.6f) s << " The match is loose, so check it by ear.";
+    return s;
+}
+
+void MUProcessor::setSongKey (int key, bool minor)
+{
+    setParam (ids::tuneKey, (float) juce::jlimit (0, 11, key));
+    setParam (ids::tuneScale, minor ? 2.0f : 1.0f);
+}
+
+juce::String MUProcessor::sendKeyToSession()
+{
+    const int key = (int) getParam (ids::tuneKey), scale = (int) getParam (ids::tuneScale);
+    if (scale != 1 && scale != 2)
+        return "Choose Major or Minor first (or press Find key). Chromatic and the other scales are not a key that can be shared.";
+    const int total = bus->getNumInstances();
+    const int tuned = bus->sendKeyToAll (key, scale == 2);
+    return Tuner::keyNames()[key] + (scale == 2 ? " minor" : " major") + " sent to all " + juce::String (total) + (total == 1 ? " instance" : " instances") + " in this song. "
+         + (tuned == 0 ? juce::String ("None of them has Tune switched on yet; the key is waiting for when one does.")
+                       : juce::String (tuned) + (tuned == 1 ? " of them has" : " of them have") + " Tune on and now " + (tuned == 1 ? "follows" : "follow") + " it.");
+}
+
+// ---- Peaks ----------------------------------------------------------------------------------------
+float MUProcessor::getPeakOverDb() const
+{
+    if (isMasterInstance()) return 0.0f;
+    const float peak = guard.getInputPeakDb();
+    return peak > -90.0f ? juce::jmax (0.0f, peak + 1.0f) : 0.0f;
+}
+
+juce::String MUProcessor::tamePeaks()
+{
+    const float over = getPeakOverDb();
+    juce::String done;
+    if (getParam (ids::compEnabled) < 0.5f)
+    {
+        const auto note = autoCompressor();
+        if (getParam (ids::compEnabled) < 0.5f) return {};       // nothing has played yet
+        done = "Compressor switched on. " + note;
+    }
+    else
+    {
+        // already compressing: lean on it a little harder, by as much as the peaks are over (up to 6 dB)
+        const float step = juce::jlimit (1.5f, 6.0f, over);
+        setParam (ids::compThreshold, juce::jlimit (-60.0f, 0.0f, getParam (ids::compThreshold) - step));
+        setParam (ids::compRatio, juce::jlimit (1.0f, 20.0f, juce::jmax (getParam (ids::compRatio), 4.0f)));
+        done = "Compressor threshold lowered by " + juce::String (step, 1) + " dB.";
+    }
+    setParam (ids::trackGuard, 1.0f);
+    resetMeasurement();
+    return done;
+}
+
+// ---- Reverb chosen for the track ------------------------------------------------------------------
+ReverbFacts MUProcessor::reverbFacts() const
+{
+    ReverbFacts f;
+    f.role = getEffectiveRole();
+    f.bpm = hostBpm.load();
+    f.measured = secondsHeard() >= 3.0f;
+    f.crestDb = loudness.getCrestFactorDb();
+    f.highShare = spectrum.highEnergyRatio();
+    // long notes: the graph has seen notes of half a second or more, or the voice is being tuned slowly on purpose
+    int longNotes = 0, notes = 0;
+    {
+        const juce::ScopedLock sl (graphLock);
+        for (auto& n : graph.getNotes()) { ++notes; if (n.end - n.start >= 45) ++longNotes; }
+    }
+    f.sustainedNotes = (notes >= 6 && longNotes * 4 >= notes) || (f.measured && f.crestDb < 11.0f && (f.role == Role::Vocal));
+    return f;
+}
+
+juce::String MUProcessor::fitReverb()
+{
+    const auto a = adviseReverb (reverbFacts());
+    if (! a.use)
+    {
+        setParam (ids::rvOn, 0.0f);
+        return a.reason;
+    }
+    setParam (ids::rvType, (float) a.type); setParam (ids::rvAuto, 1.0f); setParam (ids::rvLength, (float) a.length);
+    setParam (ids::rvMix, a.mix); setParam (ids::rvTone, a.tone); setParam (ids::rvDuck, a.duck); setParam (ids::rvLowCut, a.lowCutHz); setParam (ids::rvWidth, a.width);
+    setParam (ids::rvOn, 1.0f);
+    apvts.state.setProperty ("preset_reverb", "Fitted to this track", nullptr);
+    return a.reason;
+}
+
+// ---- Tune graph -----------------------------------------------------------------------------------
+void MUProcessor::startCapture()
+{
+    graph.allocate();
+    setParam (ids::tuneOn, 1.0f);
+    setParam (ids::tuneMode, 1.0f);
+    captureSeen = false;
+    captureFrom = -1;
+    graph.setCapturing (true);
+}
+
+void MUProcessor::stopCapture()
+{
+    if (! graph.isCapturing()) return;
+    graph.setCapturing (false);
+    captureSeen = false;
+    const juce::ScopedLock sl (graphLock);
+    const int from = graph.passFirst(), to = graph.passLast();
+    if (to >= from) graph.segment (from, to + 1);
+}
+
+juce::String MUProcessor::correctAllNotes (float straighten01)
+{
+    const int key = (int) getParam (ids::tuneKey), scale = (int) getParam (ids::tuneScale), mask = (int) getParam (ids::tuneNotes);
+    const juce::ScopedLock sl (graphLock);
+    int moved = 0;
+    for (auto& n : graph.getNotes())
+    {
+        const float before = n.pitch;
+        n.pitch = (float) Tuner::nearestAllowed (n.sung, key, scale, mask);
+        n.straighten = juce::jmax (n.straighten, juce::jlimit (0.0f, 1.0f, straighten01));
+        if (std::abs (n.pitch - before) > 0.005f) ++moved;
+    }
+    graph.rasterise();
+    if (graph.getNotes().empty()) return "No notes yet. Press Capture and play the part of the song you want to tune.";
+    return juce::String ((int) graph.getNotes().size()) + " notes put on the nearest note of " + Tuner::keyNames()[key] + " " + Tuner::scaleNames()[scale].toLowerCase()
+         + ". Play it back; drag any note that landed on the wrong pitch.";
+}
+
+void MUProcessor::resetAllNotes()
+{
+    const juce::ScopedLock sl (graphLock);
+    for (auto& n : graph.getNotes()) { n.pitch = n.sung; n.straighten = 0.0f; }
+    graph.rasterise();
+}
+
+void MUProcessor::clearGraph()
+{
+    graph.setCapturing (false);
+    const juce::ScopedLock sl (graphLock);
+    graph.clear();
+}
+
+// ---- Presets for one tool, and complete sounds ----------------------------------------------------
+juce::String MUProcessor::getModulePresetName (const juce::String& module) const
+{
+    return apvts.state.getProperty ("preset_" + module, juce::String()).toString();
+}
+
+juce::String MUProcessor::applyModulePreset (int index)
+{
+    const auto& all = modulePresets();
+    if (index < 0 || index >= (int) all.size()) return {};
+    const auto& p = all[(size_t) index];
+    bool rootOnly = false;
+    for (auto& v : p.values)
+    {
+        if (v.id == kRootOnly) { rootOnly = true; continue; }
+        setParam (v.id, v.value);
+    }
+    if (p.module == "tune")
+    {
+        // The robot allows a single note. Any other Tune preset arriving after it gives the scale back.
+        const int mask = (int) getParam (ids::tuneNotes);
+        const bool single = (int) getParam (ids::tuneScale) == Tuner::kCustomScale && mask != 0 && (mask & (mask - 1)) == 0;
+        if (rootOnly)
+        {
+            if (! single) apvts.state.setProperty ("scaleBeforeRobot", (int) getParam (ids::tuneScale), nullptr);
+            setParam (ids::tuneNotes, (float) (1 << (int) getParam (ids::tuneKey)));
+            setParam (ids::tuneScale, (float) Tuner::kCustomScale);
+        }
+        else if (single) setParam (ids::tuneScale, (float) juce::jlimit (0, 4, (int) apvts.state.getProperty ("scaleBeforeRobot", 2)));
+    }
+    apvts.state.setProperty ("preset_" + p.module, p.name, nullptr);
+    return p.name + ": " + p.blurb;
+}
+
+juce::String MUProcessor::applySound (int index)
+{
+    const auto& all = soundPresets();
+    if (index < 0 || index >= (int) all.size()) return {};
+    const auto& sound = all[(size_t) index];
+    for (auto& m : fxModules()) { setParam (m.onParam, 0.0f); apvts.state.removeProperty ("preset_" + m.id, nullptr); }
+    for (auto& v : sound.values)
+    {
+        if (v.id == kRootOnly)
+        {
+            apvts.state.setProperty ("scaleBeforeRobot", (int) getParam (ids::tuneScale), nullptr);
+            setParam (ids::tuneNotes, (float) (1 << (int) getParam (ids::tuneKey)));
+            setParam (ids::tuneScale, (float) Tuner::kCustomScale);
+            continue;
+        }
+        setParam (v.id, v.value);
+    }
+    apvts.state.setProperty ("soundName", sound.name, nullptr);
+    return sound.name + ": " + sound.blurb;
+}
+
+// ---- Bounce check ---------------------------------------------------------------------------------
+std::vector<CheckItem> MUProcessor::bounceCheck()
+{
+    std::vector<CheckItem> out;
+    auto add = [&out] (CheckItem::State st, const juce::String& title, const juce::String& detail) { out.push_back ({ st, title, detail }); };
+    const auto tracks = bus->collectTracks();
+    const auto targets = isMasterInstance() ? currentTargets() : bus->getTargets();
+    const TrackInfo* master = nullptr;
+    int playing = 0;
+    for (auto& t : tracks) { if (t.role == Role::Master) master = &t; else if (t.active) ++playing; }
+
+    if (master == nullptr)
+        add (CheckItem::Problem, "No master", "Put the plugin on the Stereo Out and set its role to Master. Without it the loudness and peaks of the finished mix cannot be measured.");
+    else if (master->levelLufs < -70.0f)
+        add (CheckItem::Info, "Nothing measured yet", "Play the song from start to finish, or at least its loudest section, then look again.");
+    else
+    {
+        // the finished level is read after the master's own limiter when this instance is the master
+        const float loud = isMasterInstance() ? loudness.getIntegrated() : master->levelLufs;
+        const float want = isMasterInstance() ? getParam (ids::targetLufs) : targets.masterLufs;
+        const float diff = loud - want;
+        if (std::abs (diff) <= 1.0f) add (CheckItem::Good, "Loudness", juce::String (loud, 1) + " LUFS, on the target of " + juce::String (want, 1) + ".");
+        else add (CheckItem::Warn, "Loudness", juce::String (loud, 1) + " LUFS is " + juce::String (std::abs (diff), 1) + (diff > 0.0f ? " above" : " below") + " the target of " + juce::String (want, 1)
+                  + ". " + (isMasterInstance() ? "Let the Master tab's auto level settle, or pick the target you want there." : "Open the plugin on the Stereo Out and check the Master tab."));
+
+        const float peak = isMasterInstance() ? loudness.getTruePeakHold() : master->truePeakDb;
+        const float ceiling = isMasterInstance() ? getParam (ids::targetTruePeak) : targets.masterTruePeak;
+        if (peak > -0.05f) add (CheckItem::Problem, "Peaks", "The mix reached " + juce::String (peak, 1) + " dB true peak: it is clipping. Switch the limiter on in the Master tab, or bring the tracks down with Learn and balance.");
+        else if (peak > ceiling + 0.3f) add (CheckItem::Warn, "Peaks", "Highest peak " + juce::String (peak, 1) + " dB, above the ceiling of " + juce::String (ceiling, 1) + ".");
+        else add (CheckItem::Good, "Peaks", "Highest peak " + juce::String (peak, 1) + " dB true peak, under the ceiling.");
+
+        const float corr = bus->getMasterCorrelation();
+        if (corr < 0.0f) add (CheckItem::Problem, "Mono", "Stereo correlation " + juce::String (corr, 2) + ": parts of the mix cancel out in mono. Narrow the widest tracks (Tone tab, Stereo width) and check with the Mono listening check.");
+        else if (corr < 0.3f) add (CheckItem::Warn, "Mono", "Stereo correlation " + juce::String (corr, 2) + ": very wide. Listen with the Mono check on the Master tab to make sure nothing important disappears.");
+        else add (CheckItem::Good, "Mono", "The mix holds up in mono (correlation " + juce::String (corr, 2) + ").");
+    }
+
+    const auto hot = bus->findHotPeaks();
+    if (hot.empty()) { if (playing > 0) add (CheckItem::Good, "Track peaks", "No track is hitting the top."); }
+    else
+    {
+        juce::StringArray names;
+        for (auto& h : hot) names.add ("\"" + h.name + "\" (" + juce::String (h.overDb, 1) + " dB over)");
+        add (CheckItem::Warn, "Track peaks", names.joinIntoString (", ") + (hot.size() == 1 ? " is" : " are") + " leaning on the peak guard. Press Fix beside each one on this page.");
+    }
+
+    const auto plan = bus->computePlan (targets);
+    if (plan.usable && playing >= 2)
+    {
+        juce::StringArray moves;
+        for (auto& m : plan.moves) if (std::abs (m.deltaDb) >= 1.5f) moves.add ("\"" + m.name + "\" " + (m.deltaDb > 0.0f ? "up " : "down ") + juce::String (std::abs (m.deltaDb), 1) + " dB");
+        if (moves.isEmpty()) add (CheckItem::Good, "Balance", "Every track is within 1.5 dB of where its role should sit.");
+        else add (CheckItem::Warn, "Balance", "Off balance: " + moves.joinIntoString (", ") + ". Press Balance now, or leave it if you set these by ear.");
+    }
+    const auto clashes = bus->computeMasking();
+    if (playing >= 2)
+    {
+        if (clashes.empty()) add (CheckItem::Good, "Collisions", "No track is covering another.");
+        else add (CheckItem::Warn, "Collisions", juce::String ((int) clashes.size()) + (clashes.size() == 1 ? " place" : " places") + " where one track covers another. Each has a Fix button below.");
+    }
+
+    if (bus->isLowLatency()) add (CheckItem::Problem, "Low latency is on", "Recording mode switches the master limiter off and loosens Tune. Turn it off in Settings before you bounce.");
+    if (getListenCheck() != ListenCheck::Off) add (CheckItem::Info, "Listening check is on", "It is left out of a bounce automatically, but switch it off so you are hearing the real mix.");
+    return out;
 }
 
 // ---- A/B -----------------------------------------------------------------------------------------
@@ -729,7 +1141,14 @@ juce::String MUProcessor::tutorTrackNotes()
     if (getParam (ids::tuneOn) > 0.5f)
         on.add ("Tune (" + Tuner::keyNames()[(int) getParam (ids::tuneKey)] + " " + Tuner::scaleNames()[(int) getParam (ids::tuneScale)].toLowerCase() + ", speed " + getParamText (ids::tuneSpeed) + ")");
     if (getParam (ids::dblOn) > 0.5f) on.add (getParam (ids::dblVoices) > 0.5f ? "doubler (stack)" : "doubler");
-    if (getParam (ids::rvOn) > 0.5f) on.add ("reverb (" + juce::String (reverb.currentDecaySeconds(), 1) + " s)");
+    if (getParam (ids::dlOn) > 0.5f) on.add ("delay (" + juce::String (juce::roundToInt (echo.currentTimeMs())) + " ms)");
+    if (getParam (ids::rvOn) > 0.5f) on.add (Reverb::typeNames()[(int) getParam (ids::rvType)].toLowerCase() + " reverb (" + juce::String (reverb.currentDecaySeconds(), 1) + " s)");
+    if (getParam (ids::hmOn) > 0.5f) on.add ("harmony (" + PitchFX::voicingNames()[(int) getParam (ids::hmVoicing)].toLowerCase() + ")");
+    if (getParam (ids::psOn) > 0.5f) on.add ("shift (" + getParamText (ids::psSemis) + ")");
+    if (getParam (ids::phOn) > 0.5f) on.add ("phone effect");
+    if (getParam (ids::lfOn) > 0.5f) on.add ("lo-fi");
+    if (getParam (ids::mdOn) > 0.5f) on.add (juce::StringArray { "chorus", "flanger", "phaser" }[(int) getParam (ids::mdType)]);
+    if (getParam (ids::chOn) > 0.5f) on.add ("chop");
     if (role == Role::Master && getParam (ids::peakGuard) > 0.5f) on.add ("limiter");
     s << "Also switched on: " << (on.isEmpty() ? juce::String ("nothing") : on.joinIntoString (", ")) << ". ";
 
@@ -1033,6 +1452,12 @@ void MUProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("uiTab", currentTab.load(), nullptr);
     state.setProperty ("chainPresetName", currentPreset, nullptr);
     state.setProperty ("version", MU_VERSION_STRING, nullptr);
+    state.setProperty ("uiTabs", 8, nullptr);
+    {
+        const juce::ScopedLock sl (graphLock);
+        const auto notes = graph.toString();
+        if (notes.isNotEmpty()) state.setProperty ("tuneGraph", notes, nullptr); else state.removeProperty ("tuneGraph", nullptr);
+    }
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
 }
 
@@ -1045,7 +1470,15 @@ void MUProcessor::setStateInformation (const void* data, int sizeInBytes)
             auto tree = juce::ValueTree::fromXml (*xml);
             apvts.replaceState (tree);
             autoBalanceMode = (bool) tree.getProperty ("autoBalanceMode", false);
-            currentTab.store (juce::jlimit (0, 5, (int) tree.getProperty ("uiTab", 0)));
+            // songs saved before Tune had its own tab counted the tabs differently
+            int savedTab = (int) tree.getProperty ("uiTab", 0);
+            if ((int) tree.getProperty ("uiTabs", 7) < 8 && savedTab >= 4) ++savedTab;
+            currentTab.store (juce::jlimit (0, 7, savedTab));
+            {
+                const juce::ScopedLock sl (graphLock);
+                const auto notes = tree.getProperty ("tuneGraph", juce::String()).toString();
+                if (notes.isNotEmpty()) graph.fromString (notes); else graph.clear();
+            }
             currentPreset = tree.getProperty ("chainPresetName", juce::String()).toString();
             abStates[0].clear(); abStates[1].clear(); abSlot = 0;
         }

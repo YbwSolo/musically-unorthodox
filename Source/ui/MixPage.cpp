@@ -19,21 +19,49 @@ MixPage::MixPage (MUProcessor& p, std::function<void (const juce::String&)> stat
     balanceButton.onClick = [this]
     {
         proc.balanceNow();
-        setStatus (plan.usable ? "Balanced. " + plan.summary : juce::String ("Nothing to balance yet. Play the song so every track can be measured."));
+        setStatus (plan.usable ? "Balanced. " + plan.summary.replace ("Balanced. ", "") : juce::String ("Nothing to balance yet. Play the song so every track can be measured."));
+    };
+    styleButton (bounceButton, "Bounce check", false, "mix.check");
+    bounceButton.onClick = [this]
+    {
+        showCheck = ! showCheck;
+        checkTimer = 0.0f;
+        bounceButton.setButtonText (showCheck ? "Back to tracks" : "Bounce check");
+        if (showCheck) setStatus ("Bounce check: what to put right before you export the song. It reads the whole session, so play the song through first.");
+        refreshData();
+    };
+    styleButton (keyButton, "Set on all tracks", false, "mix.key");
+    keyButton.onClick = [this]
+    {
+        if (! songKey.found) { setStatus ("The key is not known yet. Play the song with the plugin on the beat or the Stereo Out, or name the beat's track with its key (for example \"beat Gmin\")."); return; }
+        const int total = proc.getBus().getNumInstances();
+        const int tuned = proc.getBus().sendKeyToAll (songKey.key, songKey.minor);
+        setStatus (songKey.text() + " set on all " + juce::String (total) + (total == 1 ? " instance. " : " instances. ")
+                   + (tuned == 0 ? juce::String ("None has Tune on yet; the key is ready for when one does.") : juce::String (tuned) + (tuned == 1 ? " has Tune on and now follows it." : " have Tune on and now follow it.")));
     };
     keepBalanced.setButtonText ("Keep balanced");
     keepBalanced.setWantsKeyboardFocus (false);
     keepBalanced.setToggleState (proc.getBus().isAutoBalance(), juce::dontSendNotification);
     keepBalanced.onClick = [this] { proc.setAutoBalanceMode (keepBalanced.getToggleState()); proc.getBus().setAutoBalance (keepBalanced.getToggleState(), proc.currentTargets()); };
     setHelp (keepBalanced, "mix.auto");
-    for (auto* c : std::initializer_list<juce::Component*> { &learnButton, &balanceButton, &keepBalanced }) addAndMakeVisible (c);
+    for (auto* c : std::initializer_list<juce::Component*> { &learnButton, &balanceButton, &keepBalanced, &bounceButton, &keyButton }) addAndMakeVisible (c);
     for (size_t i = 0; i < fixButtons.size(); ++i)
     {
         styleButton (fixButtons[i], "Fix", true, "mix.collisions");
         fixButtons[i].onClick = [this, i]
         {
-            if (i >= clashes.size()) return;
-            const auto c = clashes[i];
+            if (i >= fixes.size()) return;
+            if (fixes[i].peaks)
+            {
+                const auto h = fixes[i].hot;
+                const auto done = proc.getBus().tamePeaks (h.slot);
+                fixedNote = done.isEmpty() ? "Play \"" + h.name + "\" first so it can be measured." : "\"" + h.name + "\": " + done + " Its settings are on that track's Dynamics tab.";
+                fixedShow = 9.0f;
+                setStatus (fixedNote);
+                refreshData();
+                return;
+            }
+            const auto c = fixes[i].clash;
             proc.getBus().applyMaskingClash (c);
             fixedNote = "Fixed: \"" + c.nameB + "\" now dips up to " + juce::String (std::abs (juce::jlimit (-6.0f, -1.5f, c.suggestedCutDb)), 1) + " dB around " + hzString (c.freqHz)
                       + " while it is loud there. The cut is on that track's EQ tab.";
@@ -53,6 +81,12 @@ void MixPage::refreshData()
     plan = bus.getLastPlan();
     clashes = bus.computeMasking();
     if (clashes.size() > 4) clashes.resize (4);
+    // what there is to fix: tracks whose peaks are too hot first, then the collisions; four at most
+    fixes.clear();
+    for (auto& h : bus.findHotPeaks()) { if (fixes.size() >= 2) break; Fix f; f.peaks = true; f.hot = h; fixes.push_back (f); }
+    for (auto& c : clashes) { if (fixes.size() >= 4) break; Fix f; f.clash = c; fixes.push_back (f); }
+    songKey = bus.findSongKey();
+    if (showCheck) checkItems = proc.bounceCheck();
     learn = bus.getLearnState();
 
     hasMaster = false;
@@ -83,7 +117,7 @@ void MixPage::refreshData()
     // added together), so the dial moves with the music instead of showing a fixed forecast.
     if (! hasMaster) { liveLufs = livePower > 0.0 ? (float) (10.0 * std::log10 (livePower)) : -100.0f; mixLufs = liveLufs; }
 
-    for (size_t i = 0; i < fixButtons.size(); ++i) fixButtons[i].setVisible (i < clashes.size());
+    for (size_t i = 0; i < fixButtons.size(); ++i) fixButtons[i].setVisible (i < fixes.size());
     learnButton.setButtonText (learn.active ? "Stop listening" : "Learn and balance");
     resized();
 }
@@ -91,7 +125,14 @@ void MixPage::refreshData()
 void MixPage::tick (float dt)
 {
     refreshTimer -= dt;
-    if (refreshTimer <= 0.0f) { refreshTimer = 0.25f; refreshData(); }
+    if (refreshTimer <= 0.0f)
+    {
+        refreshTimer = 0.25f;
+        // anything the session did on its own (a follow-up to a Fix) is said out loud
+        const auto notice = proc.getBus().takeNotice();
+        if (notice.isNotEmpty()) { fixedNote = notice; fixedShow = 10.0f; setStatus (notice); }
+        refreshData();
+    }
 
     const bool playing = proc.isPlaying();
     for (auto& lane : lanes)
@@ -142,17 +183,20 @@ void MixPage::drawDial (juce::Graphics& g, juce::Rectangle<float> area)
     g.strokePath (track, juce::PathStrokeType (10.0f, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
     // the window to aim for: one LU either side of the target
     juce::Path window;
-    window.addCentredArc (c.x, c.y, radius, radius, 0.0f, angleFor (targetLufs - 1.0f), angleFor (targetLufs + 1.0f), true);
+    window.addCentredArc (c.x, c.y, radius, radius, 0.0f, angleFor (targetLufs - (hasMaster ? 1.0f : 2.5f)), angleFor (targetLufs + (hasMaster ? 1.0f : 2.5f)), true);
     g.setColour (yellow.withAlpha (0.28f));
     g.strokePath (window, juce::PathStrokeType (10.0f));
 
     const bool measured = mixLufs > -70.0f;
-    const bool onTarget = measured && std::abs (mixLufs - targetLufs) <= 1.0f;
+    // Without a master the reading is the last three seconds of the tracks added together, which rises and falls
+    // with the song, so it is judged more loosely than a true whole-song measurement.
+    const float tolerance = hasMaster ? 1.0f : 2.5f;
+    const bool onTarget = measured && std::abs (mixLufs - targetLufs) <= tolerance;
     if (measured)
     {
         juce::Path value;
         value.addCentredArc (c.x, c.y, radius, radius, 0.0f, a0, angleFor (dialValue), true);
-        g.setColour (mixLufs > targetLufs + 1.0f ? over : (onTarget ? yellow : text));
+        g.setColour (mixLufs > targetLufs + (hasMaster ? 1.0f : 4.0f) ? over : (onTarget ? yellow : text));
         g.strokePath (value, juce::PathStrokeType (10.0f, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
     }
     // target tick
@@ -191,7 +235,19 @@ void MixPage::drawLanes (juce::Graphics& g)
     g.setFont (bodyBold (13.0f)); g.setColour (text);
     g.drawText ("Session", head.removeFromLeft (70), juce::Justification::centredLeft);
     g.setFont (body (12.0f)); g.setColour (textMute);
-    g.drawText (juce::String ((int) lanes.size()) + (lanes.size() == 1 ? " track" : " tracks") + (hasMaster ? " and the master" : ", no master yet"), head, juce::Justification::centredLeft);
+    g.drawText (juce::String ((int) lanes.size()) + (lanes.size() == 1 ? " track" : " tracks") + (hasMaster ? " and the master" : ", no master yet"), head.removeFromLeft (190), juce::Justification::centredLeft);
+    // the key of the song, and where that came from
+    head.removeFromRight (keyButton.getWidth() + 10);
+    g.setFont (bodyBold (12.5f)); g.setColour (songKey.found ? yellow : textMute);
+    const juce::String keyText = songKey.found ? "Song key: " + songKey.text() : juce::String ("Song key: not known yet");
+    const int keyW = juce::roundToInt (bodyBold (12.5f).getStringWidthFloat (keyText)) + 10;
+    g.drawText (keyText, head.removeFromRight (keyW), juce::Justification::centredRight);
+    if (songKey.found)
+    {
+        g.setFont (body (11.5f)); g.setColour (textMute);
+        g.drawText ((songKey.fromName ? "from the name of \"" : "heard on \"") + songKey.source + "\"", head, juce::Justification::centredRight, true);
+    }
+    if (showCheck) { drawBounceCheck (g); return; }
 
     if (lanes.empty())
     {
@@ -290,6 +346,13 @@ void MixPage::drawLanes (juce::Graphics& g)
             g.setColour ((lane.info.active ? text : textMute).withAlpha (0.9f * alpha));
             g.fillRoundedRectangle (bar.withRight (xFor (lane.level)), 3.0f);
         }
+        for (auto& f : fixes)
+            if (f.peaks && f.hot.slot == lane.info.slot)
+            {
+                // this track's loud moments are hitting the top
+                g.setColour (over);
+                g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ bar.getRight() - 5.0f, bar.getCentreY() }));
+            }
         if (lane.info.active && plan.usable && ! locked)
         {
             const float targetX = xFor (lane.info.levelLufs + lane.move), nowX = xFor (lane.level);
@@ -321,34 +384,76 @@ void MixPage::drawCollisions (juce::Graphics& g)
     fillPanel (g, collisionArea.toFloat());
     auto r = collisionArea.reduced (14, 0);
     auto head = r.removeFromTop (38);
-    icons::draw (g, "collision", head.removeFromLeft (20).toFloat().reduced (1.0f), clashes.empty() ? textDim : yellow);
+    icons::draw (g, "collision", head.removeFromLeft (20).toFloat().reduced (1.0f), fixes.empty() ? textDim : yellow);
     head.removeFromLeft (8);
     g.setFont (bodyBold (13.0f)); g.setColour (text);
-    g.drawText ("Collisions", head.removeFromLeft (80), juce::Justification::centredLeft);
+    g.drawText ("To fix", head.removeFromLeft (54), juce::Justification::centredLeft);
     g.setFont (body (12.0f)); g.setColour (textMute);
-    g.drawText (clashes.empty() ? juce::String() : juce::String ((int) clashes.size()) + " found, most serious first", head.removeFromLeft (190), juce::Justification::centredLeft);
-    if (fixedShow > 0.0f && ! clashes.empty()) { g.setColour (yellow); g.drawText (fixedNote, head, juce::Justification::centredRight, true); }
+    g.drawText (fixes.empty() ? juce::String() : juce::String ((int) fixes.size()) + " found: hot peaks first, then collisions", head.removeFromLeft (260), juce::Justification::centredLeft);
+    if (fixedShow > 0.0f && ! fixes.empty()) { g.setColour (yellow); g.drawText (fixedNote, head, juce::Justification::centredRight, true); }
 
-    if (clashes.empty())
+    if (fixes.empty())
     {
         g.setFont (body (12.5f)); g.setColour (fixedShow > 0.0f ? yellow : textDim);
         if (fixedShow > 0.0f) { g.drawText (fixedNote, r.removeFromTop (22), juce::Justification::centredLeft, true); return; }
-        g.drawText (lanes.size() < 2 ? "Collisions show up once two or more tracks are playing." : "No collisions. Every track has room where it matters.", r.removeFromTop (22), juce::Justification::centredLeft);
+        g.drawText (lanes.size() < 2 ? "Nothing to fix. Collisions show up once two or more tracks are playing." : "Nothing to fix. No track is hitting the top and every track has room where it matters.", r.removeFromTop (22), juce::Justification::centredLeft);
         return;
     }
-    const int rowH = juce::jmin (34, r.getHeight() / (int) clashes.size());
-    for (size_t i = 0; i < clashes.size(); ++i)
+    const int rowH = juce::jmin (34, r.getHeight() / (int) fixes.size());
+    for (size_t i = 0; i < fixes.size(); ++i)
     {
-        const auto& c = clashes[i];
+        const auto& f = fixes[i];
         auto row = r.removeFromTop (rowH);
         if (i > 0) { g.setColour (line); g.fillRect (row.getX(), row.getY(), row.getWidth(), 1); }
         row.removeFromRight (70);
-        g.setFont (bodyBold (12.5f)); g.setColour (text);
-        const juce::String what = "\"" + c.nameB + "\" is covering \"" + c.nameA + "\" around " + hzString (c.freqHz);
+        juce::String what, how;
+        if (f.peaks)
+        {
+            what = "\"" + f.hot.name + "\" peaks " + juce::String (f.hot.overDb, 1) + " dB over the top";
+            how = (f.hot.crestDb > 0.5f ? "Its loud moments are " + juce::String (juce::roundToInt (f.hot.crestDb)) + " dB above its average. " : juce::String())
+                + (f.hot.compressorOn ? "Fix: lean on its compressor a little harder" : "Fix: switch on its compressor, fitted to its level");
+        }
+        else
+        {
+            what = "\"" + f.clash.nameB + "\" is covering \"" + f.clash.nameA + "\" around " + hzString (f.clash.freqHz);
+            how = "Fix: dynamic cut of " + juce::String (f.clash.suggestedCutDb, 1) + " dB on \"" + f.clash.nameB + "\"";
+        }
+        g.setFont (bodyBold (12.5f)); g.setColour (f.peaks ? over.brighter (0.25f) : text);
         const int w = juce::jmin (row.getWidth() / 2 + 60, juce::roundToInt (bodyBold (12.5f).getStringWidthFloat (what)) + 16);
         g.drawText (what, row.removeFromLeft (w), juce::Justification::centredLeft, true);
         g.setFont (body (12.0f)); g.setColour (textDim);
-        g.drawText ("Fix: dynamic cut of " + juce::String (c.suggestedCutDb, 1) + " dB on \"" + c.nameB + "\"", row, juce::Justification::centredLeft, true);
+        g.drawText (how, row, juce::Justification::centredLeft, true);
+    }
+}
+
+// ---- bounce check ----------------------------------------------------------------------------------
+void MixPage::drawBounceCheck (juce::Graphics& g)
+{
+    auto r = lanesArea.reduced (14, 0);
+    r.removeFromTop (38);
+    g.setFont (headline (22.0f)); g.setColour (text);
+    g.drawText ("READY TO BOUNCE?", r.removeFromTop (30), juce::Justification::centredLeft);
+    int problems = 0, warnings = 0;
+    for (auto& c : checkItems) { if (c.state == CheckItem::Problem) ++problems; if (c.state == CheckItem::Warn) ++warnings; }
+    g.setFont (body (12.5f)); g.setColour (problems > 0 ? over.brighter (0.25f) : warnings > 0 ? yellow : textDim);
+    g.drawText (problems > 0 ? juce::String (problems) + (problems == 1 ? " thing has" : " things have") + " to be put right first."
+                : warnings > 0 ? juce::String (warnings) + (warnings == 1 ? " thing is" : " things are") + " worth a look, then it is ready."
+                               : juce::String ("Nothing stands in the way. Bounce it, then listen on a phone and in a car."), r.removeFromTop (20), juce::Justification::centredLeft);
+    r.removeFromTop (8);
+    for (auto& c : checkItems)
+    {
+        const float textW = (float) r.getWidth() - 150.0f;
+        const int h = juce::jmax (30, (int) wrappedHeight (c.detail, textW, body (12.0f)) + 14);
+        if (r.getHeight() < h) break;
+        auto row = r.removeFromTop (h);
+        g.setColour (line); g.fillRect (row.getX(), row.getY(), row.getWidth(), 1);
+        const auto colour = c.state == CheckItem::Problem ? over : c.state == CheckItem::Warn ? yellow : c.state == CheckItem::Good ? text : textMute;
+        auto mark = row.removeFromLeft (22).toFloat();
+        if (c.state == CheckItem::Good) { g.setColour (text); g.drawEllipse (mark.withSizeKeepingCentre (10.0f, 10.0f).withY ((float) row.getY() + 10.0f), 1.5f); }
+        else { g.setColour (colour); g.fillEllipse (mark.withSizeKeepingCentre (10.0f, 10.0f).withY ((float) row.getY() + 10.0f)); }
+        g.setFont (bodyBold (12.5f)); g.setColour (c.state == CheckItem::Good ? textDim : colour.brighter (c.state == CheckItem::Problem ? 0.25f : 0.0f));
+        g.drawText (c.title, row.removeFromLeft (128).withHeight (30), juce::Justification::centredLeft, true);
+        drawWrapped (g, c.detail, row.toFloat().withTrimmedTop (7.0f), body (12.0f), c.state == CheckItem::Good ? textMute : textDim);
     }
 }
 
@@ -385,18 +490,22 @@ void MixPage::resized()
     a.removeFromTop (14);
     learnButton.setBounds (a.removeFromTop (36));
     a.removeFromTop (8 + 4 + 8);
-    balanceButton.setBounds (a.removeFromTop (28));
+    auto pair = a.removeFromTop (28);
+    balanceButton.setBounds (pair.removeFromLeft ((pair.getWidth() - 8) / 2));
+    pair.removeFromLeft (8);
+    bounceButton.setBounds (pair);
     a.removeFromTop (10);
     keepBalanced.setBounds (a.removeFromTop (22));
 
-    const int collisionH = 38 + juce::jmax (1, (int) clashes.size()) * 34 + 10;
+    const int collisionH = 38 + juce::jmax (1, (int) fixes.size()) * 34 + 10;
     collisionArea = r.removeFromBottom (collisionH);
     r.removeFromBottom (10);
     lanesArea = r;
+    keyButton.setBounds (lanesArea.getRight() - 14 - 128, lanesArea.getY() + 8, 128, 22);
 
     auto c = collisionArea.reduced (14, 0);
     c.removeFromTop (38);
-    for (size_t i = 0; i < clashes.size() && i < fixButtons.size(); ++i)
+    for (size_t i = 0; i < fixes.size() && i < fixButtons.size(); ++i)
     {
         auto row = c.removeFromTop (34);
         fixButtons[i].setBounds (row.removeFromRight (60).withSizeKeepingCentre (60, 24));
@@ -405,6 +514,7 @@ void MixPage::resized()
 
 void MixPage::mouseDown (const juce::MouseEvent& e)
 {
+    if (showCheck) return;
     for (auto& lane : lanes)
         if (lane.bounds.contains (e.getPosition()) && lane.lockArea.expanded (40, 0).contains (e.getPosition()))
         {
@@ -420,6 +530,7 @@ void MixPage::mouseMove (const juce::MouseEvent& e)
     juce::String key = "mix.lanes";
     if (dialArea.contains (e.getPosition())) key = "mix.dial";
     else if (collisionArea.contains (e.getPosition())) key = "mix.collisions";
+    else if (showCheck && lanesArea.contains (e.getPosition())) key = "mix.check";
     else for (auto& lane : lanes) if (lane.bounds.contains (e.getPosition()) && lane.lockArea.expanded (40, 0).contains (e.getPosition())) key = "mix.lock";
     getProperties().set ("help", key);
 }

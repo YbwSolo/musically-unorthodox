@@ -1,5 +1,6 @@
 #include "SessionBus.h"
 #include <cmath>
+#include <algorithm>
 
 namespace mu
 {
@@ -167,6 +168,136 @@ void SessionBus::applyMaskingClash (const MaskingClash& c)
     if (s.used.load() && s.client != nullptr) s.client->applyMaskingCut (c.freqHz, c.suggestedCutDb);
 }
 
+SongKey SessionBus::findSongKey() const
+{
+    const juce::ScopedLock sl (lock);
+    SongKey best;
+    // 1. a name that states the key outright: producers label their beats ("beat 128 bpm Gmin")
+    for (auto& s : slots)
+    {
+        if (! s.used.load() || s.client == nullptr) continue;
+        int key = 0; bool minor = false;
+        if (s.client->getNameKey (key, minor))
+        {
+            best.found = true; best.key = key; best.minor = minor; best.confidence = 1.0f; best.fromName = true; best.source = s.client->getDisplayName();
+            break;
+        }
+    }
+    // 2. what the music sounds like: the master hears everything, then the beat, then instruments; never a lone voice
+    SongKey heard; float heardScore = 0.0f;
+    for (auto& s : slots)
+    {
+        if (! s.used.load() || s.client == nullptr) continue;
+        const auto role = s.client->getEffectiveRole();
+        float weight = 0.0f;
+        switch (role)
+        {
+            case Role::Master: weight = 1.0f; break;
+            case Role::Beat:   weight = 0.95f; break;
+            case Role::Melody: weight = 0.8f; break;
+            case Role::Bass808: weight = 0.5f; break;
+            default: break;
+        }
+        if (weight <= 0.0f) continue;
+        const auto e = s.client->getMusicKey();
+        if (e.secondsHeard < 6.0f) continue;
+        const float score = weight * e.confidence * juce::jmin (1.0f, e.secondsHeard / 20.0f + 0.5f);
+        if (score > heardScore)
+        {
+            heardScore = score;
+            heard.found = true; heard.key = e.key; heard.minor = e.minor; heard.confidence = e.confidence; heard.source = s.client->getDisplayName();
+        }
+    }
+    if (! best.found) return heard;
+    // Keys that share nearly all their notes are easy to mistake for each other by ear (G minor and B flat major,
+    // G minor and D minor), so only a clearly different answer is worth mentioning.
+    auto related = [] (const SongKey& a, const SongKey& b)
+    {
+        const int d = ((a.key - b.key) % 12 + 12) % 12;
+        if (a.minor == b.minor) return d == 0 || d == 5 || d == 7;
+        const int relative = a.minor ? ((b.key - a.key) % 12 + 12) % 12 : ((a.key - b.key) % 12 + 12) % 12;      // major sits three semitones above its relative minor
+        return relative == 3 || d == 0;
+    };
+    if (heard.found && heard.confidence > 0.75f && ! related (heard, best))
+        best.note = "By ear \"" + heard.source + "\" sounds more like " + heard.text() + ", so check the name is right.";
+    return best;
+}
+
+int SessionBus::sendKeyToAll (int key, bool minor)
+{
+    const juce::ScopedLock sl (lock);
+    int tuned = 0;
+    for (auto& s : slots)
+    {
+        if (! s.used.load() || s.client == nullptr) continue;
+        s.client->setSongKey (key, minor);
+        if (s.client->isTuneOn()) ++tuned;
+    }
+    return tuned;
+}
+
+std::vector<HotTrack> SessionBus::findHotPeaks() const
+{
+    const juce::ScopedLock sl (lock);
+    std::vector<HotTrack> out;
+    for (int i = 0; i < kMaxInstances; ++i)
+    {
+        auto& s = slots[(size_t) i];
+        if (! s.used.load() || s.client == nullptr) continue;
+        const auto role = s.client->getEffectiveRole();
+        if (role == Role::Master) continue;
+        const float over = s.client->getPeakOverDb();
+        if (over < 0.5f) continue;
+        HotTrack h;
+        h.slot = i; h.name = s.client->getDisplayName(); h.role = role; h.overDb = over;
+        const float integ = s.integrated.load() > -70.0f ? s.integrated.load() : s.shortTerm.load();
+        h.crestDb = integ > -70.0f ? juce::jmax (0.0f, -1.0f + over - integ) : 0.0f;
+        h.compressorOn = s.client->isCompressorOn();
+        out.push_back (h);
+    }
+    std::sort (out.begin(), out.end(), [] (const HotTrack& a, const HotTrack& b) { return a.overDb > b.overDb; });
+    return out;
+}
+
+juce::String SessionBus::tamePeaks (int slot)
+{
+    juce::String done;
+    {
+        const juce::ScopedLock sl (lock);
+        if (slot < 0 || slot >= kMaxInstances) return {};
+        auto& s = slots[(size_t) slot];
+        if (! s.used.load() || s.client == nullptr) return {};
+        done = s.client->tamePeaks();
+    }
+    // the levels have changed, so anything measured before is out of date
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    const juce::ScopedLock sl (lock);
+    resetAtMs = now + 300.0;
+    settleUntilMs = now + 4500.0;
+    if (done.isNotEmpty())
+    {
+        followUps.erase (std::remove_if (followUps.begin(), followUps.end(), [slot] (const FollowUp& f) { return f.slot == slot; }), followUps.end());
+        followUps.push_back ({ slot, now + 6000.0, 0 });
+    }
+    return done;
+}
+
+juce::String SessionBus::takeNotice()
+{
+    const juce::ScopedLock sl (lock);
+    const auto n = notice;
+    notice.clear();
+    return n;
+}
+
+float SessionBus::getMasterCorrelation() const
+{
+    const juce::ScopedLock sl (lock);
+    for (auto& s : slots)
+        if (s.used.load() && s.client != nullptr && s.client->getEffectiveRole() == Role::Master) return s.client->getStereoCorrelation();
+    return 1.0f;
+}
+
 void SessionBus::setTrackLocked (int slot, bool locked)
 {
     const juce::ScopedLock sl (lock);
@@ -260,6 +391,46 @@ void SessionBus::timerCallback()
         lastPlan = plan;
     }
 
+    // Tracks whose peaks were tamed a few seconds ago: if they are still hitting the top, take the next step.
+    {
+        std::vector<FollowUp> due;
+        {
+            const juce::ScopedLock sl (lock);
+            for (auto it = followUps.begin(); it != followUps.end();)
+                if (nowMs >= it->dueMs) { due.push_back (*it); it = followUps.erase (it); } else ++it;
+        }
+        for (auto& f : due)
+        {
+            juce::String said; bool again = false;
+            {
+                const juce::ScopedLock sl (lock);
+                auto& s = slots[(size_t) f.slot];
+                if (! s.used.load() || s.client == nullptr) continue;
+                const float over = s.client->getPeakOverDb();
+                if (over <= 0.5f) continue;
+                const float level = s.integrated.load() > -70.0f ? s.integrated.load() : s.shortTerm.load();
+                const auto name = s.client->getDisplayName();
+                if (level > -14.0f)
+                {
+                    // compressed and still over: the track is simply too loud for any mix
+                    const float drop = juce::jmin (12.0f, over + 0.5f);
+                    s.client->turnOutputDown (drop);        // after the compressor, so the peaks come down by exactly this much
+                    s.client->resetMeasurement();
+                    said = "\"" + name + "\" was still " + juce::String (over, 1) + " dB over with its compressor on, because the track itself is too loud (" + juce::String (level, 1) + " LUFS). Its output was turned down " + juce::String (drop, 1) + " dB (Tone tab).";
+                }
+                else if (f.round < 2)
+                {
+                    s.client->tamePeaks();
+                    again = true;
+                    said = "\"" + name + "\" was still " + juce::String (over, 1) + " dB over, so its compressor was set a little harder.";
+                }
+            }
+            const juce::ScopedLock sl (lock);
+            if (said.isNotEmpty()) notice = said;
+            if (again) followUps.push_back ({ f.slot, nowMs + 6000.0, f.round + 1 });
+        }
+    }
+
     bool finishLearn = false;
     {
         const juce::ScopedLock sl (lock);
@@ -281,13 +452,39 @@ void SessionBus::timerCallback()
         if (plan.usable)
         {
             applyPlan (plan, 1.0f);
+            // A voice whose loud words tower over the rest of it will hit the top however it is balanced. That is
+            // a job for its compressor, so the learn does it: lead and backing vocals only, and only if their
+            // compressor is not already in use.
+            juce::StringArray tamed;
+            for (auto& h : findHotPeaks())
+            {
+                float move = 0.0f;                               // the balance has just moved this track; its peaks move with it
+                for (auto& m : plan.moves) if (m.slot == h.slot) move = m.deltaDb;
+                if ((h.role == Role::Vocal || h.role == Role::BackingVocal) && ! h.compressorOn && h.crestDb > 13.0f && h.overDb + move > 0.5f)
+                    if (tamePeaks (h.slot).isNotEmpty()) tamed.add ("\"" + h.name + "\"");
+            }
             const juce::ScopedLock sl (lock);
-            learnMessage = "Balanced. " + plan.summary;
+            learnMessage = "Balanced. " + plan.summary.replace ("Balanced. ", "");
+            if (! tamed.isEmpty())
+            {
+                learnMessage << " The loud words on " << tamed.joinIntoString (" and ") << " were far above the rest, so the compressor was switched on there (Dynamics tab). Balancing once more in a few seconds.";
+                rebalanceAtMs = nowMs + 6500.0;
+            }
         }
         else
         {
             const juce::ScopedLock sl (lock);
             learnMessage = "Nothing was playing - start playback and try again.";
+        }
+    }
+    else if (rebalanceAtMs > 0.0 && nowMs >= rebalanceAtMs)
+    {
+        rebalanceAtMs = 0.0;
+        if (plan.usable)
+        {
+            applyPlan (plan, 1.0f);
+            const juce::ScopedLock sl (lock);
+            learnMessage = "Balanced again now the peaks are under control. " + plan.summary;
         }
     }
     else if (autoBalance && plan.usable && nowMs >= settleUntilMs && nowMs - lastAutoApplyMs > 6000.0)

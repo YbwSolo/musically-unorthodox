@@ -1,5 +1,7 @@
 #pragma once
 #include "Pitch.h"
+#include "KeyFinder.h"
+#include "TuneGraph.h"
 
 namespace mu
 {
@@ -12,6 +14,10 @@ struct TunerSettings
     float amount = 1.0f;       // 0..1, how much of the correction is applied
     float keepVibrato = 0.6f;  // 0..1: 1 corrects only the centre of each note and leaves its movement alone
     bool lowLatency = false;
+    int mode = 0;              // 0 = automatic (corrects whatever is sung, live); 1 = graph (follows the hand-edited notes)
+    float hold = 0.3f;         // 0..1, how firmly a note is held before the voice is allowed to move to the next one
+    float formantSemis = 0.0f; // the size of the voice: 0 = as recorded, up = smaller and brighter, down = bigger and darker
+    int noteMask = 0xFFF;      // with the Custom scale: which of the twelve notes are allowed, bit 0 = C
 };
 
 // Pitch correction for a single voice. It hears which note is being sung, picks the nearest note of the chosen
@@ -25,6 +31,9 @@ public:
     void reset();
     void setSettings (const TunerSettings& s) noexcept;
     void process (juce::AudioBuffer<float>& buffer, bool passThrough = false) noexcept;   // passThrough: delay only
+    void setGraph (TuneGraph* g) noexcept { graph = g; }
+    // where in the song this block starts, so the graph knows which note it is on
+    void setTimeline (bool hostPlaying, double seconds) noexcept { playing = hostPlaying; blockTime = seconds; }
     int getLatencySamples() const noexcept { return settings.enabled && ! settings.lowLatency ? delay : 0; }
 
     // for the display (any thread)
@@ -33,17 +42,19 @@ public:
     int getTargetNote() const noexcept { return targetNote.load (std::memory_order_relaxed); }
 
     // Key finding: which notes have been sung so far, and the key that fits them best.
-    struct KeyGuess { int key = 0; bool minor = false; float confidence = 0.0f; float secondsHeard = 0.0f; };
+    using KeyGuess = KeyEstimate;
     KeyGuess guessKey() const noexcept;
     void forgetNotes() noexcept;
 
-    static juce::StringArray scaleNames() { return { "Chromatic", "Major", "Minor", "Major pentatonic", "Minor pentatonic" }; }
+    static constexpr int kCustomScale = 5;
+    static juce::StringArray scaleNames() { return { "Chromatic", "Major", "Minor", "Major pentatonic", "Minor pentatonic", "Custom" }; }
     static juce::StringArray keyNames() { return { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }; }
-    static bool noteAllowed (int midiNote, int key, int scale) noexcept;
-    static int nearestAllowed (float midiNote, int key, int scale) noexcept;
+    static bool noteAllowed (int midiNote, int key, int scale, int customMask = 0xFFF) noexcept;
+    static int nearestAllowed (float midiNote, int key, int scale, int customMask = 0xFFF) noexcept;
+    static int scaleMask (int key, int scale, int customMask = 0xFFF) noexcept;      // the allowed notes as twelve bits, bit 0 = C
 
 private:
-    void control() noexcept;
+    void control (double seconds) noexcept;
 
     double fs = 48000.0;
     int channels = 2, delay = 960, delayLow = 288;
@@ -55,7 +66,11 @@ private:
 
     bool voiced = false;
     float period = 240.0f, ratio = 1.0f, shift = 0.0f, slowNote = 0.0f;
-    int target = -1, farFrames = 0;
+    int target = -1, farFrames = 0, switchFrames = 0, lastCaptured = -1;
+    TuneGraph* graph = nullptr;
+    bool playing = false;
+    double blockTime = 0.0;
+    float formant = 1.0f;
     std::atomic<float> detectedNote { 0.0f }, outputNote { 0.0f };
     std::atomic<int> targetNote { -1 };
     std::array<std::atomic<float>, 12> sung {};

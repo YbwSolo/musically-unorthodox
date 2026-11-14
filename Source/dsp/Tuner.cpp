@@ -18,30 +18,47 @@ void Tuner::reset()
     detector.reset();
     engine.reset();
     engine.resetVoice (voice, (float) (settings.lowLatency ? delayLow : delay));
-    voiced = false; ratio = 1.0f; shift = 0.0f; target = -1;
+    voiced = false; ratio = 1.0f; shift = 0.0f; target = -1; switchFrames = 0; lastCaptured = -1;
     period = (float) (fs / 200.0);
     detectedNote.store (0.0f); outputNote.store (0.0f); targetNote.store (-1);
 }
 
-void Tuner::setSettings (const TunerSettings& s) noexcept { settings = s; }
+void Tuner::setSettings (const TunerSettings& s) noexcept
+{
+    settings = s;
+    formant = std::pow (2.0f, juce::jlimit (-12.0f, 12.0f, s.formantSemis) / 12.0f);
+}
 
-bool Tuner::noteAllowed (int note, int key, int scale) noexcept
+bool Tuner::noteAllowed (int note, int key, int scale, int customMask) noexcept
 {
     static const int masks[] = { 0xFFF,                                   // chromatic
                                  (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 11),     // major
                                  (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 10),     // natural minor
                                  (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9),                             // major pentatonic
                                  (1 << 0) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 10) };                          // minor pentatonic
+    if (scale == kCustomScale)
+    {
+        // hand-picked notes are named outright (C, D, F#...), not counted from the key
+        const int mask = (customMask & 0xFFF) != 0 ? customMask : 0xFFF;
+        return (mask >> (((note % 12) + 12) % 12)) & 1;
+    }
     const int degree = (((note - key) % 12) + 12) % 12;
     return (masks[juce::jlimit (0, 4, scale)] >> degree) & 1;
 }
 
-int Tuner::nearestAllowed (float note, int key, int scale) noexcept
+int Tuner::scaleMask (int key, int scale, int customMask) noexcept
+{
+    int mask = 0;
+    for (int n = 0; n < 12; ++n) if (noteAllowed (n, key, scale, customMask)) mask |= 1 << n;
+    return mask;
+}
+
+int Tuner::nearestAllowed (float note, int key, int scale, int customMask) noexcept
 {
     const int centre = (int) std::lround (note);
     int best = centre; float bestDistance = 100.0f;
     for (int n = centre - 6; n <= centre + 6; ++n)
-        if (noteAllowed (n, key, scale))
+        if (noteAllowed (n, key, scale, customMask))
         {
             const float d = std::abs (note - (float) n);
             if (d < bestDistance) { bestDistance = d; best = n; }
@@ -50,16 +67,35 @@ int Tuner::nearestAllowed (float note, int key, int scale) noexcept
 }
 
 // Runs each time the detector has a fresh answer (every 10 ms): decide where the voice should be moved to.
-void Tuner::control() noexcept
+void Tuner::control (double seconds) noexcept
 {
     const float f = detector.frequency();
-    if (f <= 0.0f || detector.clarity() < 0.5f)
+    const bool pitched = f > 0.0f && detector.clarity() >= 0.5f;
+    const float note = pitched ? 69.0f + 12.0f * std::log2 (f / 440.0f) : 0.0f;
+
+    // Graph view: with capture on, write the pitch down against the song position, silence included, so a new
+    // take replaces the old one.
+    const bool graphMode = settings.mode == 1 && graph != nullptr && graph->isReady();
+    int frame = -1;
+    if (graphMode && playing)
     {
-        voiced = false; ratio = 1.0f; shift = 0.0f; target = -1;
+        frame = TuneGraph::frameAt (seconds);
+        if (graph->isCapturing())
+        {
+            const int from = (lastCaptured >= 0 && frame > lastCaptured && frame - lastCaptured <= 4) ? lastCaptured + 1 : frame;
+            for (int k = from; k <= frame; ++k) graph->capture (k, note);
+            lastCaptured = frame;
+        }
+        else lastCaptured = -1;
+    }
+    else lastCaptured = -1;
+
+    if (! pitched)
+    {
+        voiced = false; ratio = 1.0f; shift = 0.0f; target = -1; switchFrames = 0;
         detectedNote.store (0.0f, std::memory_order_relaxed); outputNote.store (0.0f, std::memory_order_relaxed); targetNote.store (-1, std::memory_order_relaxed);
         return;
     }
-    const float note = 69.0f + 12.0f * std::log2 (f / 440.0f);
     const bool starting = ! voiced;
 
     // remember which notes are sung, for key finding
@@ -67,24 +103,48 @@ void Tuner::control() noexcept
     sung[(size_t) pc].store (sung[(size_t) pc].load (std::memory_order_relaxed) + 1.0f, std::memory_order_relaxed);
     sungFrames.store (sungFrames.load (std::memory_order_relaxed) + 1.0f, std::memory_order_relaxed);
 
-    // The slow version of the pitch is the centre of the note; the difference from it is vibrato and slides.
-    // A real move to another note (well away from the current one for 40 ms) starts a new centre straight away.
-    if (starting) { slowNote = note; farFrames = 0; }
-    if (target >= 0 && std::abs (note - (float) target) > 0.8f) { if (++farFrames >= 4) { slowNote = note; farFrames = 0; } }
-    else farFrames = 0;
-    slowNote += (note - slowNote) * 0.08f;                                  // about 120 ms
-    // what gets corrected: the note as sung (keep vibrato = 0) or only its centre (keep vibrato = 1)
-    const float reference = note + settings.keepVibrato * (slowNote - note);
+    if (graphMode)
+    {
+        // The target curve already holds every glide and every bit of vibrato that is being kept, so the voice
+        // simply goes where it says. Outside the notes, while capturing, or with the song stopped, nothing moves.
+        const float goal = (frame >= 0 && ! graph->isCapturing()) ? graph->targetAt (frame) : 0.0f;
+        const float wanted = goal > 0.0f ? juce::jlimit (-12.0f, 12.0f, goal - note) : 0.0f;
+        // inside a note the curve is followed exactly; stepping on to or off a note takes a couple of frames
+        const bool inside = goal > 0.0f && target >= 0;
+        shift = (starting || inside) ? wanted : shift + (wanted - shift) * 0.6f;
+        target = goal > 0.0f ? (int) std::lround (goal) : -1;
+        slowNote = note; farFrames = 0; switchFrames = 0;
+    }
+    else
+    {
+        // The slow version of the pitch is the centre of the note; the difference from it is vibrato and slides.
+        // A real move to another note (well away from the current one for 40 ms) starts a new centre straight away.
+        if (starting) { slowNote = note; farFrames = 0; }
+        if (target >= 0 && std::abs (note - (float) target) > 0.8f) { if (++farFrames >= 4) { slowNote = note; farFrames = 0; } }
+        else farFrames = 0;
+        slowNote += (note - slowNote) * 0.08f;                                  // about 120 ms
+        // what gets corrected: the note as sung (keep vibrato = 0) or only its centre (keep vibrato = 1)
+        const float reference = note + settings.keepVibrato * (slowNote - note);
 
-    // nearest note of the scale, with a little stickiness so a voice sitting between two notes does not flicker
-    int candidate = nearestAllowed (reference, settings.key, settings.scale);
-    if (target >= 0 && candidate != target && noteAllowed (target, settings.key, settings.scale)
-        && std::abs (reference - (float) candidate) + 0.12f > std::abs (reference - (float) target)) candidate = target;
-    target = candidate;
+        // Nearest note of the scale. A voice that wavers between two notes would flicker from one to the other,
+        // which is the warble that gives away a weak singer. Note hold makes the voice earn the move: it has to be
+        // clearly nearer the new note, and stay there for a moment.
+        int candidate = nearestAllowed (reference, settings.key, settings.scale, settings.noteMask);
+        if (target >= 0 && candidate != target && noteAllowed (target, settings.key, settings.scale, settings.noteMask))
+        {
+            const float margin = 0.12f + 0.33f * settings.hold;
+            const bool clearlyNearer = std::abs (reference - (float) candidate) + margin <= std::abs (reference - (float) target);
+            if (! clearlyNearer) { candidate = target; switchFrames = 0; }
+            else if (++switchFrames <= (int) (settings.hold * 6.0f)) candidate = target;
+            else switchFrames = 0;
+        }
+        else switchFrames = 0;
+        target = candidate;
 
-    const float wanted = juce::jlimit (-7.0f, 7.0f, ((float) target - reference) * settings.amount);
-    if (starting || settings.speedMs < 1.0f) shift = wanted;
-    else shift += (wanted - shift) * (1.0f - std::exp (-10.0f / settings.speedMs));
+        const float wanted = juce::jlimit (-7.0f, 7.0f, ((float) target - reference) * settings.amount);
+        if (starting || settings.speedMs < 1.0f) shift = wanted;
+        else shift += (wanted - shift) * (1.0f - std::exp (-10.0f / settings.speedMs));
+    }
 
     voiced = true;
     ratio = std::pow (2.0f, shift / 12.0f);
@@ -111,10 +171,10 @@ void Tuner::process (juce::AudioBuffer<float>& buffer, bool passThrough) noexcep
     {
         float mono = 0.0f;
         for (int c = 0; c < ch; ++c) { engine.write (c, data[c][i]); mono += data[c][i]; }
-        if (detector.push (mono / (float) ch)) control();
+        if (detector.push (mono / (float) ch)) control (blockTime + (double) i / fs);
         float out[2] = { 0.0f, 0.0f };
         if (passThrough) engine.render (voice, (float) (fs / 200.0), false, 1.0f, d, out);
-        else             engine.render (voice, period, voiced, ratio, d, out);
+        else             engine.render (voice, period, voiced, ratio, d, out, formant);
         for (int c = 0; c < ch; ++c) data[c][i] = out[c];
         engine.advance();
     }
@@ -122,36 +182,10 @@ void Tuner::process (juce::AudioBuffer<float>& buffer, bool passThrough) noexcep
 
 Tuner::KeyGuess Tuner::guessKey() const noexcept
 {
-    // Krumhansl-Kessler key profiles: how strongly each note of the scale belongs to a major or a minor key
-    static const float major[12] = { 6.35f, 2.23f, 3.48f, 2.33f, 4.38f, 4.09f, 2.52f, 5.19f, 2.39f, 3.66f, 2.29f, 2.88f };
-    static const float minor[12] = { 6.33f, 2.68f, 3.52f, 5.38f, 2.60f, 3.53f, 2.54f, 4.75f, 3.98f, 2.69f, 3.34f, 3.17f };
-    float h[12]; float total = 0.0f;
-    for (int i = 0; i < 12; ++i) { h[i] = sung[(size_t) i].load (std::memory_order_relaxed); total += h[i]; }
-    KeyGuess guess;
+    float h[12];
+    for (int i = 0; i < 12; ++i) h[i] = sung[(size_t) i].load (std::memory_order_relaxed);
+    auto guess = keyFromNotes (h);
     guess.secondsHeard = sungFrames.load (std::memory_order_relaxed) * 0.01f;
-    if (total < 1.0f) return guess;
-    auto correlate = [&h] (const float* profile, int key)
-    {
-        float mh = 0, mp = 0;
-        for (int i = 0; i < 12; ++i) { mh += h[i]; mp += profile[i]; }
-        mh /= 12.0f; mp /= 12.0f;
-        float num = 0, dh = 0, dp = 0;
-        for (int i = 0; i < 12; ++i)
-        {
-            const float a = h[(i + key) % 12] - mh, b = profile[i] - mp;
-            num += a * b; dh += a * a; dp += b * b;
-        }
-        return dh > 0.0f ? num / std::sqrt (dh * dp) : 0.0f;
-    };
-    float best = -2.0f, second = -2.0f;
-    for (int key = 0; key < 12; ++key)
-        for (int m = 0; m < 2; ++m)
-        {
-            const float c = correlate (m == 0 ? major : minor, key);
-            if (c > best) { second = best; best = c; guess.key = key; guess.minor = m == 1; }
-            else if (c > second) second = c;
-        }
-    guess.confidence = juce::jlimit (0.0f, 1.0f, best);
     return guess;
 }
 

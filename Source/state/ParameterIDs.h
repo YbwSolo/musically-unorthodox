@@ -135,6 +135,13 @@ namespace ids
     inline const juce::String tuneSpeed   { "tuneSpeed" };
     inline const juce::String tuneAmount  { "tuneAmount" };
     inline const juce::String tuneVibrato { "tuneVibrato" };
+    inline const juce::String tuneMode    { "tuneMode" };       // simple (automatic) / graph (hand-edited notes)
+    inline const juce::String tuneHold    { "tuneHold" };
+    inline const juce::String tuneFormant { "tuneFormant" };
+    inline const juce::String tuneNotes   { "tuneNotes" };      // the Custom scale: twelve bits, bit 0 = C
+
+    // Peak guard on a track (the master has its own limiter)
+    inline const juce::String trackGuard  { "trackGuard" };
 
     // Doubler
     inline const juce::String dblOn     { "dblOn" };
@@ -153,6 +160,57 @@ namespace ids
     inline const juce::String rvPre    { "rvPre" };
     inline const juce::String rvTone   { "rvTone" };
     inline const juce::String rvDuck   { "rvDuck" };
+    inline const juce::String rvType   { "rvType" };
+    inline const juce::String rvLowCut { "rvLowCut" };
+    inline const juce::String rvWidth  { "rvWidth" };
+
+    // Delay
+    inline const juce::String dlOn       { "dlOn" };
+    inline const juce::String dlMix      { "dlMix" };
+    inline const juce::String dlSync     { "dlSync" };
+    inline const juce::String dlNote     { "dlNote" };
+    inline const juce::String dlTime     { "dlTime" };
+    inline const juce::String dlFeedback { "dlFeedback" };
+    inline const juce::String dlTone     { "dlTone" };
+    inline const juce::String dlWidth    { "dlWidth" };
+    inline const juce::String dlDuck     { "dlDuck" };
+
+    // Harmony
+    inline const juce::String hmOn      { "hmOn" };
+    inline const juce::String hmVoicing { "hmVoicing" };
+    inline const juce::String hmMix     { "hmMix" };
+    inline const juce::String hmWidth   { "hmWidth" };
+
+    // Shift
+    inline const juce::String psOn        { "psOn" };
+    inline const juce::String psSemis     { "psSemis" };
+    inline const juce::String psCharacter { "psCharacter" };
+    inline const juce::String psMix       { "psMix" };
+
+    // Phone
+    inline const juce::String phOn     { "phOn" };
+    inline const juce::String phAmount { "phAmount" };
+    inline const juce::String phTone   { "phTone" };
+    inline const juce::String phDrive  { "phDrive" };
+
+    // Lo-fi
+    inline const juce::String lfOn     { "lfOn" };
+    inline const juce::String lfCrush  { "lfCrush" };
+    inline const juce::String lfWobble { "lfWobble" };
+    inline const juce::String lfMix    { "lfMix" };
+
+    // Motion (chorus / flanger / phaser)
+    inline const juce::String mdOn    { "mdOn" };
+    inline const juce::String mdType  { "mdType" };
+    inline const juce::String mdRate  { "mdRate" };
+    inline const juce::String mdDepth { "mdDepth" };
+    inline const juce::String mdMix   { "mdMix" };
+
+    // Chop
+    inline const juce::String chOn    { "chOn" };
+    inline const juce::String chRate  { "chRate" };
+    inline const juce::String chDepth { "chDepth" };
+    inline const juce::String chShape { "chShape" };
 
     // Vocal Space (dynamic EQ on beat/instrument instances, keyed from the vocal instance)
     inline const juce::String vsEnabled { "vsEnabled" };

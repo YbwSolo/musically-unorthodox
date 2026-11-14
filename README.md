@@ -33,36 +33,62 @@ Logic: Audio Units > Musically Unorthodox. Also installs the VST3 and a standalo
 ## Using it
 
 1. Put Musically Unorthodox **last** on every track, after the plugins the song was mixed with.
-2. On each one, pick a preset from the header (Vocals, Drums and bass, Instruments, Beat, Master) or just set the
-   role under Settings. Presets fit their thresholds to how loud the track is, so load them while the song plays.
-3. Put one on the Stereo Out and set its role to **Master**.
+2. Name the tracks in your music software ("rap", "808", "beat 128 bpm Gmin"). With the role on Auto the plugin
+   reads the name to know what the track is, and reads the key of the song from it when the name says it.
+   Or pick a preset from the header, or set the role under Settings. Presets fit their thresholds to how loud the
+   track is, so load them while the song plays.
+3. Put one on the Stereo Out. It becomes the **Master** by itself.
 4. Play the loudest section. On the **Mix** tab press **Learn and balance** and keep it playing for 20 seconds.
-   Every track's trim moves so the vocal leads and the mix lands at -18 LUFS with peaks under -6 dBTP.
-5. Fix the **collisions** the Mix tab lists.
-6. On the master's **Master** tab choose where the song is going (mix hand-off, streaming, loud) and read the
-   release check.
+   Every track's trim moves so the vocal leads and the mix lands at -18 LUFS with peaks under -6 dBTP. A vocal
+   whose loud words tower over the rest of it has its compressor switched on as well.
+5. Work through **To fix** on the Mix tab: tracks hitting the top, then collisions.
+6. On the master's **Master** tab choose where the song is going (mix hand-off, streaming, loud), check the mix
+   with **Listen as** Mono and Phone speaker, and run the **Bounce check** on the Mix tab before exporting.
 
 Hover over any control and the bar along the bottom says what it does, when to use it and typical settings.
 The **Learn** tab has ten lessons, each a few steps long. Every step has an animated example drawn from the same
 maths the plugin uses, and several end with a "your turn" exercise.
 
-## FX tab: Tune, Doubler, Reverb
+## Tune tab
 
-**Tune** is pitch correction for one voice. A YIN pitch detector hears the note every 10 ms; the voice is then
-re-pitched by laying two-period slices of it closer together or further apart, which leaves the formants (the
-character of the voice) where they were. Key and scale choose which notes are allowed, and **Find key** works the
-key out from what has been sung. Speed 40 to 100 ms with Keep vibrato high corrects only the centre of each note;
-speed 0 with Keep vibrato 0 is the hard-tune effect. Adds 20 ms of reported latency while on.
+**Tune** is pitch correction for one voice. A YIN pitch detector hears the note every 10 ms (a leap of more than
+four semitones has to be heard twice before it is believed, which keeps consonants and breaths from being mistaken
+for notes). The voice is re-pitched by laying two-period slices of it closer together or further apart, which
+leaves the formants (the character of the voice) where they were. Adds 20 ms of reported latency while on.
 
-**Doubler** makes one take sound like two or more. Each extra voice is a real copy moved a few cents and a few
-milliseconds, both drifting slowly, placed left and right; the lead stays untouched in the middle. Double adds one
-copy each side, Stack two. The copies drop back on consonants so they do not flam.
+**Simple** view corrects as the song plays. Key and scale choose which notes are allowed; the keyboard lets any
+single note be blocked or allowed. Speed 40 to 100 ms with Keep vibrato high corrects only the centre of each note;
+speed 0 with Keep vibrato 0 is the hard-tune effect. **Note hold** stops a wavering voice flickering between two
+notes, and **Formant** changes the size of the voice without changing the notes.
 
-**Reverb** is an eight-line feedback delay network with a lossless mixing matrix, so the decay time is exact.
-With **Timed to tempo** on, one beat is 60,000 / BPM milliseconds, the pre-delay is a 64th note and the decay is
-one, two or four beats. It keeps itself out of the low end and ducks while the dry sound plays.
+**Graph** view is for fixing a take by hand. The plugin cannot see the audio file, so it is built by listening:
+press **Capture**, play the part, stop the song. The pitch is written down against the song position, split into
+notes, and each note becomes a block that can be dragged to another pitch, snapped to the scale, straightened,
+split or joined. During playback Tune follows the edited notes. The notes are saved with the song.
 
-A mono track can load the plugin as **Mono > Stereo**, which is what lets a mono vocal have wide doubles and reverb.
+**Song key.** Find key looks first for a key written in a track name ("beat 128 bpm Gmin"), then listens to the
+master, the beat or an instrument (a chord-aware key finder, not the single-voice detector), and only then to the
+notes sung on the track. **Send key to all tracks** copies it to every instance in the song.
+
+## FX tab
+
+A rack of nine tools, each with its own switch, a live picture of what it is doing, and presets to step through.
+**Sounds** at the top loads several tools at once.
+
+- **Doubler** makes one take sound like two or four. Each extra voice is a real copy moved a few cents and a few
+  milliseconds, both drifting slowly, placed left and right. The copies drop back on consonants so they do not flam.
+- **Delay** is timed to the song: 60,000 / BPM is one beat in milliseconds, and the echo time is a note length of
+  that. Each repeat loses some top, the echoes can bounce left and right, and they duck under the voice.
+- **Reverb** is an eight-line feedback delay network with a lossless mixing matrix, so the decay time is exact.
+  Room, plate or hall. With **Timed to tempo** on, the pre-delay is a 64th note and the decay is one, two or four
+  beats. **Fit to this track** chooses the space, length, tone and ducking from what the track is, the tempo and
+  how bright it is, and says why; kick, 808 and finished beats are left dry.
+- **Harmony** adds up to three voices on other notes of the key (third, fifth, octave, choir).
+- **Shift** moves the whole voice up or down, as a layer or on its own, with control of the size of the voice.
+- **Phone** is the voice through a small speaker. **Lo-fi** is sample-rate and bit reduction with tape wobble.
+  **Motion** is chorus, flanger and phaser. **Chop** gates the sound in time with the beat.
+
+A mono track can load the plugin as **Mono > Stereo**, which is what lets a mono vocal have wide effects.
 
 **Low latency** (Settings) is for recording through the plugin. Every instance in the session drops its delaying
 stages: Tune reacts in about 6 ms, and the master limiter and loudness boost are off. A badge in the header shows
@@ -109,12 +135,13 @@ that and no download is needed.
 
 | Tab | What is on it |
 | --- | --- |
-| Mix | Mix loudness dial, one lane per instance (level, target, move, where its energy is), collisions with one-click fixes, Learn and balance |
+| Mix | Mix loudness dial, one lane per instance (level, target, move, where its energy is), hot peaks and collisions with one-click fixes, Learn and balance, song key, bounce check |
 | EQ | Input and output analysers, 8 bands (bell, shelves, cuts to 48 dB/oct, notch), per-band stereo / mid / side, dynamic bands, band solo, auto gain, delta listening, Mix Brain suggestions, reference capture and match |
 | Dynamics | Compressor with four styles (Clean, Punch, Smooth, Glue), sidechain high-pass, parallel mix, scrolling level and reduction display, transfer curve, Auto set; gate; de-esser |
 | Tone | Smooth (resonance tamer), saturation (tape, tube, warm), level rider, Vocal space, stereo width and mono bass, output |
-| FX | Tune (pitch correction, natural to hard tune), Doubler, tempo-timed Reverb |
-| Master | Target modes (-18 / -14 / -9 LUFS), true-peak limiter with look-ahead, auto level, loudness history, release check |
+| Tune | Pitch correction: Simple (live, natural to hard tune, note hold, formant, custom notes) and Graph (capture a take, move each note by hand), Find key, Send key to all tracks |
+| FX | Doubler, Delay, Reverb, Harmony, Shift, Phone, Lo-fi, Motion, Chop; presets for each, and combined Sounds |
+| Master | Target modes (-18 / -14 / -9 LUFS), true-peak limiter with look-ahead, auto level, loudness history, release check, Mono and Phone speaker listening checks |
 | Learn | Animated lessons: how sound works, what an EQ is, masking, what a compressor is, attack and release, gate and de-esser, saturation, stereo and mono, loudness and mastering, putting it together |
 
 ## What it does not do (yet)
@@ -126,6 +153,10 @@ that and no download is needed.
 - The Mix Brain is a rule-based comparison against role tone curves and the other tracks. It is not a trained model.
   The AI tutor is separate, optional, and only explains; it never changes settings.
 - It cannot change the settings of other plugins; it sits after them and corrects the result.
+- Tune works on one voice at a time, not on chords or a full beat. The Graph view moves the pitch of notes; it
+  does not move them in time, and it has to hear a part once before it can show it (there is no ARA link to the
+  audio file).
+- Every track has a peak guard at about -1 dB (Settings). It is a safety net, not a mix limiter.
 
 ## Building on a Mac by hand
 
@@ -156,6 +187,15 @@ Source/
   dsp/Maximizer.*                true-peak look-ahead limiter (master instance only)
   dsp/StereoTool.*               width, mono bass, correlation
   dsp/Gate.* DeEsser.* Saturator.* Rider.* VocalSpace.* RoleDetector.*
+  dsp/Pitch.*                    YIN pitch detector; grain engine (pitch and formant shifting)
+  dsp/Tuner.* TuneGraph.*        pitch correction: live, and following hand-edited notes captured against the timeline
+  dsp/KeyFinder.*                key of a full mix from a chromagram; keys written in track names
+  dsp/Doubler.* PitchFX.*        doubles; harmony and shift voices
+  dsp/Echo.* Reverb.*            tempo-synced delay; FDN reverb (room, plate, hall)
+  dsp/ColourFX.*                 phone, lo-fi, motion (chorus, flanger, phaser), chop
+  dsp/PeakGuard.h                zero-latency safety limiter on every track
+  analysis/ReverbAdvisor.*       chooses a reverb for a track from its role, the tempo and its tone
+  state/ModulePresets.*          presets for each tool, and the combined Sounds
   analysis/TonalAnalysis.*       role tone curves, suggestions, clash wording, EQ match
   session/SessionBus.*           process-wide bus shared by all instances, learn and balance, shared reference
   session/BalanceEngine.*        role targets, balance plan, masking detection

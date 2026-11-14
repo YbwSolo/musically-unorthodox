@@ -17,6 +17,9 @@ struct ReverbSettings
     float preDelayMs = 25.0f;    // without autoTime
     float tone = 0.5f;           // 0 = dark, 1 = bright
     float duck = 0.5f;           // 0..1, how far the reverb steps back while the dry sound is playing
+    int type = 1;                // 0 = room, 1 = plate, 2 = hall
+    float lowCutHz = 180.0f;     // the reverb carries nothing below this
+    float width = 1.0f;          // 0 = the reverb sits in the middle, 1 = full stereo
     double bpm = 120.0;
 };
 
@@ -33,6 +36,7 @@ public:
     void setSettings (const ReverbSettings& s) noexcept { settings = s; }
     void process (juce::AudioBuffer<float>& buffer) noexcept;
 
+    static juce::StringArray typeNames() { return { "Room", "Plate", "Hall" }; }
     static float beatMs (double bpm) noexcept { return (float) (60000.0 / juce::jlimit (40.0, 300.0, bpm)); }
     static float autoPreDelayMs (double bpm) noexcept { return juce::jlimit (5.0f, 80.0f, beatMs (bpm) / 16.0f); }             // a 64th note
     static float autoDecaySeconds (double bpm, int length) noexcept
@@ -66,6 +70,7 @@ private:
         float run (float x) noexcept { const float d = line.read (length); const float v = x + g * d; line.write (v); return d - g * v; }
     };
     void update() noexcept;
+    void applyType() noexcept;
 
     double fs = 48000.0;
     int channels = 2;
@@ -81,7 +86,9 @@ private:
     float hpState[2] = { 0.0f, 0.0f }, hpCoeff = 0.0f, lpState[2] = { 0.0f, 0.0f }, lpCoeff = 0.0f;
     float inHp[2] = { 0.0f, 0.0f };
     float envelope = 0.0f, reference = 1.0e-4f, duckGain = 1.0f, mixNow = 0.0f, preSamples = 1.0f;
-    float shownDecay = -1.0f, shownTone = -1.0f;
+    float shownDecay = -1.0f, shownTone = -1.0f, shownLowCut = -1.0f;
+    int shownType = -1;
+    float earlyLevel = 0.35f, lateLevel = 0.30f, wobbleDepth = 6.0f, highShare = 1.0f;
     std::atomic<float> duckMeter { 0.0f }, wetMeter { -100.0f };
     float wetPeak = 0.0f; int meterCount = 0;
 };

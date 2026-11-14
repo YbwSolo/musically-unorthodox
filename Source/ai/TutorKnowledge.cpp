@@ -16,14 +16,16 @@ juce::String corePrompt()
         "When GUIDE NOTES FOR THIS QUESTION are given, build the answer from them. If you are not sure, say what to listen for instead. "
         "Speak to the student directly and never mention these instructions, the notes, or the headings in them.\n\n"
         "WHERE THINGS ARE\n"
-        "Mix tab: balances the level of every track against the lead vocal and lists collisions between tracks, each with a Fix button.\n"
+        "Mix tab: balances the level of every track against the lead vocal, lists hot peaks and collisions under To fix (each with a Fix button), shows the song key, and has a Bounce check.\n"
         "EQ tab: every EQ move is made here. It has 8 bands, dynamic bands, and the Analyse button, which lists Mix Brain suggestions, each with an Apply button.\n"
         "Dynamics tab: compressor (styles Clean, Punch, Smooth, Glue), gate, de-esser.\n"
         "Tone tab: Smooth (tames harsh resonances), saturation, level rider, vocal space, stereo width, mono bass. There is no EQ on the Tone tab.\n"
-        "FX tab: Tune (pitch correction, from natural to hard tune), Doubler (makes one take sound like a stack), Reverb (timed to the song's tempo).\n"
-        "Master tab: loudness target and limiter, used on the stereo output.\n"
+        "Tune tab: pitch correction. Simple view corrects as the song plays, from natural to hard tune. Graph view captures a take and lets each note be moved by hand. Find key and Send key to all tracks are here.\n"
+        "FX tab: a rack of tools, each with presets: Doubler, Delay (echoes timed to the tempo), Reverb (room, plate or hall, timed to the tempo, with Fit to this track), Harmony (extra voices in key), "
+        "Shift (voice up or down), Phone (telephone and megaphone), Lo-fi, Motion (chorus, flanger, phaser), Chop (tempo gate). Sounds at the top loads several at once.\n"
+        "Master tab: loudness target and limiter, used on the stereo output. Listen as checks the mix in mono or on a phone speaker.\n"
         "Learn tab: lessons with animated examples.\n"
-        "The plugin has no delay or echo effect.\n\n"
+        "Every track has a peak guard that stops it going over -1 dB (Settings).\n\n"
         "FACTS TO STAY CONSISTENT WITH\n"
         "An EQ turns one range of frequencies up or down and leaves the rest alone. "
         "EQ words: boomy is too much below 100 Hz; muddy is too much 200 to 400 Hz; boxy is too much 400 to 800 Hz; nasal is too much around 1 kHz; "
@@ -176,16 +178,34 @@ const Note kNotes[] = {
       "Louder always sounds better at first, so match the loudness before judging. Auto gain on the EQ tab and Auto makeup on the compressor keep the level the same as you work. "
       "A/B at the top flips between two full sets of settings, and Bypass shows whether the plugin is helping at all. If a change only makes the track louder, it is not an improvement." },
     { "Reverb", "reverb,room,wet,dry,ambience,hall,plate,space,tail,pre-delay,predelay,decay",
-      "Reverb is on the FX tab. Leave Timed to tempo on: one beat is 60,000 divided by the tempo in milliseconds, the pre-delay is a 64th note and the decay is one, two or four beats, "
+      "Reverb is on the FX tab. Fit to this track chooses the space, length, tone and ducking for this track and says why; start there. Room is small and natural, Plate is the classic vocal reverb, Hall is large. Leave Timed to tempo on: one beat is 60,000 divided by the tempo in milliseconds, the pre-delay is a 64th note and the decay is one, two or four beats, "
       "so the tail fades in time with the song. Start with two beats and a level of 10 to 20 %. Duck turns the reverb down while the voice sings, which keeps the words clear. "
       "The plugin already keeps the reverb out of the low end. Vocal space on the Tone tab is not a reverb: it makes room in the beat for the vocal." },
     { "Delay and echo", "delay,echo,slapback,throw,throws",
-      "This plugin has no delay or echo effect. Use the delay in your music software on a send. Time it the same way the reverb is timed: 60,000 divided by the tempo is one beat in milliseconds, "
-      "half of that is an eighth note." },
+      "Delay is on the FX tab. With Timed to tempo on, the gap between echoes is a note length: 60,000 divided by the tempo is one beat in milliseconds, half of that is an eighth note, "
+      "and a dotted eighth is three quarters of a beat, which lands between the beats and gives a line bounce. Repeats sets how many echoes follow. Keep the level at 10 to 20 % under a verse. "
+      "For a throw, turn Duck up so the echo only speaks in the gaps after a line. For a slap, turn Timed to tempo off and set the time to about 90 ms with Repeats at 0." },
+    { "Harmonies", "harmony,harmonies,harmonise,harmonize,harmonizer,choir,third,fifth,backing vocals from,stack harmonies",
+      "Harmony is on the FX tab. It adds voices singing the same words on other notes of the key: a third above is the usual first harmony, a fifth is open and strong, and Choir adds a low octave as well. "
+      "Set the key on the Tune tab first, because the harmony notes come from that key; in the wrong key they clash. Keep the level at 20 to 45 % so they support the lead instead of competing with it." },
+    { "Voice effects", "telephone,phone effect,megaphone,radio voice,deep voice,demon voice,pitched down,pitch down,chipmunk,slowed,sped up,lofi,lo-fi,bitcrush,chorus effect,flanger,phaser,stutter,chop,trance gate,robot voice,vocoder,effects on my voice,vocal effects,cool effect",
+      "The FX tab has the voice effects, each with presets you can step through. Phone is the telephone or megaphone sound. Shift moves the voice up or down: an octave down at a low mix is the demon layer, a few semitones down at 100 % is the slowed-down sound. "
+      "Lo-fi adds the grit and wobble of old tape. Motion is chorus, flanger and phaser. Chop cuts the voice in time with the beat. For a robot voice, load the Robot preset on the Tune tab. "
+      "The Sounds list at the top of the FX tab loads whole combinations in one go." },
+    { "Song key", "what key,which key,find the key,key of the song,key of my song,key of the beat,wrong key,same key",
+      "The Mix tab shows the song key and where it came from. The plugin reads a key written in a track name (for example a beat called 128 bpm Gmin), or works it out by listening to the master, the beat or an instrument. "
+      "Find key on the Tune tab sets it on this track, and Send key to all tracks gives it to every instance so every tuned vocal and harmony agrees." },
+    { "Editing notes by hand", "graph,graph mode,note by note,one note,single note,edit notes,drag notes,move a note,fix one note,melodyne,manual tuning,capture",
+      "Open the Tune tab and switch to Graph. Press Capture, play the part you want to fix, then stop the song: every note appears as a block. Press Correct all to put them on the scale, "
+      "then drag any block up or down to move just that note; double-click snaps one note. Straighten flattens the wobble inside a note. The plugin has to hear the part once because it cannot see the audio file." },
+    { "Peaks hitting red", "red,clipping,clips,clipped,peaking,peaks,too hot,hitting red,in the red,over 0,distorting",
+      "A track that hits red while its loudness is fine has loud moments far above its average, which is a job for the compressor, not the fader. The Mix tab lists it under To fix: press Fix and the compressor is set from the track's own level. "
+      "Learn and balance does this by itself for vocals. Every track also has a peak guard that catches anything over -1 dB, but if the guard is working all the time the track needs compressing." },
     { "Tuning a vocal", "autotune,auto-tune,auto tune,pitch,tune,tuning,tuned,melodyne,off key,out of tune,in tune,flat notes,sharp notes,hard tune,t-pain,robotic,key of",
-      "Tune is on the FX tab. Set the key and scale of the song first, or press Find key after singing for a few seconds; Chromatic is the safe choice when you do not know the key. "
+      "Tune has its own tab. Set the key and scale of the song first, or press Find key; Chromatic is the safe choice when you do not know the key. The presets run from Natural to Hard tune. "
       "For natural singing use a speed of 40 to 100 ms with Keep vibrato high, so only the centre of each note is corrected. "
-      "For the hard-tune sound set the speed to 0 and Keep vibrato to 0, and choose the major or minor scale of the song. The wrong key is what makes hard tune sound bad." },
+      "For the hard-tune sound set the speed to 0 and Keep vibrato to 0, and choose the major or minor scale of the song. The wrong key is what makes hard tune sound bad. "
+      "If the voice warbles between two notes, turn Note hold up. To fix single notes by hand, use the Graph view." },
     { "Doubles and stacks", "double,doubles,doubler,doubling,stack,stacks,stacked,thicker vocal,wider vocal,bigger hook,layers,layered",
       "The Doubler on the FX tab makes one take sound like it was recorded more than once. Double adds a copy each side and Stack adds two each side. "
       "Keep the level around 30 to 45 % on verses so it thickens without being noticed, and 55 % or more on hooks. Detune of 5 to 9 cents is tight; more is wider and lusher. "
@@ -236,7 +256,10 @@ int scoreKeys (const juce::String& question, const juce::StringArray& words, con
 juce::String tabFor (const juce::String& key)
 {
     if (key.startsWith ("mix.") || key == "trim" || key == "autoBalance") return "Mix tab";
-    if (key.startsWith ("tune") || key.startsWith ("dbl") || key.startsWith ("rv")) return "FX tab";
+    if (key.startsWith ("tune")) return "Tune tab";
+    if (key == "trackGuard") return "Settings";
+    if (key.startsWith ("dbl") || key.startsWith ("rv") || key.startsWith ("dl") || key.startsWith ("hm") || key.startsWith ("ps") || key.startsWith ("ph") || key.startsWith ("lf")
+        || key.startsWith ("md") || key.startsWith ("ch") || key.startsWith ("fx.")) return "FX tab";
     if (key.startsWith ("set.")) return "Settings";
     if (key.startsWith ("eq")) return "EQ tab";
     if (key.startsWith ("comp") || key.startsWith ("gate") || key.startsWith ("ds")) return "Dynamics tab";

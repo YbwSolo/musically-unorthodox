@@ -26,6 +26,8 @@ private:
     Knob drive, ceiling, target;
     ParamToggle autoLevel;
     juce::TextButton makeMaster, resetMeasure;
+    Segmented listenAs { juce::StringArray { "Normal", "Mono", "Phone speaker" } };
+    juce::Rectangle<int> listenLabel;
     std::array<juce::Rectangle<int>, 4> cards;
     juce::Rectangle<int> historyWell, grWell, readoutArea, checkArea, bannerArea;
     std::array<Check, 5> items;

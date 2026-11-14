@@ -18,17 +18,32 @@ static void check (bool ok, const char* name, const juce::String& detail = {})
     if (! ok) ++failures;
 }
 
+// The song position a host reports: 120 BPM, moving forward while "playing".
+struct TestHead : juce::AudioPlayHead
+{
+    double seconds = 0.0;
+    bool playing = true;
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo p;
+        p.setBpm (120.0); p.setIsPlaying (playing); p.setTimeInSeconds (seconds); p.setTimeInSamples ((juce::int64) (seconds * 48000.0)); p.setPpqPosition (seconds * 2.0);
+        return p;
+    }
+};
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI init;
     const double fs = 48000.0;
     const int block = 512;
 
+    TestHead head;
     auto make = [&] (Role r)
     {
         auto p = std::make_unique<MUProcessor>();
         p->setPlayConfigDetails (2, 2, fs, block);
         p->prepareToPlay (fs, block);
+        p->setPlayHead (&head);
         p->setParam (ids::role, (float) r);
         return p;
     };
@@ -54,6 +69,7 @@ int main()
             mix.clear();
             for (auto* s : { &v, &b, &k }) for (int c = 0; c < 2; ++c) mix.addFrom (c, 0, *s, c, 0, block);
             master->processBlock (mix, midi);
+            if (head.playing) head.seconds += (double) block / fs;
             for (auto* p : { vocal.get(), beat.get(), bass.get(), master.get() }) p->pumpAnalysis();   // audio runs faster than real time here
             if (n % 10 == 0) juce::MessageManager::getInstance()->runDispatchLoopUntil (1);   // let timers tick
         }
@@ -664,10 +680,207 @@ int main()
         check (accepted && right > 1.0 && diff > right * 0.02, "Mono in, stereo out is supported and gives a mono vocal wide doubles", "accepted " + juce::String ((int) accepted));
     }
 
+    // ---- build 11: names, song key, hot peaks, presets and sounds, graph, reverb fit, checks
+    {
+        auto named = [] (MUProcessor& p, const juce::String& name) { juce::AudioProcessor::TrackProperties props; props.name = name; p.updateTrackProperties (props); };
+        for (auto* p : { vocal.get(), beat.get(), bass.get() }) p->applyChainPreset (findChainPreset ("Clean slate"));
+        for (auto* p : { vocal.get(), beat.get(), bass.get(), master.get() }) p->setParam (ids::role, (float) Role::Auto);
+        named (*vocal, "rap"); named (*beat, "beat 128 bpm Gmin"); named (*bass, "808"); named (*master, "Stereo Out");
+        runSeconds (1.0);
+        check (vocal->getEffectiveRole() == Role::Vocal && beat->getEffectiveRole() == Role::Beat && bass->getEffectiveRole() == Role::Bass808 && master->getEffectiveRole() == Role::Master,
+               "With roles on Auto, the track names decide: rap, beat, 808, Stereo Out", roleNames()[(int) vocal->getEffectiveRole()] + " / " + roleNames()[(int) beat->getEffectiveRole()] + " / "
+               + roleNames()[(int) bass->getEffectiveRole()] + " / " + roleNames()[(int) master->getEffectiveRole()]);
+
+        // the key written in the beat's name is found from any instance and can be sent to all of them
+        vocal->setParam (ids::tuneKey, 0.0f); vocal->setParam (ids::tuneScale, 0.0f);
+        const auto key = master->getBus().findSongKey();
+        const auto said = vocal->findKey();
+        check (key.found && key.fromName && key.key == 7 && key.minor && (int) vocal->getParam (ids::tuneKey) == 7 && (int) vocal->getParam (ids::tuneScale) == 2 && said.contains ("G minor"),
+               "Find key reads G minor from the name of the beat", said);
+        beat->setParam (ids::tuneKey, 3.0f);
+        const auto sent = master->sendKeyToSession();
+        check (sent.contains ("Choose Major or Minor"), "The master will not send a key until one is chosen", sent);
+        master->findKey();
+        const auto sent2 = master->sendKeyToSession();
+        check ((int) beat->getParam (ids::tuneKey) == 7 && (int) beat->getParam (ids::tuneScale) == 2 && (int) bass->getParam (ids::tuneKey) == 7 && sent2.contains ("G minor"), "Send key to all tracks sets every instance", sent2);
+        // without a name to read, the master works the key out by ear and says where it heard it
+        named (*beat, "Audio 2");
+        runSeconds (12.0);
+        const auto heard = master->getBus().findSongKey();
+        check (heard.found && ! heard.fromName && heard.source == "Stereo Out", "Without a key in any name, the key is heard on the master",
+               heard.found ? heard.text() + " from " + heard.source + ", confidence " + juce::String (heard.confidence, 2) : juce::String ("not found"));
+        named (*beat, "beat 128 bpm Gmin");
+
+        // a vocal recorded far too hot: the guard holds it at -1 dB, the session lists it, and Fix compresses it
+        const float wasGain = vocalGain;
+        vocalGain = 2.6f;
+        remeasure();
+        runSeconds (6.0);
+        auto hot = master->getBus().findHotPeaks();
+        const bool listed = ! hot.empty() && hot.front().name == "rap";
+        const float out = vocal->getLoudness().getTruePeakHold();
+        check (listed && out < -0.5f && hot.front().overDb > 2.0f, "A track that is too hot is held under the top by its peak guard and listed for fixing",
+               listed ? juce::String (hot.front().overDb, 1) + " dB over, " + juce::String (hot.front().crestDb, 1) + " dB above its average, leaving at " + juce::String (out, 1) + " dBTP" : juce::String ("not listed"));
+        const auto done = listed ? master->getBus().tamePeaks (hot.front().slot) : juce::String();
+        runSeconds (2.0);
+        check (vocal->getParam (ids::compEnabled) > 0.5f && done.contains ("Compressor"), "Fix switches on the compressor, fitted to the track", done);
+        // the session works to the clock on the wall, so wait in real time for it to look again
+        auto waitFor = [&] (double wallSeconds) { const double until = juce::Time::getMillisecondCounterHiRes() + wallSeconds * 1000.0; while (juce::Time::getMillisecondCounterHiRes() < until) runSeconds (1.0); };
+        waitFor (7.5);
+        const auto notice = master->getBus().takeNotice();
+        runSeconds (4.0);
+        hot = master->getBus().findHotPeaks();
+        check (notice.contains ("too loud") && hot.empty(), "If it is still over a few seconds later because the track is simply too loud, it is turned down, and says so",
+               notice + (hot.empty() ? juce::String() : " Still " + juce::String (hot.front().overDb, 1) + " dB over."));
+
+        // Learn and balance does the same on its own for a vocal, then balances again
+        vocal->applyChainPreset (findChainPreset ("Clean slate"));        // also puts the output back to 0 dB
+        vocal->setParam (ids::role, (float) Role::Auto);
+        vocal->setTrimDb (0.0f);
+        master->getBus().setTrackLocked (vocal->getSessionSlot(), true);      // keeps its level, so its peaks stay hot through the balance
+        remeasure();
+        runSeconds (3.0);
+        master->learnAndBalance (5.0f);
+        for (int i = 0; i < 20 && master->getBus().getLearnState().active; ++i) runSeconds (1.0);
+        const auto message = master->getBus().getLearnState().message;
+        check (vocal->getParam (ids::compEnabled) > 0.5f && message.contains ("compressor was switched on"), "Learn and balance compresses a vocal whose loud words tower over the rest", message);
+        waitFor (8.0);
+        check (master->getBus().getLearnState().message.contains ("Balanced again"), "...and balances once more when the new levels have been heard", master->getBus().getLearnState().message);
+        master->getBus().setTrackLocked (vocal->getSessionSlot(), false);
+        waitFor (7.0);                               // let any follow-up finish before moving on
+        master->getBus().takeNotice();
+        vocalGain = wasGain;
+        vocal->setTrimDb (0.0f);
+        vocal->setParam (ids::outputGain, 0.0f);
+        vocal->applyChainPreset (findChainPreset ("Clean slate"));
+        vocal->setParam (ids::role, (float) Role::Auto);
+
+        // every preset of every tool loads and switches its tool on; the robot borrows the scale and gives it back
+        vocal->setParam (ids::tuneKey, 7.0f); vocal->setParam (ids::tuneScale, 2.0f);
+        bool allOn = true; int count = 0; juce::String failed;
+        for (int i = 0; i < (int) modulePresets().size(); ++i)
+        {
+            const auto& mp = modulePresets()[(size_t) i];
+            const auto said2 = vocal->applyModulePreset (i);
+            juce::String onParam = mp.module == "tune" ? ids::tuneOn : juce::String();
+            for (auto& m : fxModules()) if (m.id == mp.module) onParam = m.onParam;
+            const bool ok = said2.isNotEmpty() && vocal->getParam (onParam) > 0.5f && vocal->getModulePresetName (mp.module) == mp.name;
+            if (! ok) { allOn = false; failed = mp.module + "/" + mp.name; }
+            ++count;
+        }
+        check (allOn && count >= 70 && modulePresetsFor ("delay").size() >= 8 && modulePresetsFor ("reverb").size() >= 8 && modulePresetsFor ("tune").size() >= 10,
+               "Every tool preset loads and switches its tool on", juce::String (count) + " presets" + (failed.isEmpty() ? juce::String() : ", failed: " + failed));
+        const auto tunePresets = modulePresetsFor ("tune");
+        int robot = -1, natural = -1;
+        for (int i : tunePresets) { if (modulePresets()[(size_t) i].name == "Robot") robot = i; if (modulePresets()[(size_t) i].name == "Natural") natural = i; }
+        vocal->setParam (ids::tuneScale, 2.0f);
+        vocal->applyModulePreset (robot);
+        const bool oneNote = (int) vocal->getParam (ids::tuneScale) == Tuner::kCustomScale && (int) vocal->getParam (ids::tuneNotes) == (1 << 7);
+        vocal->applyModulePreset (natural);
+        check (oneNote && (int) vocal->getParam (ids::tuneScale) == 2 && (int) vocal->getParam (ids::tuneKey) == 7, "The Robot preset allows only the key note, and the next preset gives the scale back");
+
+        // every sound loads, runs clean, and leaves nothing on from the sound before it
+        bool finite = true; juce::String worstSound; float worstPeak = 0.0f;
+        for (int i = 0; i < (int) soundPresets().size(); ++i)
+        {
+            vocal->applySound (i);
+            runSeconds (1.2);
+            for (int c = 0; c < 2; ++c)
+                for (int n = 0; n < block; ++n) finite = finite && std::isfinite (v.getSample (c, n));
+            const float peak = v.getMagnitude (0, block);
+            if (peak > worstPeak) { worstPeak = peak; worstSound = soundPresets()[(size_t) i].name; }
+        }
+        int stacked = -1, phoneVerse = -1;
+        for (int i = 0; i < (int) soundPresets().size(); ++i) { if (soundPresets()[(size_t) i].name == "Stacked hook") stacked = i; if (soundPresets()[(size_t) i].name == "Phone verse") phoneVerse = i; }
+        vocal->applySound (stacked);
+        const bool stackOn = vocal->getParam (ids::dblOn) > 0.5f && vocal->getParam (ids::hmOn) > 0.5f && vocal->getParam (ids::rvOn) > 0.5f;
+        vocal->applySound (phoneVerse);
+        check (finite && worstPeak <= 0.9f && stackOn && vocal->getParam (ids::phOn) > 0.5f && vocal->getParam (ids::dblOn) < 0.5f && vocal->getParam (ids::hmOn) < 0.5f && vocal->getSoundName() == "Phone verse",
+               "Every sound loads and runs clean, and a new sound clears the one before", juce::String ((int) soundPresets().size()) + " sounds, loudest output " + juce::String (juce::Decibels::gainToDecibels (worstPeak), 1) + " dB (" + worstSound + ")");
+        vocal->applyChainPreset (findChainPreset ("Clean slate"));
+        vocal->setParam (ids::role, (float) Role::Auto);
+
+        // the delay follows the host's tempo
+        vocal->setParam (ids::dlOn, 1.0f); vocal->setParam (ids::dlSync, 1.0f); vocal->setParam (ids::dlNote, 2.0f);
+        runSeconds (0.5);
+        check (std::abs (vocal->getEcho().currentTimeMs() - 375.0f) < 0.5f && vocal->getTailLengthSeconds() > 0.5, "Delay takes its time from the song: a dotted eighth at 120 BPM is 375 ms", juce::String (vocal->getEcho().currentTimeMs(), 1) + " ms");
+        vocal->setParam (ids::dlOn, 0.0f);
+
+        // reverb fitted to the track
+        const auto fitVocal = vocal->fitReverb();
+        const auto fitBass = bass->fitReverb();
+        check (vocal->getParam (ids::rvOn) > 0.5f && (int) vocal->getParam (ids::rvType) == 1 && bass->getParam (ids::rvOn) < 0.5f && fitBass.contains ("dry") && fitVocal.contains ("120 BPM"),
+               "Fit to this track chooses a plate for the vocal and leaves the 808 dry", fitVocal);
+        vocal->setParam (ids::rvOn, 0.0f);
+
+        // graph view: capture, correct, save with the song, reopen
+        vocal->setParam (ids::tuneKey, 7.0f); vocal->setParam (ids::tuneScale, 2.0f);
+        vocal->startCapture();
+        runSeconds (5.0);
+        const bool wasCapturing = vocal->isCapturing();
+        head.playing = false;                       // stopping the song ends the capture
+        runSeconds (0.6);
+        head.playing = true;
+        const int found = (int) vocal->getGraph().getNotes().size();
+        const auto corrected = vocal->correctAllNotes (0.35f);
+        int onScale = 0;
+        for (auto& n : vocal->getGraph().getNotes()) if (std::abs (n.pitch - std::round (n.pitch)) < 0.001f && Tuner::noteAllowed ((int) std::lround (n.pitch), 7, 2)) ++onScale;
+        check (wasCapturing && ! vocal->isCapturing() && found >= 6 && onScale == found && (int) vocal->getParam (ids::tuneMode) == 1 && vocal->getParam (ids::tuneOn) > 0.5f,
+               "Graph: capture writes the notes down, stopping the song ends it, Correct all puts them on the scale", juce::String (found) + " notes. " + corrected);
+        juce::MemoryBlock saved;
+        vocal->getStateInformation (saved);
+        {
+            MUProcessor reopened;
+            reopened.setPlayConfigDetails (2, 2, fs, block);
+            reopened.prepareToPlay (fs, block);
+            reopened.setStateInformation (saved.getData(), (int) saved.getSize());
+            const auto& a = vocal->getGraph().getNotes(); const auto& b2 = reopened.getGraph().getNotes();
+            const bool same = a.size() == b2.size() && ! a.empty() && std::abs (a[0].pitch - b2[0].pitch) < 0.01f && a[0].start == b2[0].start
+                           && std::abs (reopened.getGraph().targetAt (a[0].start + 5) - vocal->getGraph().targetAt (a[0].start + 5)) < 0.03f && (int) reopened.getParam (ids::tuneMode) == 1;
+            check (same, "The edited notes are saved with the song and come back when it is reopened", juce::String ((int) saved.getSize() / 1024) + " kB of state");
+
+            // a song saved before Tune had its own tab opens on the tab it was left on
+            if (auto xml = juce::AudioProcessor::getXmlFromBinary (saved.getData(), (int) saved.getSize()))
+            {
+                xml->removeAttribute ("uiTabs"); xml->setAttribute ("uiTab", 5);          // 5 used to be Master
+                juce::MemoryBlock old;
+                juce::AudioProcessor::copyXmlToBinary (*xml, old);
+                reopened.setStateInformation (old.getData(), (int) old.getSize());
+                check (reopened.getCurrentTab() == 6, "A song saved by an earlier build reopens on the same tab", "tab " + juce::String (reopened.getCurrentTab()));
+            }
+        }
+        vocal->clearGraph();
+        vocal->setParam (ids::tuneMode, 0.0f); vocal->setParam (ids::tuneOn, 0.0f);
+
+        // bounce check and listening checks
+        remeasure();
+        runSeconds (6.0);
+        const auto items = master->bounceCheck();
+        bool hasLoudness = false, hasPeaks = false, hasMono = false;
+        for (auto& c : items) { hasLoudness = hasLoudness || c.title == "Loudness"; hasPeaks = hasPeaks || c.title == "Peaks"; hasMono = hasMono || c.title == "Mono"; }
+        check (hasLoudness && hasPeaks && hasMono && items.size() >= 5, "Bounce check reports loudness, peaks, mono, track peaks, balance and collisions", juce::String ((int) items.size()) + " lines; first: " + items.front().title + ": " + items.front().detail);
+        master->setListenCheck (ListenCheck::Phone);
+        const float lufsBefore = master->getLoudness().getShortTerm();
+        runSeconds (3.0);
+        double side = 0.0, level = 0.0;
+        for (int n = 0; n < block; ++n) { side += std::abs (mix.getSample (0, n) - mix.getSample (1, n)); level += std::abs (mix.getSample (0, n)); }
+        check (side < 1.0e-6 && level > 0.01 && std::abs (master->getLoudness().getShortTerm() - lufsBefore) < 1.5f, "The phone-speaker check changes what is heard and not what is measured",
+               "meter " + juce::String (lufsBefore, 1) + " then " + juce::String (master->getLoudness().getShortTerm(), 1) + " LUFS");
+        master->setNonRealtime (true);
+        runSeconds (0.5);
+        side = 0.0;
+        for (int n = 0; n < block; ++n) side += std::abs (mix.getSample (0, n) - mix.getSample (1, n));
+        master->setNonRealtime (false);
+        master->setListenCheck (ListenCheck::Off);
+        check (side > 1.0e-3, "A listening check is left out of a bounce");
+        for (auto* p : { vocal.get(), beat.get(), bass.get(), master.get() }) named (*p, {});
+        vocal->setParam (ids::role, (float) Role::Vocal); beat->setParam (ids::role, (float) Role::Beat); bass->setParam (ids::role, (float) Role::Bass808); master->setParam (ids::role, (float) Role::Master);
+    }
+
     // ---- the editor builds, runs and closes cleanly on every tab (needs a display)
     if (juce::SystemStats::getEnvironmentVariable ("DISPLAY", {}).isNotEmpty() || juce::SystemStats::getOperatingSystemType() != juce::SystemStats::Linux)
     {
-        for (int tab = 0; tab < 7; ++tab)
+        for (int tab = 0; tab < 8; ++tab)
         {
             vocal->setCurrentTab (tab);
             std::unique_ptr<juce::AudioProcessorEditor> ed (vocal->createEditor());
@@ -675,6 +888,30 @@ int main()
             runSeconds (0.4);
             ed.reset();
         }
+        // every tool on the FX rack, each switched on, and the Tune graph with notes in it
+        for (int tool = 0; tool < (int) fxModules().size(); ++tool)
+        {
+            vocal->setCurrentTab (5);
+            vocal->apvts.state.setProperty ("fxModule", tool, nullptr);
+            vocal->setParam (fxModules()[(size_t) tool].onParam, 1.0f);
+            std::unique_ptr<juce::AudioProcessorEditor> ed (vocal->createEditor());
+            ed->setVisible (true);
+            runSeconds (0.3);
+            ed.reset();
+            vocal->setParam (fxModules()[(size_t) tool].onParam, 0.0f);
+        }
+        vocal->setCurrentTab (4);
+        vocal->startCapture();
+        {
+            std::unique_ptr<juce::AudioProcessorEditor> ed (vocal->createEditor());
+            ed->setVisible (true);
+            runSeconds (2.0);
+            vocal->stopCapture();
+            vocal->correctAllNotes (0.5f);
+            runSeconds (0.5);
+            ed.reset();
+        }
+        vocal->clearGraph();
         std::unique_ptr<juce::AudioProcessorEditor> ed (master->createEditor());
         runSeconds (0.4);
         ed.reset();

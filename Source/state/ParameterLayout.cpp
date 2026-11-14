@@ -25,6 +25,14 @@ static auto dbAttr() { return juce::AudioParameterFloatAttributes().withStringFr
 static auto msAttr() { return juce::AudioParameterFloatAttributes().withStringFromValueFunction (msText).withLabel ("ms"); }
 static auto hzAttr() { return juce::AudioParameterFloatAttributes().withStringFromValueFunction (hzText).withLabel ("Hz"); }
 static auto pctAttr() { return juce::AudioParameterFloatAttributes().withStringFromValueFunction (pctText).withLabel ("%"); }
+static auto semisAttr()
+{
+    return juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int)
+    {
+        if (std::abs (v) < 0.05f) return juce::String ("0 st");
+        return (v > 0.0f ? "+" : "") + juce::String (v, std::abs (v - std::round (v)) < 0.05f ? 0 : 1) + " st";
+    });
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 {
@@ -138,10 +146,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     // ---- tune
     p.push_back (std::make_unique<APB> (id (ids::tuneOn), "Tune", false));
     p.push_back (std::make_unique<APC> (id (ids::tuneKey), "Tune key", juce::StringArray { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }, 0));
-    p.push_back (std::make_unique<APC> (id (ids::tuneScale), "Tune scale", juce::StringArray { "Chromatic", "Major", "Minor", "Major pentatonic", "Minor pentatonic" }, 0));
+    p.push_back (std::make_unique<APC> (id (ids::tuneScale), "Tune scale", juce::StringArray { "Chromatic", "Major", "Minor", "Major pentatonic", "Minor pentatonic", "Custom" }, 0));
     p.push_back (std::make_unique<APF> (id (ids::tuneSpeed), "Tune speed", skewed (0.0f, 400.0f, 60.0f, 0.1f), 60.0f, msAttr()));
     p.push_back (std::make_unique<APF> (id (ids::tuneAmount), "Tune amount", range (0.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
     p.push_back (std::make_unique<APF> (id (ids::tuneVibrato), "Tune keep vibrato", range (0.0f, 100.0f, 0.1f), 70.0f, pctAttr()));
+    p.push_back (std::make_unique<APC> (id (ids::tuneMode), "Tune view", juce::StringArray { "Simple", "Graph" }, 0));
+    p.push_back (std::make_unique<APF> (id (ids::tuneHold), "Tune note hold", range (0.0f, 100.0f, 0.1f), 30.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::tuneFormant), "Tune formant", range (-12.0f, 12.0f, 0.1f), 0.0f, semisAttr()));
+    p.push_back (std::make_unique<juce::AudioParameterInt> (id (ids::tuneNotes), "Tune custom notes", 0, 4095, 4095));
+
+    // ---- peak guard on a track
+    p.push_back (std::make_unique<APB> (id (ids::trackGuard), "Track peak guard", true));
 
     // ---- doubler
     p.push_back (std::make_unique<APB> (id (ids::dblOn), "Doubler", false));
@@ -162,6 +177,63 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     p.push_back (std::make_unique<APF> (id (ids::rvPre), "Reverb pre-delay", skewed (0.0f, 200.0f, 30.0f, 0.1f), 25.0f, msAttr()));
     p.push_back (std::make_unique<APF> (id (ids::rvTone), "Reverb tone", range (0.0f, 100.0f, 0.1f), 50.0f, pctAttr()));
     p.push_back (std::make_unique<APF> (id (ids::rvDuck), "Reverb duck", range (0.0f, 100.0f, 0.1f), 50.0f, pctAttr()));
+    p.push_back (std::make_unique<APC> (id (ids::rvType), "Reverb space", juce::StringArray { "Room", "Plate", "Hall" }, 1));
+    p.push_back (std::make_unique<APF> (id (ids::rvLowCut), "Reverb low cut", skewed (60.0f, 600.0f, 200.0f, 1.0f), 180.0f, hzAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::rvWidth), "Reverb width", range (0.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
+
+    // ---- delay
+    p.push_back (std::make_unique<APB> (id (ids::dlOn), "Delay", false));
+    p.push_back (std::make_unique<APF> (id (ids::dlMix), "Delay level", range (0.0f, 100.0f, 0.1f), 22.0f, pctAttr()));
+    p.push_back (std::make_unique<APB> (id (ids::dlSync), "Delay timed to tempo", true));
+    p.push_back (std::make_unique<APC> (id (ids::dlNote), "Delay note", juce::StringArray { "1/2", "1/4", "1/8 dotted", "1/8", "1/8 triplet", "1/16" }, 3));
+    p.push_back (std::make_unique<APF> (id (ids::dlTime), "Delay time", skewed (20.0f, 2000.0f, 300.0f, 0.1f), 250.0f, msAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::dlFeedback), "Delay repeats", range (0.0f, 90.0f, 0.1f), 35.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::dlTone), "Delay tone", range (0.0f, 100.0f, 0.1f), 45.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::dlWidth), "Delay ping-pong", range (0.0f, 100.0f, 0.1f), 70.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::dlDuck), "Delay duck", range (0.0f, 100.0f, 0.1f), 50.0f, pctAttr()));
+
+    // ---- harmony
+    p.push_back (std::make_unique<APB> (id (ids::hmOn), "Harmony", false));
+    p.push_back (std::make_unique<APC> (id (ids::hmVoicing), "Harmony voices", juce::StringArray { "Third up", "Fifth up", "Third and fifth", "Octave up", "Octave down", "Third below", "Choir" }, 0));
+    p.push_back (std::make_unique<APF> (id (ids::hmMix), "Harmony level", range (0.0f, 100.0f, 0.1f), 45.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::hmWidth), "Harmony width", range (0.0f, 100.0f, 0.1f), 80.0f, pctAttr()));
+
+    // ---- shift
+    p.push_back (std::make_unique<APB> (id (ids::psOn), "Shift", false));
+    p.push_back (std::make_unique<APF> (id (ids::psSemis), "Shift pitch", range (-12.0f, 12.0f, 1.0f), -12.0f, semisAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::psCharacter), "Shift character", range (-100.0f, 100.0f, 0.1f), 0.0f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int)
+        {
+            const int n = juce::roundToInt (v);
+            return n == 0 ? juce::String ("natural") : juce::String (std::abs (n)) + (n < 0 ? " % bigger" : " % smaller");
+        })));
+    p.push_back (std::make_unique<APF> (id (ids::psMix), "Shift mix", range (0.0f, 100.0f, 0.1f), 40.0f, pctAttr()));
+
+    // ---- phone
+    p.push_back (std::make_unique<APB> (id (ids::phOn), "Phone", false));
+    p.push_back (std::make_unique<APF> (id (ids::phAmount), "Phone amount", range (0.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::phTone), "Phone width", range (0.0f, 100.0f, 0.1f), 40.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::phDrive), "Phone drive", range (0.0f, 100.0f, 0.1f), 35.0f, pctAttr()));
+
+    // ---- lo-fi
+    p.push_back (std::make_unique<APB> (id (ids::lfOn), "Lo-fi", false));
+    p.push_back (std::make_unique<APF> (id (ids::lfCrush), "Lo-fi crush", range (0.0f, 100.0f, 0.1f), 40.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::lfWobble), "Lo-fi wobble", range (0.0f, 100.0f, 0.1f), 30.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::lfMix), "Lo-fi mix", range (0.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
+
+    // ---- motion
+    p.push_back (std::make_unique<APB> (id (ids::mdOn), "Motion", false));
+    p.push_back (std::make_unique<APC> (id (ids::mdType), "Motion type", juce::StringArray { "Chorus", "Flanger", "Phaser" }, 0));
+    p.push_back (std::make_unique<APF> (id (ids::mdRate), "Motion rate", skewed (0.05f, 8.0f, 0.8f, 0.01f), 0.6f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return juce::String (v, 2) + " Hz"; })));
+    p.push_back (std::make_unique<APF> (id (ids::mdDepth), "Motion depth", range (0.0f, 100.0f, 0.1f), 50.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::mdMix), "Motion mix", range (0.0f, 100.0f, 0.1f), 50.0f, pctAttr()));
+
+    // ---- chop
+    p.push_back (std::make_unique<APB> (id (ids::chOn), "Chop", false));
+    p.push_back (std::make_unique<APC> (id (ids::chRate), "Chop rate", juce::StringArray { "1/4", "1/8", "1/8 triplet", "1/16", "1/32" }, 3));
+    p.push_back (std::make_unique<APF> (id (ids::chDepth), "Chop depth", range (0.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::chShape), "Chop hardness", range (0.0f, 100.0f, 0.1f), 70.0f, pctAttr()));
 
     return { p.begin(), p.end() };
 }

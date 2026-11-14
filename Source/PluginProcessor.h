@@ -22,6 +22,14 @@
 #include "dsp/Tuner.h"
 #include "dsp/Doubler.h"
 #include "dsp/Reverb.h"
+#include "dsp/Echo.h"
+#include "dsp/PitchFX.h"
+#include "dsp/ColourFX.h"
+#include "dsp/PeakGuard.h"
+#include "dsp/KeyFinder.h"
+#include "dsp/TuneGraph.h"
+#include "analysis/ReverbAdvisor.h"
+#include "state/ModulePresets.h"
 #include "update/Updater.h"
 #include "ai/LocalAI.h"
 #include "state/LocalSettings.h"
@@ -31,9 +39,22 @@ namespace mu
 // What the output carries. The delta modes let you hear only what a module is changing.
 enum class Listen : int { Normal = 0, EqDelta, SmoothDelta };
 
+// Listening checks on the master: how the mix sounds on other speakers. They change only what is heard, never
+// the meters, and they switch themselves off for a bounce.
+enum class ListenCheck : int { Off = 0, Mono, Phone };
+
+// One line of the bounce check.
+struct CheckItem
+{
+    enum State { Good = 0, Warn, Problem, Info };
+    State state = Good;
+    juce::String title, detail;
+};
+
 // Signal chain:
 //   trim -> tune -> gate -> EQ -> compressor -> de-esser -> smooth -> saturation -> rider -> vocal space
-//        -> doubler -> reverb -> stereo -> output -> [master only: auto trim -> maximizer] -> metering
+//        -> doubler + harmony + shift (side by side, all hearing the clean voice) -> phone -> lo-fi -> motion -> chop
+//        -> delay -> reverb -> stereo -> output -> [tracks: peak guard] [master: auto trim -> maximizer] -> metering
 class MUProcessor : public juce::AudioProcessor,
                     public SessionClient,
                     private juce::Timer
@@ -56,7 +77,12 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return reverb.currentDecaySeconds() * (getParam (ids::rvOn) > 0.5f ? 1.0 : 0.0); }
+    double getTailLengthSeconds() const override
+    {
+        const double rv = getParam (ids::rvOn) > 0.5f ? (double) reverb.currentDecaySeconds() : 0.0;
+        const double dl = getParam (ids::dlOn) > 0.5f ? (double) echo.tailSeconds() : 0.0;
+        return juce::jmax (rv, dl);
+    }
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram (int) override {}
@@ -77,7 +103,16 @@ public:
     void applyMaskingCut (float hz, float db) override;
     float cutDbNear (float hz) const override;
     void setSessionInstanceNumber (int n) override { instanceNumber = n; }
-    void resetMeasurement() override { loudness.resetIntegrated(); loudness.resetPeakHold(); mixMeter.resetIntegrated(); mixMeter.resetPeakHold(); }
+    void resetMeasurement() override { loudness.resetIntegrated(); loudness.resetPeakHold(); mixMeter.resetIntegrated(); mixMeter.resetPeakHold(); guard.resetInputPeak(); }
+    KeyEstimate getMusicKey() const override { return keyFinder.estimate(); }
+    bool getNameKey (int& key, bool& minor) const override { return keyFromName (trackName, key, minor); }
+    void setSongKey (int key, bool minor) override;
+    bool isTuneOn() const override { return getParam (ids::tuneOn) > 0.5f; }
+    float getPeakOverDb() const override;
+    bool isCompressorOn() const override { return getParam (ids::compEnabled) > 0.5f; }
+    juce::String tamePeaks() override;
+    void turnOutputDown (float db) override { setParam (ids::outputGain, juce::jlimit (-24.0f, 24.0f, getParam (ids::outputGain) - db)); }
+    float getStereoCorrelation() const override { return getTotalNumOutputChannels() > 1 ? stereo.getCorrelation() : 1.0f; }
 
     // Access for the editor
     juce::AudioProcessorValueTreeState apvts;
@@ -108,7 +143,41 @@ public:
     double getHostBpm() const { return hostBpm.load(); }
     bool hasHostTempo() const { return hostTempoKnown.load(); }
     bool isStereoOut() const { return getTotalNumOutputChannels() > 1; }
-    juce::String findKey();            // sets the Tune key and scale from the notes heard so far
+    const Echo& getEcho() const { return echo; }
+    const PitchFX& getPitchFX() const { return pitchFx; }
+    const Phone& getPhone() const { return phone; }
+    const Motion& getMotion() const { return motion; }
+    const Chop& getChop() const { return chop; }
+    const PeakGuard& getGuard() const { return guard; }
+    juce::String findKey();            // sets the Tune key and scale: from the session if it knows the key, else from the notes sung
+    SongKey songKey() const;           // what findKey would use, without changing anything
+    juce::String sendKeyToSession();   // every instance in the session takes this instance's key and scale
+    juce::String fitReverb();          // chooses a reverb for this track from its role, the tempo and how it sounds
+    ReverbFacts reverbFacts() const;
+
+    // Tune's graph view
+    TuneGraph& getGraph() { return graph; }
+    juce::CriticalSection& getGraphLock() { return graphLock; }
+    void startCapture();
+    void stopCapture();
+    bool isCapturing() const { return graph.isCapturing(); }
+    juce::String correctAllNotes (float straighten01);      // every note to the nearest note of the scale
+    void resetAllNotes();
+    void clearGraph();
+    bool isHostPlaying() const { return hostPlaying.load (std::memory_order_relaxed); }
+    double getHostSeconds() const { return hostSeconds.load (std::memory_order_relaxed); }
+
+    // Presets for one tool, and complete sounds
+    juce::String applyModulePreset (int index);
+    juce::String applySound (int index);
+    juce::String getModulePresetName (const juce::String& module) const;
+    juce::String getSoundName() const { return apvts.state.getProperty ("soundName", juce::String()).toString(); }
+
+    // Listening checks and the bounce check
+    void setListenCheck (ListenCheck c) { listenCheck.store ((int) c); }
+    ListenCheck getListenCheck() const { return (ListenCheck) listenCheck.load(); }
+    std::vector<CheckItem> bounceCheck();
+    RoleGuess guessRole (const RoleFeatures& f) const;
     const History<kLoudnessHistory>& getLoudnessHistory() const { return lufsHistory; }
     RoleGuess getDetectedRole() const { return detected; }
     int getSessionSlot() const { return slot; }
@@ -211,6 +280,23 @@ private:
     Tuner tuner;
     Doubler doubler;
     Reverb reverb;
+    Echo echo;
+    PitchFX pitchFx;
+    Phone phone;
+    LoFi lofi;
+    Motion motion;
+    Chop chop;
+    PeakGuard guard;
+    KeyFinder keyFinder;
+    TuneGraph graph;
+    mutable juce::CriticalSection graphLock;
+    juce::AudioBuffer<float> cleanBuffer;
+    std::atomic<bool> hostPlaying { false };
+    std::atomic<double> hostSeconds { 0.0 };
+    std::atomic<int> listenCheck { 0 };
+    ColourBiquad checkHp1, checkHp2, checkLp;
+    int checkWas = 0, captureFrom = -1;
+    bool captureSeen = false;
     std::atomic<double> hostBpm { 120.0 };
     std::atomic<bool> hostTempoKnown { false };
     juce::AudioBuffer<float> deltaBuffer;
@@ -248,6 +334,15 @@ private:
     AF pTuneOn = nullptr, pTuneKey = nullptr, pTuneScale = nullptr, pTuneSpeed = nullptr, pTuneAmount = nullptr, pTuneVibrato = nullptr;
     AF pDblOn = nullptr, pDblMix = nullptr, pDblDetune = nullptr, pDblTiming = nullptr, pDblWidth = nullptr, pDblVoices = nullptr;
     AF pRvOn = nullptr, pRvMix = nullptr, pRvAuto = nullptr, pRvLength = nullptr, pRvDecay = nullptr, pRvPre = nullptr, pRvTone = nullptr, pRvDuck = nullptr;
+    AF pRvType = nullptr, pRvLowCut = nullptr, pRvWidth = nullptr;
+    AF pTuneMode = nullptr, pTuneHold = nullptr, pTuneFormant = nullptr, pTuneNotes = nullptr, pTrackGuard = nullptr;
+    AF pDlOn = nullptr, pDlMix = nullptr, pDlSync = nullptr, pDlNote = nullptr, pDlTime = nullptr, pDlFeedback = nullptr, pDlTone = nullptr, pDlWidth = nullptr, pDlDuck = nullptr;
+    AF pHmOn = nullptr, pHmVoicing = nullptr, pHmMix = nullptr, pHmWidth = nullptr;
+    AF pPsOn = nullptr, pPsSemis = nullptr, pPsCharacter = nullptr, pPsMix = nullptr;
+    AF pPhOn = nullptr, pPhAmount = nullptr, pPhTone = nullptr, pPhDrive = nullptr;
+    AF pLfOn = nullptr, pLfCrush = nullptr, pLfWobble = nullptr, pLfMix = nullptr;
+    AF pMdOn = nullptr, pMdType = nullptr, pMdRate = nullptr, pMdDepth = nullptr, pMdMix = nullptr;
+    AF pChOn = nullptr, pChRate = nullptr, pChDepth = nullptr, pChShape = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MUProcessor)
 };

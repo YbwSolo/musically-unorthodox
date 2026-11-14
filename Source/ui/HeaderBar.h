@@ -6,7 +6,7 @@ namespace mu
 class HeaderBar : public juce::Component
 {
 public:
-    enum Tab { Mix = 0, EQ, Dynamics, Tone, FX, Master, Learn, NumTabs };
+    enum Tab { Mix = 0, EQ, Dynamics, Tone, Tune, FX, Master, Learn, NumTabs };
 
     explicit HeaderBar (MUProcessor&);
     void setTab (int t);
@@ -32,6 +32,7 @@ private:
     float blockX = 0.0f, blockW = 0.0f;
     bool blockPlaced = false;
     bool shownLowLatency = false;
+    int shownCheck = 0;
     juce::Rectangle<int> tabArea;
     juce::TextButton presetButton, updateButton;
     Segmented abSwitch { juce::StringArray { "A", "B" } };

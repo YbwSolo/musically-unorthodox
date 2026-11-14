@@ -5,7 +5,7 @@
 namespace mu
 {
 using namespace theme;
-static const char* const kTabNames[] = { "MIX", "EQ", "DYNAMICS", "TONE", "FX", "MASTER", "LEARN" };
+static const char* const kTabNames[] = { "MIX", "EQ", "DYNAMICS", "TONE", "TUNE", "FX", "MASTER", "LEARN" };
 
 HeaderBar::HeaderBar (MUProcessor& p) : proc (p)
 {
@@ -82,7 +82,7 @@ juce::Rectangle<float> HeaderBar::tabBounds (int t) const
     float x = (float) tabArea.getX();
     for (int i = 0; i < NumTabs; ++i)
     {
-        const float w = font.getStringWidthFloat (kTabNames[i]) + 26.0f;
+        const float w = font.getStringWidthFloat (kTabNames[i]) + 22.0f;
         if (i == t) return { x, (float) tabArea.getCentreY() - 15.0f, w, 30.0f };
         x += w + 2.0f;
     }
@@ -119,6 +119,7 @@ void HeaderBar::tick (float dt)
     }
 
     if (proc.getBus().isLowLatency() != shownLowLatency) { shownLowLatency = ! shownLowLatency; repaint(); }
+    if ((int) proc.getListenCheck() != shownCheck) { shownCheck = (int) proc.getListenCheck(); repaint(); }
 
     const auto name = proc.getCurrentPresetName();
     if (name != shownPreset)
@@ -173,14 +174,15 @@ void HeaderBar::paint (juce::Graphics& g)
         g.drawText (kTabNames[i], b.translated (0.0f, 1.0f), juce::Justification::centred);
     }
 
-    // a reminder that the session is in recording mode, not full quality
-    if (shownLowLatency)
+    // a reminder that what is heard is not the full-quality mix: recording mode, or a listening check on the master
+    const juce::String reminder = shownLowLatency ? "Low latency" : shownCheck == (int) ListenCheck::Mono ? "Mono check" : shownCheck == (int) ListenCheck::Phone ? "Phone check" : juce::String();
+    if (reminder.isNotEmpty())
     {
         const auto last = tabBounds (NumTabs - 1);
-        const auto pill = juce::Rectangle<float> (last.getRight() + 14.0f, last.getCentreY() - 11.0f, 96.0f, 22.0f);
+        const auto pill = juce::Rectangle<float> (last.getRight() + 10.0f, last.getCentreY() - 11.0f, 88.0f, 22.0f);
         g.setColour (yellow); g.drawRoundedRectangle (pill, 11.0f, 1.2f);
         g.setFont (bodyBold (11.0f));
-        g.drawText ("Low latency", pill, juce::Justification::centred);
+        g.drawText (reminder, pill, juce::Justification::centred);
     }
 }
 
@@ -188,8 +190,8 @@ void HeaderBar::resized()
 {
     auto r = getLocalBounds().reduced (16, 0);
     const int logoW = juce::roundToInt (34.0f * (logo.isValid() ? (float) logo.getWidth() / (float) logo.getHeight() : 4.9f));
-    r.removeFromLeft (logoW + 28);
-    auto right = r.removeFromRight (400).withSizeKeepingCentre (400, 28);
+    r.removeFromLeft (logoW + 22);
+    auto right = r.removeFromRight (338).withSizeKeepingCentre (338, 28);
     settingsButton.setBounds (right.removeFromRight (76));
     right.removeFromRight (8);
     bypassButton.setBounds (right.removeFromRight (28));

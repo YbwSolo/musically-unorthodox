@@ -24,6 +24,15 @@ MasterPage::MasterPage (MUProcessor& p, std::function<void (const juce::String&)
     for (auto* c : std::initializer_list<juce::Component*> { &loudness, &limiter, &checks, &drive, &ceiling, &target, &autoLevel, &resetMeasure, &makeMaster }) addAndMakeVisible (c);
     styleButton (resetMeasure, "Measure again", false, "master.history");
     resetMeasure.onClick = [this] { proc.resetMeters(); setStatus ("Measurement restarted. Play the loudest section of the song."); };
+    setHelp (listenAs, "master.listen");
+    listenAs.onChange = [this] (int i)
+    {
+        proc.setListenCheck ((ListenCheck) i);
+        setStatus (i == 0 ? juce::String ("Listening normally.")
+                   : i == 1 ? juce::String ("Mono check: left and right added together. Anything that gets quieter or vanishes here will do the same on a phone, a club system or a single speaker. It is left out of a bounce.")
+                            : juce::String ("Phone speaker check: mono, nothing below 350 Hz and little above 5 kHz. If the 808 or the vocal disappears here, it disappears for most listeners. It is left out of a bounce."));
+    };
+    addChildComponent (listenAs);
     styleButton (makeMaster, "Make this the master", true, "role");
     makeMaster.onClick = [this] { proc.setParam (ids::role, (float) Role::Master); proc.applyMasterMode ((int) proc.getParam (ids::masterMode)); };
     setHelp (*this, "masterMode");
@@ -101,6 +110,7 @@ void MasterPage::updateChecks()
 
 void MasterPage::tick (float dt)
 {
+    if (listenAs.getIndex() != (int) proc.getListenCheck()) listenAs.setIndex ((int) proc.getListenCheck());
     const int mode = (int) proc.getParam (ids::masterMode);
     for (int i = 0; i < 4; ++i)
     {
@@ -152,6 +162,11 @@ void MasterPage::paint (juce::Graphics& g)
 void MasterPage::paintOverChildren (juce::Graphics& g)
 {
     const float tgt = proc.getParam (ids::targetLufs);
+    if (isMaster)
+    {
+        g.setFont (body (11.5f)); g.setColour (textDim);
+        g.drawText ("Listen as", listenLabel, juce::Justification::centredRight);
+    }
 
     // ---- loudness history: the last minute against the target
     {
@@ -312,6 +327,9 @@ void MasterPage::resized()
     l.removeFromLeft (8);
     historyWell = l;
     resetMeasure.setBounds (loudness.getBounds().getRight() - 122, loudness.getBounds().getY() + 6, 110, 22);
+    listenAs.setBounds (resetMeasure.getX() - 10 - 270, resetMeasure.getY(), 270, 22);
+    listenLabel = { listenAs.getX() - 66, listenAs.getY(), 60, 22 };
+    listenAs.setVisible (isMaster);
 
     auto m = limArea.withTrimmedTop (Section::kHeader).reduced (12, 0).withTrimmedBottom (12);
     auto knobs = m.removeFromBottom (92);

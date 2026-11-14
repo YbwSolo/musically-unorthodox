@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 # Version is <base>.<build number>. CI passes its run number as the build, so every release has a higher
 # plugin version than the last one: hosts re-scan it and the in-plugin updater can tell which is newer.
-set(MU_VERSION_BASE "0.4")
+set(MU_VERSION_BASE "0.5")
 set(MU_BUILD_NUMBER "0" CACHE STRING "Build number (CI run number); 0 for local builds")
 set(MU_UPDATE_BASE_URL "https://github.com/YbwSolo/musically-unorthodox/releases/latest/download" CACHE STRING "Where the plugin looks for latest.json")
 project(MusicallyUnorthodox VERSION ${MU_VERSION_BASE}.${MU_BUILD_NUMBER} LANGUAGES C CXX)
@@ -72,6 +72,12 @@ set(MU_DSP_SOURCES
     Source/dsp/Tuner.cpp
     Source/dsp/Doubler.cpp
     Source/dsp/Reverb.cpp
+    Source/dsp/Echo.cpp
+    Source/dsp/PitchFX.cpp
+    Source/dsp/ColourFX.cpp
+    Source/dsp/KeyFinder.cpp
+    Source/dsp/TuneGraph.cpp
+    Source/analysis/ReverbAdvisor.cpp
     Source/analysis/TonalAnalysis.cpp
     Source/session/BalanceEngine.cpp)
 
@@ -80,6 +86,7 @@ target_sources(MusicallyUnorthodox PRIVATE
     Source/PluginEditor.cpp
     Source/state/ParameterLayout.cpp
     Source/state/ChainPresets.cpp
+    Source/state/ModulePresets.cpp
     Source/session/SessionBus.cpp
     Source/update/Updater.cpp
     Source/ai/LocalAI.cpp
@@ -92,6 +99,7 @@ target_sources(MusicallyUnorthodox PRIVATE
     Source/ui/Widgets.cpp
     Source/ui/HelpText.cpp
     Source/ui/FXPage.cpp
+    Source/ui/TunePage.cpp
     Source/ui/HeaderBar.cpp
     Source/ui/MeterRail.cpp
     Source/ui/InfoBar.cpp

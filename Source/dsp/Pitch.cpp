@@ -40,7 +40,7 @@ void PitchDetector::reset()
 {
     std::fill (ring.begin(), ring.end(), 0.0f);
     lp1.z1 = lp1.z2 = lp2.z1 = lp2.z2 = 0.0f;
-    ringPos = 0; phase = 0; since = 0; freq = 0.0f; clear = 0.0f; lastGood = 0.0f; jumpFrames = 0;
+    ringPos = 0; phase = 0; since = 0; freq = 0.0f; clear = 0.0f; lastGood = 0.0f; pending = 0.0f; heldFrames = 0;
 }
 
 bool PitchDetector::push (float x) noexcept
@@ -67,7 +67,7 @@ void PitchDetector::analyse() noexcept
     double energy = 0.0;
     for (int i = 0; i < total; ++i) frame[(size_t) i] -= (float) mean;
     for (int j = 0; j < window; ++j) energy += (double) x[a + j] * x[a + j];
-    if (energy / (double) window < 1.0e-8) { freq = 0.0f; clear = 0.0f; lastGood = 0.0f; return; }       // below -80 dB: silence
+    if (energy / (double) window < 1.0e-8) { freq = 0.0f; clear = 0.0f; lastGood = 0.0f; pending = 0.0f; heldFrames = 0; return; }       // below -80 dB: silence
 
     // how different the newest stretch is from the same stretch tau samples earlier
     for (int tau = 1; tau <= tauMax; ++tau)
@@ -98,7 +98,11 @@ void PitchDetector::analyse() noexcept
     {
         best = tauMin;
         for (int tau = tauMin; tau < tauMax; ++tau) if (diff[(size_t) tau] < diff[(size_t) best]) best = tau;
-        if (diff[(size_t) best] > 0.30f) { freq = 0.0f; clear = juce::jmax (0.0f, 1.0f - diff[(size_t) best]); lastGood = 0.0f; return; }
+        // A rough or breathy stretch in the middle of a note matches itself less well. If the best match is the
+        // same note that was just being sung, it is given more benefit of the doubt, so the note is not dropped.
+        float limit = 0.30f;
+        if (lastGood > 0.0f && std::abs ((float) best - rate / lastGood) < rate / lastGood * 0.06f) limit = 0.45f;
+        if (diff[(size_t) best] > limit) { freq = 0.0f; clear = juce::jmax (0.0f, 1.0f - diff[(size_t) best]); lastGood = 0.0f; pending = 0.0f; heldFrames = 0; return; }
     }
     // a parabola through the dip and its neighbours finds the delay between two samples
     float tau = (float) best;
@@ -109,9 +113,22 @@ void PitchDetector::analyse() noexcept
         if (std::abs (denom) > 1.0e-9f) tau += juce::jlimit (-0.5f, 0.5f, 0.5f * (y0 - y2) / denom);
     }
     float f = rate / tau;
-    // a sudden leap of more than about five semitones is more often a mistake than a real jump: wait one frame
-    if (lastGood > 0.0f && (f > lastGood * 1.36f || f < lastGood / 1.36f) && jumpFrames < 1) { ++jumpFrames; f = lastGood; }
-    else jumpFrames = 0;
+    // A leap of more than four semitones is far more often a mistake (a consonant, a breath, the wrong octave)
+    // than a real jump. It is only believed once two answers in a row agree on it; until then the last good
+    // note is held, and if no agreement comes within 40 ms the sound is treated as having no pitch.
+    if (lastGood > 0.0f && (f > lastGood * 1.26f || f < lastGood / 1.26f))
+    {
+        const bool confirmed = pending > 0.0f && f < pending * 1.06f && f > pending / 1.06f;
+        if (! confirmed)
+        {
+            pending = f;
+            if (++heldFrames > 4) { freq = 0.0f; clear = 0.0f; lastGood = 0.0f; pending = 0.0f; heldFrames = 0; return; }
+            freq = lastGood;
+            clear = juce::jlimit (0.0f, 1.0f, 1.0f - diff[(size_t) best]);
+            return;
+        }
+    }
+    pending = 0.0f; heldFrames = 0;
     freq = f; lastGood = f;
     clear = juce::jlimit (0.0f, 1.0f, 1.0f - diff[(size_t) best]);
 }
@@ -156,16 +173,17 @@ float GrainEngine::read (int channel, double position) const noexcept
     return ((c3 * f + c2) * f + c1) * f + y1;
 }
 
-void GrainEngine::render (Voice& v, float period, bool voiced, float ratio, float delaySamples, float* out) noexcept
+void GrainEngine::render (Voice& v, float period, bool voiced, float ratio, float delaySamples, float* out, float formant) noexcept
 {
     const double t = (double) now;
     period = juce::jlimit (minPeriod, maxPeriod, period);
     ratio = juce::jlimit (0.5f, 2.0f, ratio);
+    formant = voiced ? juce::jlimit (0.5f, 2.0f, formant) : 1.0f;
 
     while (t >= v.nextCentre - (double) v.nextHalf)
     {
         Voice::Grain g;
-        g.centre = v.nextCentre; g.half = v.nextHalf;
+        g.centre = v.nextCentre; g.half = v.nextHalf; g.rate = formant;
         const double ideal = g.centre - (double) delaySamples;
         double src = ideal;
         if (voiced)
@@ -173,15 +191,18 @@ void GrainEngine::render (Voice& v, float period, bool voiced, float ratio, floa
             // step a whole number of periods on from the last slice, so neighbouring slices line up wave for wave
             src = v.prevSrc + std::round ((ideal - v.prevSrc) / (double) period) * (double) period;
             if (std::abs (src - ideal) > (double) period) src = ideal;
-            while (src > g.centre - 2.0) src -= (double) period;          // a slice can only use sound that has already arrived
+            // a slice can only use sound that has already arrived; one that is read faster reaches further ahead
+            const double reach = (double) g.half * juce::jmax (0.0, (double) formant - 1.0);
+            while (src > g.centre - 2.0 - reach) src -= (double) period;
         }
         g.src = src;
-        g.gain = voiced ? 1.0f / ratio : 1.0f;                            // closer slices would otherwise add up louder
+        // closer slices would add up louder, and so would the longer slices of a lowered formant
+        g.gain = voiced ? juce::jmin (2.0f, formant / ratio) : 1.0f;
         v.prevSrc = src;
         if (v.count == kMaxGrains) { for (int i = 1; i < kMaxGrains; ++i) v.grains[(size_t) i - 1] = v.grains[(size_t) i]; --v.count; }
         v.grains[(size_t) v.count++] = g;
         v.nextCentre += voiced ? (double) (period / ratio) : (double) period;
-        v.nextHalf = period;
+        v.nextHalf = juce::jmin (maxPeriod, period / formant);          // two periods of the sound, however fast it is read
     }
 
     int kept = 0;
@@ -194,7 +215,7 @@ void GrainEngine::render (Voice& v, float period, bool voiced, float ratio, floa
         v.grains[(size_t) kept++] = g;
         if (x <= -1.0f) continue;
         const float w = (0.5f + 0.5f * std::cos (kPi * x)) * g.gain;
-        for (int c = 0; c < channels; ++c) out[c] += w * read (c, g.src + offset);
+        for (int c = 0; c < channels; ++c) out[c] += w * read (c, g.src + offset * (double) g.rate);
     }
     v.count = kept;
 }

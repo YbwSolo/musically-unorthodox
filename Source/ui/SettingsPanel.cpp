@@ -5,7 +5,8 @@ namespace mu
 {
 using namespace theme;
 
-SettingsPanel::SettingsPanel (MUProcessor& p) : proc (p), takePart (p, ids::autoBalance, "Let the session balance move this track")
+SettingsPanel::SettingsPanel (MUProcessor& p) : proc (p), takePart (p, ids::autoBalance, "Let the session balance move this track"),
+      guard (p, ids::trackGuard, "Peak guard: keep this track under -1 dB", "switch", ids::trackGuard)
 {
     roleBox.addItemList (roleNames(), 1);
     roleAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, ids::role, roleBox);
@@ -51,7 +52,7 @@ SettingsPanel::SettingsPanel (MUProcessor& p) : proc (p), takePart (p, ids::auto
         if (st.setup == LocalAI::Setup::Ready && st.upgradeAvailable) ai.removeBuiltIn();
         else if (st.otherId.isNotEmpty()) ai.preferModel (st.otherId);
     };
-    for (auto* c : std::initializer_list<juce::Component*> { &roleBox, &sizeSwitch, &takePart, &closeButton, &resetButton, &checkButton, &installButton, &aiButton }) addAndMakeVisible (c);
+    for (auto* c : std::initializer_list<juce::Component*> { &roleBox, &sizeSwitch, &takePart, &guard, &closeButton, &resetButton, &checkButton, &installButton, &aiButton }) addAndMakeVisible (c);
     addChildComponent (aiRemove);
 
     for (int r = (int) Role::Vocal + 1; r < (int) Role::Master; ++r)
@@ -68,7 +69,7 @@ void SettingsPanel::refresh()
 {
     const auto guess = proc.getDetectedRole();
     const auto d = (int) proc.getParam (ids::role) == (int) Role::Auto
-                 ? "Auto is hearing this as " + roleNames()[(int) guess.role].toLowerCase() + "."
+                 ? "Auto: " + roleNames()[(int) guess.role].toLowerCase() + (juce::String (guess.reason).contains ("name") ? " (by name)" : " (by ear)")
                  : juce::String ("Set by hand.");
 
     if (lowLatency.getToggleState() != proc.getBus().isLowLatency()) lowLatency.setToggleState (proc.getBus().isLowLatency(), juce::dontSendNotification);
@@ -121,8 +122,10 @@ void SettingsPanel::refresh()
     if (d != detected || line != updateLine || prog != showProgress || std::abs (st.progress - progress) > 0.004f || n != notes || aiNow != aiLine
         || aiBusy != showAiProgress || std::abs (aiP - aiProgress) > 0.002f)
     {
+        const bool relabel = d != detected;
         detected = d; updateLine = line; showProgress = prog; progress = st.progress; notes = n; aiLine = aiNow;
         showAiProgress = aiBusy; aiProgress = aiP;
+        if (relabel) resized();          // the labels are laid out with their text
         repaint();
     }
 }
@@ -193,6 +196,7 @@ void SettingsPanel::resized()
     roleRow.removeFromLeft (12);
     labels.push_back ({ detected, roleRow });
     takePart.setBounds (row (22));
+    guard.setBounds (row (22));
     lowLatency.setBounds (row (22));
     r.removeFromTop (4);
     labels.push_back ({ "#Window size", row (18) });

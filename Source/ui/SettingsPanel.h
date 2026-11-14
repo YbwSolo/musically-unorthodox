@@ -21,7 +21,7 @@ private:
     juce::ComboBox roleBox;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> roleAtt;
     Segmented sizeSwitch { juce::StringArray { "Compact", "Standard", "Large" } };
-    ParamToggle takePart;
+    ParamToggle takePart, guard;
     juce::ToggleButton lowLatency;
     juce::TextButton closeButton, resetButton, checkButton, installButton, aiButton, aiRemove;
     juce::OwnedArray<juce::Slider> offsetSliders;

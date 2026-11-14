@@ -1,49 +1,71 @@
 #pragma once
 #include "Widgets.h"
+#include "../state/ModulePresets.h"
 
 namespace mu
 {
-// Tune, Doubler and Reverb: the tools that turn a dry take into a finished vocal.
+// The FX rack. The tools are listed on the left, each with its own switch; the one that is selected fills the
+// right-hand side with its controls, a live picture of what it is doing, and its presets. The Sounds browser at
+// the top loads several tools together.
 class FXPage : public juce::Component
 {
 public:
     FXPage (MUProcessor&, std::function<void (const juce::String&)> status);
     void tick (float dt);
+    void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
 
 private:
-    void drawPitch (juce::Graphics&, juce::Rectangle<float>);
+    struct ModuleUI
+    {
+        std::vector<juce::Component*> top;        // switches and choices, laid out left to right above the display
+        std::vector<int> topWidths;
+        std::vector<Knob*> knobs;
+    };
+    void select (int index);
+    juce::Rectangle<int> rowBounds (int index) const;
     void drawDoubles (juce::Graphics&, juce::Rectangle<float>);
+    void drawEcho (juce::Graphics&, juce::Rectangle<float>);
     void drawReverb (juce::Graphics&, juce::Rectangle<float>);
-    void style (std::initializer_list<std::pair<juce::String, float>> values, const juce::String& what);
+    void drawHarmony (juce::Graphics&, juce::Rectangle<float>);
+    void drawShift (juce::Graphics&, juce::Rectangle<float>);
+    void drawPhone (juce::Graphics&, juce::Rectangle<float>);
+    void drawLoFi (juce::Graphics&, juce::Rectangle<float>);
+    void drawMotion (juce::Graphics&, juce::Rectangle<float>);
+    void drawChop (juce::Graphics&, juce::Rectangle<float>);
 
     MUProcessor& proc;
     std::function<void (const juce::String&)> setStatus;
-    Section tune { "Tune" }, dbl { "Doubler" }, verb { "Reverb" };
+    int selected = 0, hoverRow = -1;
+    juce::OwnedArray<ParamToggle> powers;
+    PresetStrip sounds { "fx.sounds", "Choose a sound" }, presets { "fx.presets", "Presets" };
+    std::vector<ModuleUI> ui;
 
-    juce::ComboBox keyBox;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> keyAtt;
-    Segmented scale;
-    juce::TextButton findKey, tuneNatural, tuneTight, tuneHard;
-    Knob tuneSpeed, tuneAmount, tuneVibrato;
+    // doubler
+    Segmented dblVoices; Knob dblMix, dblDetune, dblTiming, dblWidth;
+    // delay
+    ParamToggle dlSync; Segmented dlNote; Knob dlMix, dlTime, dlFeedback, dlTone, dlWidth, dlDuck;
+    // reverb
+    Segmented rvType; ParamToggle rvAuto; Segmented rvLength; juce::TextButton rvFit; Knob rvMix, rvDecay, rvPre, rvTone, rvDuck, rvLowCut, rvWidth;
+    // harmony
+    Segmented hmVoicing; Knob hmMix, hmWidth;
+    // shift
+    Knob psSemis, psCharacter, psMix;
+    // phone
+    Knob phAmount, phTone, phDrive;
+    // lo-fi
+    Knob lfCrush, lfWobble, lfMix;
+    // motion
+    Segmented mdType; Knob mdRate, mdDepth, mdMix;
+    // chop
+    Segmented chRate; Knob chDepth, chShape;
 
-    Segmented voices;
-    Knob dblMix, dblDetune, dblTiming, dblWidth;
-    juce::TextButton dblSubtle, dblWide, dblStack;
-
-    ParamToggle rvAuto;
-    Segmented rvLength;
-    Knob rvMix, rvDecay, rvPre, rvTone, rvDuck;
-    juce::TextButton rvTight, rvPlate, rvBig;
-
-    juce::Rectangle<int> pitchWell, dblWell, verbWell, keyLabel, monoNote;
-    static constexpr int kHistory = 360;                      // six seconds at 60 frames a second
-    std::array<float, kHistory> sung {}, tuned {};
-    int head = 0;
-    float frame = 0.0f, centre = 60.0f, correction = 0.0f, duck = 0.0f, sweep = 0.0f;
-    int shownTarget = -1;
+    juce::Rectangle<int> rail, panel, well, railList, monoNote, titleArea;
+    float duck = 0.0f, echoDuck = 0.0f, sweep = 0.0f, harmonyCentre = 60.0f;
     std::array<float, 4> voiceCents {}, voiceDelay {};
+    std::array<float, 9> glow {};
 };
 }

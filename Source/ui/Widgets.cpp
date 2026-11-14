@@ -200,6 +200,64 @@ juce::TextButton& styleButton (juce::TextButton& b, const juce::String& text, bo
     return b;
 }
 
+//==================================================================== PresetStrip
+PresetStrip::PresetStrip (const juce::String& helpKey, const juce::String& emptyText) : empty (emptyText)
+{
+    styleButton (previous, "<", false, helpKey);
+    styleButton (name, emptyText, false, helpKey);
+    styleButton (next, ">", false, helpKey);
+    previous.onClick = [this] { step (-1); };
+    next.onClick = [this] { step (1); };
+    name.onClick = [this] { showMenu(); };
+    addAndMakeVisible (previous); addAndMakeVisible (name); addAndMakeVisible (next);
+}
+
+void PresetStrip::refresh()
+{
+    const auto now = current ? current() : juce::String();
+    if (now != shown || first)
+    {
+        first = false; shown = now;
+        name.setButtonText (now.isEmpty() ? empty : now);
+    }
+}
+
+void PresetStrip::step (int direction)
+{
+    if (! names || ! choose) return;
+    const auto list = names();
+    if (list.isEmpty()) return;
+    const int at = list.indexOf (current ? current() : juce::String());
+    const int target = at < 0 ? (direction > 0 ? 0 : list.size() - 1) : (at + direction + list.size()) % list.size();
+    choose (target);
+    refresh();
+}
+
+void PresetStrip::showMenu()
+{
+    if (! names || ! choose) return;
+    const auto list = names();
+    juce::PopupMenu menu;
+    menu.setLookAndFeel (&getLookAndFeel());
+    const auto now = current ? current() : juce::String();
+    for (int i = 0; i < list.size(); ++i) menu.addItem (i + 1, list[i], true, list[i] == now);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&name).withMinimumWidth (name.getWidth()),
+        [safe = juce::Component::SafePointer<PresetStrip> (this)] (int result)
+        {
+            if (safe == nullptr || result <= 0 || ! safe->choose) return;
+            safe->choose (result - 1);
+            safe->refresh();
+        });
+}
+
+void PresetStrip::resized()
+{
+    auto r = getLocalBounds();
+    previous.setBounds (r.removeFromLeft (26));
+    next.setBounds (r.removeFromRight (26));
+    name.setBounds (r.reduced (3, 0));
+}
+
 void layoutRow (juce::Rectangle<int> area, std::initializer_list<juce::Component*> items, int gap)
 {
     const int n = (int) items.size();

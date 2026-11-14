@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include "BalanceEngine.h"
+#include "../dsp/KeyFinder.h"
 
 namespace mu
 {
@@ -23,6 +24,43 @@ public:
     virtual float cutDbNear (float hz) const = 0;      // the deepest EQ cut this track already has around hz (0 if none)
     virtual void setSessionInstanceNumber (int n) = 0;
     virtual void resetMeasurement() = 0;
+
+    // song key
+    virtual KeyEstimate getMusicKey() const = 0;                    // from the chords and bass heard on this track
+    virtual bool getNameKey (int& key, bool& minor) const = 0;     // a key written in the track's name
+    virtual void setSongKey (int key, bool minor) = 0;              // sets this track's Tune key and scale
+    virtual bool isTuneOn() const = 0;
+
+    // peaks
+    virtual float getPeakOverDb() const = 0;        // how far this track's loudest moments reach past -1 dB (0 = they do not)
+    virtual bool isCompressorOn() const = 0;
+    virtual juce::String tamePeaks() = 0;           // bring the loud moments down; returns what was done
+    virtual void turnOutputDown (float db) = 0;     // lower what leaves the track, after all its processing
+    virtual float getStereoCorrelation() const = 0;
+};
+
+// The key of the song as far as the session can tell, and where that came from.
+struct SongKey
+{
+    bool found = false;
+    int key = 0;
+    bool minor = false;
+    float confidence = 0.0f;
+    bool fromName = false;
+    juce::String source;            // the track it was read or heard from
+    juce::String note;              // set when the name and the sound disagree
+    juce::String text() const { static const char* const n[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }; return juce::String (n[juce::jlimit (0, 11, key)]) + (minor ? " minor" : " major"); }
+};
+
+// A track whose loud moments are out of proportion to the rest of it.
+struct HotTrack
+{
+    int slot = -1;
+    juce::String name;
+    Role role = Role::Beat;
+    float overDb = 0.0f;            // how far past -1 dB its peaks reach
+    float crestDb = 0.0f;           // peak above average loudness
+    bool compressorOn = false;
 };
 
 struct LearnState
@@ -70,6 +108,15 @@ public:
     void applyMaskingClash (const MaskingClash& c);
     void setTrackLocked (int slot, bool locked);
 
+    // Song key: read from a track name when one states it, otherwise heard from the master, the beat or an instrument.
+    SongKey findSongKey() const;
+    int sendKeyToAll (int key, bool minor);                // every instance takes the key; returns how many have Tune on
+    // Tracks whose peaks are too hot, worst first, and the fix for one of them.
+    std::vector<HotTrack> findHotPeaks() const;
+    juce::String tamePeaks (int slot);
+    juce::String takeNotice();                             // something the session did by itself since the last call, to show the user
+    float getMasterCorrelation() const;                    // 1 when there is no master
+
     void setAutoBalance (bool on, BalanceTargets targets);
     bool isAutoBalance() const { return autoBalance; }
 
@@ -108,6 +155,10 @@ private:
     bool learning = false;
     double learnStartMs = 0.0, learnLengthMs = 0.0;
     juce::String learnMessage;
+    struct FollowUp { int slot = -1; double dueMs = 0.0; int round = 0; };
+    std::vector<FollowUp> followUps;       // tracks whose peaks were tamed: look again once the result has been heard
+    juce::String notice;
+    double rebalanceAtMs = 0.0;     // after peaks were tamed during a learn: balance once more when the new levels have been heard
     double settleUntilMs = 0.0, lastAutoApplyMs = 0.0, resetAtMs = 0.0;     // after a balance, wait for fresh measurements before judging again
     bool hasReference = false;
     std::array<float, kAnalysisBands> referenceBands {};

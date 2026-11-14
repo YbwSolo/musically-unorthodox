@@ -24,7 +24,7 @@ void MeterRail::tick (float dt)
         if (in > -0.1f) clipFlash = 1.0f;
     }
     clipFlash = juce::jmax (0.0f, clipFlash - dt * 0.4f);
-    const float reduction = juce::jmin (proc.getCompressor().getGainReductionDb(), proc.isMasterInstance() ? proc.getMaximizer().getGainReductionDb() : 0.0f);
+    const float reduction = juce::jmin (proc.getCompressor().getGainReductionDb(), proc.isMasterInstance() ? proc.getMaximizer().getGainReductionDb() : proc.getGuard().getReductionDb());
     gr = reduction < gr ? reduction : approach (gr, reduction, dt, 0.12f);
     lufs = l.getShortTerm();
     tp = l.getTruePeakHold();

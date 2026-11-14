@@ -1,6 +1,7 @@
 #pragma once
 #include "Widgets.h"
 #include "../session/SessionBus.h"
+#include "../PluginProcessor.h"
 #include <map>
 
 namespace mu
@@ -27,10 +28,18 @@ private:
     void drawDial (juce::Graphics&, juce::Rectangle<float>);
     void drawLanes (juce::Graphics&);
     void drawCollisions (juce::Graphics&);
+    void drawBounceCheck (juce::Graphics&);
+    struct Fix { bool peaks = false; MaskingClash clash; HotTrack hot; };
 
     MUProcessor& proc;
     std::function<void (const juce::String&)> setStatus;
-    juce::TextButton learnButton, balanceButton;
+    juce::TextButton learnButton, balanceButton, bounceButton, keyButton;
+    std::vector<Fix> fixes;
+    SongKey songKey;
+    std::vector<CheckItem> checkItems;
+    bool showCheck = false;
+    float checkTimer = 0.0f;
+    juce::Rectangle<int> keyArea;
     juce::ToggleButton keepBalanced;
     std::array<juce::TextButton, 4> fixButtons;
     std::vector<Lane> lanes;

@@ -41,6 +41,10 @@ namespace
             set (ids::tuneOn, 0); set (ids::tuneSpeed, 60); set (ids::tuneAmount, 100); set (ids::tuneVibrato, 70);
             set (ids::dblOn, 0); set (ids::dblMix, 45); set (ids::dblDetune, 9); set (ids::dblTiming, 45); set (ids::dblWidth, 100); set (ids::dblVoices, 0);
             set (ids::rvOn, 0); set (ids::rvMix, 18); set (ids::rvAuto, 1); set (ids::rvLength, 1); set (ids::rvDecay, 1.2f); set (ids::rvPre, 25); set (ids::rvTone, 50); set (ids::rvDuck, 50);
+            set (ids::rvType, 1); set (ids::rvLowCut, 180); set (ids::rvWidth, 100);
+            set (ids::tuneHold, 30); set (ids::tuneFormant, 0); set (ids::tuneMode, 0);
+            // the creative effects are off in every whole-chain preset; the FX tab has its own presets for them
+            for (auto* fx : { &ids::dlOn, &ids::hmOn, &ids::psOn, &ids::phOn, &ids::lfOn, &ids::mdOn, &ids::chOn }) set (*fx, 0);
         }
         // speed in ms (0 = hard tune), keepVibrato in percent
         Chain& tune (float speed, float keepVibrato, float amount = 100) { set (ids::tuneOn, 1); set (ids::tuneSpeed, speed); set (ids::tuneVibrato, keepVibrato); set (ids::tuneAmount, amount); return *this; }

@@ -33,8 +33,8 @@ private:
     Biquad lp1, lp2;
     std::vector<float> ring, frame, diff;
     int ringPos = 0, total = 0, window = 720, tauMin = 24, tauMax = 369, hop = 240, since = 0;
-    float freq = 0.0f, clear = 0.0f, lastGood = 0.0f;
-    int jumpFrames = 0;
+    float freq = 0.0f, clear = 0.0f, lastGood = 0.0f, pending = 0.0f;
+    int heldFrames = 0;
 };
 
 // Plays a sound back at a different pitch without changing its character. It cuts the incoming sound into
@@ -44,10 +44,10 @@ private:
 class GrainEngine
 {
 public:
-    static constexpr int kMaxGrains = 8;
+    static constexpr int kMaxGrains = 12;
     struct Voice
     {
-        struct Grain { double centre = 0, src = 0; float half = 1, gain = 1; };
+        struct Grain { double centre = 0, src = 0; float half = 1, gain = 1, rate = 1; };
         std::array<Grain, kMaxGrains> grains;
         int count = 0;
         double nextCentre = 0, prevSrc = 0;
@@ -59,7 +59,9 @@ public:
     void resetVoice (Voice& v, float delaySamples) const noexcept;
     void write (int channel, float x) noexcept { ring[(size_t) channel][(size_t) (now & mask)] = x; }
     // Adds this voice's output for the sample just written into out[0..channels).
-    void render (Voice& v, float periodSamples, bool voiced, float ratio, float delaySamples, float* out) noexcept;
+    // formant: 1 leaves the character of the voice alone; above 1 makes it smaller and brighter, below 1 bigger and
+    // darker. It works by reading each slice faster or slower while the slices stay the same distance apart.
+    void render (Voice& v, float periodSamples, bool voiced, float ratio, float delaySamples, float* out, float formant = 1.0f) noexcept;
     void advance() noexcept { ++now; }
     int numChannels() const noexcept { return channels; }
 
