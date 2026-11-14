@@ -1125,6 +1125,51 @@ int main()
                                                "{ \"rvMix\": 5000, \"compRatio\": 20, \"role\": 3, \"notAControl\": 1 } }");
         check (near (vocal->getParam (ids::rvMix), 100.0f, 0.01f) && near (vocal->getParam (ids::compRatio), ratioBefore, 0.01f) && (int) vocal->getParam (ids::role) == (int) Role::Vocal && sneaky.contains ("left out"),
                "A reverb preset can only move reverb controls, and a value outside a control's range is brought inside it", sneaky);
+        // Harmony's chord grid: filled from the key, followed through the song, overridden by held keys, kept in a preset
+        {
+            const int cMajor = (1 << 0) | (1 << 4) | (1 << 7), aMinor = (1 << 9) | (1 << 0) | (1 << 4), bDim = (1 << 11) | (1 << 2) | (1 << 5);
+            check (MUProcessor::chordName (cMajor) == "C" && MUProcessor::chordName (aMinor) == "Am" && MUProcessor::chordName (bDim) == "Bdim" && MUProcessor::chordName (cMajor | 2).isEmpty(),
+                   "Plain triads in the chord grid are named: C, Am, Bdim");
+            vocal->setParam (ids::tuneKey, 0.0f); vocal->setParam (ids::tuneScale, 0.0f);
+            const auto noKey = vocal->fillChords (0);
+            vocal->setParam (ids::tuneScale, 1.0f);
+            const auto filled = vocal->fillChords (0);
+            check (noKey.contains ("Major or Minor") && filled.contains ("C, G, Am, F") && (int) vocal->getParam (ids::hmMode) == 2 && juce::roundToInt (vocal->getParam (ids::hmChord (0))) == cMajor
+                   && juce::roundToInt (vocal->getParam (ids::hmChord (2))) == aMinor && juce::roundToInt (vocal->getParam (ids::hmChordCount)) == 4,
+                   "Fill from key builds a four-chord progression from the key on the Tune tab, and asks for a key when there is none", filled);
+            vocal->setParam (ids::hmOn, 1.0f); vocal->setParam (ids::hmChordLength, 1.0f);                 // one bar each: two seconds at 120 BPM
+            const double was = head.seconds;
+            head.seconds = 2.1; runSeconds (0.02); const int second = vocal->getChordSlotNow();
+            head.seconds = 6.5; runSeconds (0.02); const int fourth = vocal->getChordSlotNow();
+            head.seconds = 8.1; runSeconds (0.02); const int again = vocal->getChordSlotNow();
+            check (second == 1 && fourth == 3 && again == 0, "The chord grid is locked to the song: the second chord in bar 2, the fourth in bar 4, and round to the first",
+                   juce::String (second + 1) + ", " + juce::String (fourth + 1) + ", " + juce::String (again + 1));
+            // keys held on a MIDI keyboard take over from the grid (where the host sends MIDI to an effect)
+            for (int note : { 62, 65, 69 }) midi.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
+            runSeconds (0.02);
+            const int held = vocal->getMidiChord();
+            midi.clear();
+            for (int note : { 62, 65, 69 }) midi.addEvent (juce::MidiMessage::noteOff (1, note), 0);
+            runSeconds (0.02);
+            midi.clear();
+            check (held == ((1 << 2) | (1 << 5) | (1 << 9)) && vocal->getMidiChord() == 0, "Notes held on a MIDI keyboard become the chord, and letting go hands back to the grid");
+            head.seconds = was;
+            // a Harmony preset of your own holds the voices and the chords
+            vocal->setParam (ids::hmVoiceSteps (2), -5.0f); vocal->setParam (ids::hmVoiceOn (2), 1.0f); vocal->setParam (ids::hmChoir, 70.0f);
+            bool saved = false;
+            vocal->saveUserPreset ("harmony", "My stack", false, &saved);
+            vocal->setParam (ids::hmVoiceSteps (2), 4.0f); vocal->setParam (ids::hmChoir, 0.0f); vocal->clearChords(); vocal->setParam (ids::hmMode, 0.0f);
+            vocal->loadUserPreset ("harmony", "My stack");
+            check (saved && juce::roundToInt (vocal->getParam (ids::hmVoiceSteps (2))) == -5 && near (vocal->getParam (ids::hmChoir), 70.0f, 0.1f) && (int) vocal->getParam (ids::hmMode) == 2
+                   && juce::roundToInt (vocal->getParam (ids::hmChord (3))) == ((1 << 5) | (1 << 9) | (1 << 0)),
+                   "A Harmony preset of your own keeps the mode, every voice and the chord grid");
+            // a built-in voicing preset puts Harmony back in its simple mode and leaves the hand-built voices as they were
+            const auto list = modulePresetsFor ("harmony");
+            vocal->applyModulePreset (list[0]);
+            check ((int) vocal->getParam (ids::hmMode) == 0 && juce::roundToInt (vocal->getParam (ids::hmVoiceSteps (2))) == -5, "A ready-made voicing switches Harmony to Voicing mode and does not disturb the voices set by hand");
+            vocal->setParam (ids::hmOn, 0.0f); vocal->setParam (ids::tuneScale, 0.0f);
+        }
+
         // one tab: that tab's controls and nothing else, for each of the four tabs that have no tool list of their own
         {
             struct Tab { const char* scope; juce::String mine, other; float saved, moved, otherMoved; };

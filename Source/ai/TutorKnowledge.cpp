@@ -22,8 +22,11 @@ juce::String corePrompt()
         "Tone tab: Smooth (tames harsh resonances), saturation, level rider, vocal space, stereo width, mono bass. There is no EQ on the Tone tab.\n"
         "Tune tab: pitch correction. Simple view corrects as the song plays, from natural to hard tune. Graph view captures a take and lets each note be moved by hand. Find key and Send key to all tracks are here.\n"
         "FX tab: a rack of tools, each with presets: Doubler, Delay (styles Digital, Tape, Analog, Diffused; timed to the tempo), Reverb (nine spaces: Room, Plate, Hall, Chamber, Cathedral, Ambient, Vintage, Shimmer, Gated; "
-        "timed to the tempo, with Fit to this track; More controls shows size, diffusion and the rest), Harmony (extra voices in key), "
-        "Shift (voice up or down), Phone (telephone and megaphone), Lo-fi, Motion (chorus, flanger, phaser), Chop (tempo gate). Sounds at the top loads several at once.\n"
+        "timed to the tempo, with Fit to this track; More controls shows size, diffusion and the rest), Harmony (up to four extra voices: a ready-made voicing, voices set one by one, or voices singing a chord grid; voice leading; choir), "
+        "Shift (voice up or down, Wide for two copies left and right, Robot for one note), Phone (small speaker, telephone, megaphone, radio, walkie-talkie, with noise), "
+        "Lo-fi (drive, wobble, crush, wear, tone, vinyl or tape noise), Motion (chorus, flanger, phaser, filter, pan or volume, moved by a wave or a drawn curve, can be timed to the tempo), "
+        "Chop (an even pulse or a sixteen-step pattern). Doubler, Harmony and Shift work side by side on the clean voice; the other six run one after another in the order shown on the rail, and dragging one changes the order. "
+        "Sounds at the top loads several at once.\n"
         "Master tab: loudness target and limiter, used on the stereo output. Listen as checks the mix in mono or on a phone speaker.\n"
         "Learn tab: lessons with animated examples.\n"
         "Mix Brain tab: where the student is talking to you now.\n"
@@ -197,7 +200,9 @@ const Note kNotes[] = {
       "Style sets what the repeats sound like: Digital is clean, Tape is warm and each repeat softer, Analog is dark like a pedal, Diffused turns the echoes into a wash." },
     { "Harmonies", "harmony,harmonies,harmonise,harmonize,harmonizer,choir,third,fifth,backing vocals from,stack harmonies",
       "Harmony is on the FX tab. It adds voices singing the same words on other notes of the key: a third above is the usual first harmony, a fifth is open and strong, and Choir adds a low octave as well. "
-      "Set the key on the Tune tab first, because the harmony notes come from that key; in the wrong key they clash. Keep the level at 20 to 45 % so they support the lead instead of competing with it." },
+      "Set the key on the Tune tab first, because the harmony notes come from that key; in the wrong key they clash. Keep the level at 20 to 45 % so they support the lead instead of competing with it. "
+      "For more control switch Harmony to Voices: four voices in a table, each with its own interval, level, pan, delay, size and detune. Voice leading makes a voice hold its note while it still fits instead of always moving with the tune. "
+      "Chords mode makes the voices sing the chords in a grid that follows the song; Fill from key puts a common progression in it. Choir turns each voice into three singers." },
     { "Voice effects", "telephone,phone effect,megaphone,radio voice,deep voice,demon voice,pitched down,pitch down,chipmunk,slowed,sped up,lofi,lo-fi,bitcrush,chorus effect,flanger,phaser,stutter,chop,trance gate,robot voice,vocoder,effects on my voice,vocal effects,cool effect",
       "The FX tab has the voice effects, each with presets you can step through. Phone is the telephone or megaphone sound. Shift moves the voice up or down: an octave down at a low mix is the demon layer, a few semitones down at 100 % is the slowed-down sound. "
       "Lo-fi adds the grit and wobble of old tape. Motion is chorus, flanger and phaser. Chop cuts the voice in time with the beat. For a robot voice, load the Robot preset on the Tune tab. "

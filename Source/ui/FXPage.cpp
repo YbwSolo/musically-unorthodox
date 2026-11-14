@@ -71,8 +71,10 @@ FXPage::FXPage (MUProcessor& p, std::function<void (const juce::String&)> status
         menu.setLookAndFeel (&getLookAndFeel());
         const auto names = MUProcessor::chordProgressionNames (scale == 2 || scale == 4);
         for (int i = 0; i < names.size(); ++i) menu.addItem (i + 1, names[i]);
+        // (taken as a local first: the Windows compiler reads "this" in a capture inside another lambda as the lambda itself)
+        const juce::Component::SafePointer<FXPage> safe (this);
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&hmFill),
-                            [safe = juce::Component::SafePointer<FXPage> (this)] (int chosen) { if (safe != nullptr && chosen > 0) { safe->setStatus (safe->proc.fillChords (chosen - 1)); safe->repaint(); } });
+                            [safe] (int chosen) { if (safe != nullptr && chosen > 0) { safe->setStatus (safe->proc.fillChords (chosen - 1)); safe->repaint(); } });
     };
     styleButton (hmClear, "Clear", false, "hm.clear");
     hmClear.onClick = [this] { setStatus (proc.clearChords()); repaint(); };
