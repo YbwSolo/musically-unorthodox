@@ -87,7 +87,13 @@ try:
     body = next((b for b in bodies if "What is new in this build" in b), bodies[0] if bodies else "")
 except Exception:
     body = ""
-notes = "\n".join([l for l in body.splitlines() if not l.startswith(("Co-Authored-By", "Claude-Session"))][:24]).strip()
+# The update prompt has room for about 24 lines. Cut at the end of a paragraph, never in the middle of a sentence.
+lines = [l for l in body.splitlines() if not l.startswith(("Co-Authored-By", "Claude-Session"))]
+if len(lines) > 24:
+    lines = lines[:24]
+    while lines and lines[-1].strip():
+        lines.pop()
+notes = "\n".join(lines).strip()
 feed = {"build": int(e["BUILDNUM"]), "version": e["VERSION"], "file": "MusicallyUnorthodox-bundles.zip", "sha256": e["ZIPSHA"], "notes": notes}
 if e["TUTOR_SHA"]:
     light = MODELS[0]
