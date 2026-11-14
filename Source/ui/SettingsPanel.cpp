@@ -38,6 +38,11 @@ SettingsPanel::SettingsPanel (MUProcessor& p) : proc (p), takePart (p, ids::auto
             default:                          ai.installBuiltIn(); break;
         }
     };
+    lowLatency.setButtonText ("Low latency, for recording through the plugin");
+    lowLatency.setWantsKeyboardFocus (false);
+    lowLatency.onClick = [this] { proc.getBus().setLowLatency (lowLatency.getToggleState()); };
+    setHelp (lowLatency, "set.lowlat");
+    addAndMakeVisible (lowLatency);
     styleButton (aiRemove, "Remove", false, "ai.model");
     aiRemove.onClick = [this]
     {
@@ -65,6 +70,8 @@ void SettingsPanel::refresh()
     const auto d = (int) proc.getParam (ids::role) == (int) Role::Auto
                  ? "Auto is hearing this as " + roleNames()[(int) guess.role].toLowerCase() + "."
                  : juce::String ("Set by hand.");
+
+    if (lowLatency.getToggleState() != proc.getBus().isLowLatency()) lowLatency.setToggleState (proc.getBus().isLowLatency(), juce::dontSendNotification);
 
     const auto st = proc.getUpdater().getState();
     using Phase = UpdateState::Phase;
@@ -186,6 +193,7 @@ void SettingsPanel::resized()
     roleRow.removeFromLeft (12);
     labels.push_back ({ detected, roleRow });
     takePart.setBounds (row (22));
+    lowLatency.setBounds (row (22));
     r.removeFromTop (4);
     labels.push_back ({ "#Window size", row (18) });
     auto sizeRow = row (28);

@@ -35,8 +35,11 @@ MixPage::MixPage (MUProcessor& p, std::function<void (const juce::String&)> stat
             if (i >= clashes.size()) return;
             const auto c = clashes[i];
             proc.getBus().applyMaskingClash (c);
-            setStatus ("Dynamic cut of " + juce::String (c.suggestedCutDb, 1) + " dB at " + hzString (c.freqHz) + " added to \"" + c.nameB + "\". It only acts while that track is loud there.");
-            refreshTimer = 0.0f;
+            fixedNote = "Fixed: \"" + c.nameB + "\" now dips up to " + juce::String (std::abs (juce::jlimit (-6.0f, -1.5f, c.suggestedCutDb)), 1) + " dB around " + hzString (c.freqHz)
+                      + " while it is loud there. The cut is on that track's EQ tab.";
+            fixedShow = 8.0f;
+            setStatus (fixedNote);
+            refreshData();
         };
         addChildComponent (fixButtons[i]);
     }
@@ -55,7 +58,8 @@ void MixPage::refreshData()
     hasMaster = false;
     const auto targets = proc.isMasterInstance() ? proc.currentTargets() : bus.getTargets();
     targetLufs = targets.masterLufs; targetPeak = targets.masterTruePeak;
-    mixLufs = -100.0f; mixPeak = -100.0f;
+    mixLufs = -100.0f; mixPeak = -100.0f; liveLufs = -100.0f;
+    double livePower = 0.0;
 
     std::stable_sort (tracks.begin(), tracks.end(), [] (const TrackInfo& a, const TrackInfo& b)
     {
@@ -66,7 +70,8 @@ void MixPage::refreshData()
     lanes.clear();
     for (auto& t : tracks)
     {
-        if (t.role == Role::Master) { hasMaster = true; mixLufs = t.levelLufs; mixPeak = t.truePeakDb; continue; }
+        if (t.role == Role::Master) { hasMaster = true; mixLufs = t.levelLufs; mixPeak = t.truePeakDb; if (t.playing) liveLufs = t.shortLufs; continue; }
+        if (t.playing && t.shortLufs > -70.0f) livePower += std::pow (10.0, (double) t.shortLufs / 10.0);
         auto& st = laneState[t.slot];
         st.info = t;
         float move = 0.0f;
@@ -74,7 +79,9 @@ void MixPage::refreshData()
         st.move = move;
         lanes.push_back (st);
     }
-    if (! hasMaster && plan.usable) { mixLufs = plan.projectedMasterLufs; }
+    // Without a master instance the mix level is worked out from the tracks that are playing (their loudness
+    // added together), so the dial moves with the music instead of showing a fixed forecast.
+    if (! hasMaster) { liveLufs = livePower > 0.0 ? (float) (10.0 * std::log10 (livePower)) : -100.0f; mixLufs = liveLufs; }
 
     for (size_t i = 0; i < fixButtons.size(); ++i) fixButtons[i].setVisible (i < clashes.size());
     learnButton.setButtonText (learn.active ? "Stop listening" : "Learn and balance");
@@ -102,7 +109,8 @@ void MixPage::tick (float dt)
         }
         lane.level = st.level; lane.appear = st.appear; lane.heat = st.heat;
     }
-    dialValue = approach (dialValue, mixLufs > -70.0f ? mixLufs : targetLufs - 20.0f, dt, 0.2f);
+    dialValue = approach (dialValue, liveLufs > -70.0f ? liveLufs : (hasMaster && mixLufs > -70.0f ? mixLufs : targetLufs - 20.0f), dt, 0.2f);
+    fixedShow = juce::jmax (0.0f, fixedShow - dt);
     dialPeak = approach (dialPeak, mixPeak, dt, 0.2f);
     learnProgress = learn.active ? juce::jlimit (0.0f, 1.0f, learnProgress + dt / 20.0f) : approach (learnProgress, 0.0f, dt, 0.15f);
     if (learn.active && learnProgress < learn.progress - 0.05f) learnProgress = learn.progress;
@@ -159,7 +167,7 @@ void MixPage::drawDial (juce::Graphics& g, juce::Rectangle<float> area)
     g.drawText (measured ? juce::String (mixLufs, 1) : juce::String ("--"), box.withTrimmedTop (side * 0.22f).withHeight (side * 0.36f), juce::Justification::centred);
     g.setFont (body (11.0f));
     g.setColour (textMute);
-    g.drawText (hasMaster ? "LUFS integrated" : "LUFS, estimated", box.withTrimmedTop (side * 0.58f).withHeight (14.0f), juce::Justification::centred);
+    g.drawText (hasMaster ? "LUFS integrated" : (measured ? "LUFS now, estimated from the tracks" : "Press play to measure"), box.withTrimmedTop (side * 0.58f).withHeight (14.0f), juce::Justification::centred);
 
     auto foot = juce::Rectangle<float> (r.getX(), r.getBottom() - 38.0f, r.getWidth(), 38.0f);
     auto row = [&] (const juce::String& label, const juce::String& value, bool alarm)
@@ -318,11 +326,13 @@ void MixPage::drawCollisions (juce::Graphics& g)
     g.setFont (bodyBold (13.0f)); g.setColour (text);
     g.drawText ("Collisions", head.removeFromLeft (80), juce::Justification::centredLeft);
     g.setFont (body (12.0f)); g.setColour (textMute);
-    g.drawText (clashes.empty() ? juce::String() : juce::String ((int) clashes.size()) + " found, most serious first", head, juce::Justification::centredLeft);
+    g.drawText (clashes.empty() ? juce::String() : juce::String ((int) clashes.size()) + " found, most serious first", head.removeFromLeft (190), juce::Justification::centredLeft);
+    if (fixedShow > 0.0f && ! clashes.empty()) { g.setColour (yellow); g.drawText (fixedNote, head, juce::Justification::centredRight, true); }
 
     if (clashes.empty())
     {
-        g.setFont (body (12.5f)); g.setColour (textDim);
+        g.setFont (body (12.5f)); g.setColour (fixedShow > 0.0f ? yellow : textDim);
+        if (fixedShow > 0.0f) { g.drawText (fixedNote, r.removeFromTop (22), juce::Justification::centredLeft, true); return; }
         g.drawText (lanes.size() < 2 ? "Collisions show up once two or more tracks are playing." : "No collisions. Every track has room where it matters.", r.removeFromTop (22), juce::Justification::centredLeft);
         return;
     }

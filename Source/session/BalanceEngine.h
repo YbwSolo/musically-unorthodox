@@ -14,6 +14,8 @@ struct TrackInfo
     juce::String name;
     Role role = Role::Beat;
     float levelLufs = -100.0f;      // measured after this instance's processing (includes current trim)
+    float shortLufs = -100.0f;      // the last three seconds, for anything that should move with the music
+    bool playing = false;           // sound is passing through right now
     float truePeakDb = -100.0f;
     float trimDb = 0.0f;            // current balance trim applied inside the instance
     bool acceptsBalance = true;

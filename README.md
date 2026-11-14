@@ -46,6 +46,28 @@ Hover over any control and the bar along the bottom says what it does, when to u
 The **Learn** tab has ten lessons, each a few steps long. Every step has an animated example drawn from the same
 maths the plugin uses, and several end with a "your turn" exercise.
 
+## FX tab: Tune, Doubler, Reverb
+
+**Tune** is pitch correction for one voice. A YIN pitch detector hears the note every 10 ms; the voice is then
+re-pitched by laying two-period slices of it closer together or further apart, which leaves the formants (the
+character of the voice) where they were. Key and scale choose which notes are allowed, and **Find key** works the
+key out from what has been sung. Speed 40 to 100 ms with Keep vibrato high corrects only the centre of each note;
+speed 0 with Keep vibrato 0 is the hard-tune effect. Adds 20 ms of reported latency while on.
+
+**Doubler** makes one take sound like two or more. Each extra voice is a real copy moved a few cents and a few
+milliseconds, both drifting slowly, placed left and right; the lead stays untouched in the middle. Double adds one
+copy each side, Stack two. The copies drop back on consonants so they do not flam.
+
+**Reverb** is an eight-line feedback delay network with a lossless mixing matrix, so the decay time is exact.
+With **Timed to tempo** on, one beat is 60,000 / BPM milliseconds, the pre-delay is a 64th note and the decay is
+one, two or four beats. It keeps itself out of the low end and ducks while the dry sound plays.
+
+A mono track can load the plugin as **Mono > Stereo**, which is what lets a mono vocal have wide doubles and reverb.
+
+**Low latency** (Settings) is for recording through the plugin. Every instance in the session drops its delaying
+stages: Tune reacts in about 6 ms, and the master limiter and loudness boost are off. A badge in the header shows
+it is on, and it is never saved with the song.
+
 ## AI tutor (optional, free)
 
 Settings > **Turn on AI tutor** downloads the tutor once. After that an "Ask the AI tutor" box appears in the Mix
@@ -91,6 +113,7 @@ that and no download is needed.
 | EQ | Input and output analysers, 8 bands (bell, shelves, cuts to 48 dB/oct, notch), per-band stereo / mid / side, dynamic bands, band solo, auto gain, delta listening, Mix Brain suggestions, reference capture and match |
 | Dynamics | Compressor with four styles (Clean, Punch, Smooth, Glue), sidechain high-pass, parallel mix, scrolling level and reduction display, transfer curve, Auto set; gate; de-esser |
 | Tone | Smooth (resonance tamer), saturation (tape, tube, warm), level rider, Vocal space, stereo width and mono bass, output |
+| FX | Tune (pitch correction, natural to hard tune), Doubler, tempo-timed Reverb |
 | Master | Target modes (-18 / -14 / -9 LUFS), true-peak limiter with look-ahead, auto level, loudness history, release check |
 | Learn | Animated lessons: how sound works, what an EQ is, masking, what a compressor is, attack and release, gate and de-esser, saturation, stereo and mono, loudness and mastering, putting it together |
 

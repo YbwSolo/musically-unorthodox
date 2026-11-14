@@ -19,6 +19,9 @@
 #include "dsp/History.h"
 #include "analysis/TonalAnalysis.h"
 #include "session/SessionBus.h"
+#include "dsp/Tuner.h"
+#include "dsp/Doubler.h"
+#include "dsp/Reverb.h"
 #include "update/Updater.h"
 #include "ai/LocalAI.h"
 #include "state/LocalSettings.h"
@@ -29,8 +32,8 @@ namespace mu
 enum class Listen : int { Normal = 0, EqDelta, SmoothDelta };
 
 // Signal chain:
-//   trim -> gate -> EQ -> compressor -> de-esser -> smooth -> saturation -> rider -> vocal space
-//        -> stereo -> output -> [master only: auto trim -> maximizer] -> metering
+//   trim -> tune -> gate -> EQ -> compressor -> de-esser -> smooth -> saturation -> rider -> vocal space
+//        -> doubler -> reverb -> stereo -> output -> [master only: auto trim -> maximizer] -> metering
 class MUProcessor : public juce::AudioProcessor,
                     public SessionClient,
                     private juce::Timer
@@ -53,7 +56,7 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    double getTailLengthSeconds() const override { return reverb.currentDecaySeconds() * (getParam (ids::rvOn) > 0.5f ? 1.0 : 0.0); }
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram (int) override {}
@@ -72,6 +75,7 @@ public:
     void setAcceptsBalance (bool on) override { setParam (ids::autoBalance, on ? 1.0f : 0.0f); }
     bool fillBandsDb (std::array<float, kAnalysisBands>& out) const override;
     void applyMaskingCut (float hz, float db) override;
+    float cutDbNear (float hz) const override;
     void setSessionInstanceNumber (int n) override { instanceNumber = n; }
     void resetMeasurement() override { loudness.resetIntegrated(); loudness.resetPeakHold(); mixMeter.resetIntegrated(); mixMeter.resetPeakHold(); }
 
@@ -98,6 +102,13 @@ public:
     const StereoTool& getStereo() const { return stereo; }
     const Maximizer& getMaximizer() const { return maximizer; }
     const VocalSpace& getVocalSpace() const { return vocalSpace; }
+    Tuner& getTuner() { return tuner; }
+    const Doubler& getDoubler() const { return doubler; }
+    const Reverb& getReverb() const { return reverb; }
+    double getHostBpm() const { return hostBpm.load(); }
+    bool hasHostTempo() const { return hostTempoKnown.load(); }
+    bool isStereoOut() const { return getTotalNumOutputChannels() > 1; }
+    juce::String findKey();            // sets the Tune key and scale from the notes heard so far
     const History<kLoudnessHistory>& getLoudnessHistory() const { return lufsHistory; }
     RoleGuess getDetectedRole() const { return detected; }
     int getSessionSlot() const { return slot; }
@@ -197,6 +208,11 @@ private:
     VocalSpace vocalSpace;
     StereoTool stereo;
     Maximizer maximizer;
+    Tuner tuner;
+    Doubler doubler;
+    Reverb reverb;
+    std::atomic<double> hostBpm { 120.0 };
+    std::atomic<bool> hostTempoKnown { false };
     juce::AudioBuffer<float> deltaBuffer;
     juce::SmoothedValue<float> trimGain { 1.0f }, outGain { 1.0f }, masterTrimGain { 1.0f };
     std::atomic<float> masterTrimDb { 0.0f };
@@ -229,6 +245,9 @@ private:
     AF pRiderOn = nullptr, pRiderTarget = nullptr, pRiderRange = nullptr, pRiderSpeed = nullptr;
     AF pVsOn = nullptr, pVsAmount = nullptr, pVsSpeed = nullptr;
     AF pStWidth = nullptr, pStMonoBass = nullptr, pStMonoFreq = nullptr;
+    AF pTuneOn = nullptr, pTuneKey = nullptr, pTuneScale = nullptr, pTuneSpeed = nullptr, pTuneAmount = nullptr, pTuneVibrato = nullptr;
+    AF pDblOn = nullptr, pDblMix = nullptr, pDblDetune = nullptr, pDblTiming = nullptr, pDblWidth = nullptr, pDblVoices = nullptr;
+    AF pRvOn = nullptr, pRvMix = nullptr, pRvAuto = nullptr, pRvLength = nullptr, pRvDecay = nullptr, pRvPre = nullptr, pRvTone = nullptr, pRvDuck = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MUProcessor)
 };

@@ -20,9 +20,10 @@ juce::String corePrompt()
         "EQ tab: every EQ move is made here. It has 8 bands, dynamic bands, and the Analyse button, which lists Mix Brain suggestions, each with an Apply button.\n"
         "Dynamics tab: compressor (styles Clean, Punch, Smooth, Glue), gate, de-esser.\n"
         "Tone tab: Smooth (tames harsh resonances), saturation, level rider, vocal space, stereo width, mono bass. There is no EQ on the Tone tab.\n"
+        "FX tab: Tune (pitch correction, from natural to hard tune), Doubler (makes one take sound like a stack), Reverb (timed to the song's tempo).\n"
         "Master tab: loudness target and limiter, used on the stereo output.\n"
         "Learn tab: lessons with animated examples.\n"
-        "The plugin has no reverb, delay or pitch correction.\n\n"
+        "The plugin has no delay or echo effect.\n\n"
         "FACTS TO STAY CONSISTENT WITH\n"
         "An EQ turns one range of frequencies up or down and leaves the rest alone. "
         "EQ words: boomy is too much below 100 Hz; muddy is too much 200 to 400 Hz; boxy is too much 400 to 800 Hz; nasal is too much around 1 kHz; "
@@ -143,7 +144,7 @@ const Note kNotes[] = {
     { "Order of processing", "order,chain,signal chain,vocal chain,what comes first,before or after,which first,sequence",
       "An order that works: clean up first (low cut, then cut mud and harsh notes on the EQ tab), then control the level (gate if needed, compressor, then de-esser after the compressor), "
       "then add tone (saturation, a little air), then width. Balance the levels on the Mix tab before reaching for any processing, because most EQ problems are really level problems." },
-    { "Backing vocals and adlibs", "backing,adlib,adlibs,ad-lib,ad-libs,doubles,double,harmonies,harmony,stack,stacks,layers",
+    { "Backing vocals and adlibs", "backing,adlib,adlibs,ad-lib,ad-libs,harmonies,harmony",
       "If backing vocals or adlibs are louder than the lead, the fix is their level, not EQ: Balance now on the Mix tab puts them about 6 dB under the lead. "
       "They support the lead, so they should also be thinner and wider. On the EQ tab use a higher low cut of 120 to 200 Hz "
       "and a little less 2 to 4 kHz than the lead, so they do not compete with its words. Compress them harder than the lead for an even bed. "
@@ -174,11 +175,21 @@ const Note kNotes[] = {
     { "Comparing fairly", "better or worse,compare,comparing,a/b,ab,bypass,is it better,cant tell,louder sounds better,fooling",
       "Louder always sounds better at first, so match the loudness before judging. Auto gain on the EQ tab and Auto makeup on the compressor keep the level the same as you work. "
       "A/B at the top flips between two full sets of settings, and Bypass shows whether the plugin is helping at all. If a change only makes the track louder, it is not an improvement." },
-    { "Reverb and delay", "reverb,delay,echo,room,wet,dry,ambience,hall,plate",
-      "This plugin has no reverb or delay. Use the ones in your music software on a send, keep them darker and quieter than you think, and low cut the reverb at about 200 Hz "
-      "so it does not add mud. Vocal space on the Tone tab is not a reverb: it makes room in the beat for the vocal." },
-    { "Tuning a vocal", "autotune,auto-tune,auto tune,pitch,tune,tuning,melodyne,off key,flat notes,sharp notes",
-      "This plugin does not correct pitch. Tune the vocal with the pitch correction in your music software before this plugin in the chain, so the compressor and EQ work on the tuned sound." },
+    { "Reverb", "reverb,room,wet,dry,ambience,hall,plate,space,tail,pre-delay,predelay,decay",
+      "Reverb is on the FX tab. Leave Timed to tempo on: one beat is 60,000 divided by the tempo in milliseconds, the pre-delay is a 64th note and the decay is one, two or four beats, "
+      "so the tail fades in time with the song. Start with two beats and a level of 10 to 20 %. Duck turns the reverb down while the voice sings, which keeps the words clear. "
+      "The plugin already keeps the reverb out of the low end. Vocal space on the Tone tab is not a reverb: it makes room in the beat for the vocal." },
+    { "Delay and echo", "delay,echo,slapback,throw,throws",
+      "This plugin has no delay or echo effect. Use the delay in your music software on a send. Time it the same way the reverb is timed: 60,000 divided by the tempo is one beat in milliseconds, "
+      "half of that is an eighth note." },
+    { "Tuning a vocal", "autotune,auto-tune,auto tune,pitch,tune,tuning,tuned,melodyne,off key,out of tune,in tune,flat notes,sharp notes,hard tune,t-pain,robotic,key of",
+      "Tune is on the FX tab. Set the key and scale of the song first, or press Find key after singing for a few seconds; Chromatic is the safe choice when you do not know the key. "
+      "For natural singing use a speed of 40 to 100 ms with Keep vibrato high, so only the centre of each note is corrected. "
+      "For the hard-tune sound set the speed to 0 and Keep vibrato to 0, and choose the major or minor scale of the song. The wrong key is what makes hard tune sound bad." },
+    { "Doubles and stacks", "double,doubles,doubler,doubling,stack,stacks,stacked,thicker vocal,wider vocal,bigger hook,layers,layered",
+      "The Doubler on the FX tab makes one take sound like it was recorded more than once. Double adds a copy each side and Stack adds two each side. "
+      "Keep the level around 30 to 45 % on verses so it thickens without being noticed, and 55 % or more on hooks. Detune of 5 to 9 cents is tight; more is wider and lusher. "
+      "For wide doubles the plugin has to be on a stereo track, or inserted as mono to stereo on a mono one." },
     { "Frequency map", "frequency,frequencies,hz,khz,spectrum,frequency range,frequency ranges",
       "A rough map. Sub, 20 to 60 Hz: the weight of an 808. Bass, 60 to 250 Hz: kick punch and the body of bass and vocals. Low mids, 250 to 500 Hz: warmth, or mud when there is too much. "
       "Mids, 500 Hz to 2 kHz: the body of vocals and snares. Presence, 2 to 5 kHz: clarity and the attack of sounds. Highs, 5 to 10 kHz: S sounds and hi-hats. Air: above 10 kHz." },
@@ -225,6 +236,8 @@ int scoreKeys (const juce::String& question, const juce::StringArray& words, con
 juce::String tabFor (const juce::String& key)
 {
     if (key.startsWith ("mix.") || key == "trim" || key == "autoBalance") return "Mix tab";
+    if (key.startsWith ("tune") || key.startsWith ("dbl") || key.startsWith ("rv")) return "FX tab";
+    if (key.startsWith ("set.")) return "Settings";
     if (key.startsWith ("eq")) return "EQ tab";
     if (key.startsWith ("comp") || key.startsWith ("gate") || key.startsWith ("ds")) return "Dynamics tab";
     if (key.startsWith ("sm") || key.startsWith ("sat") || key.startsWith ("rider") || key.startsWith ("vs") || key.startsWith ("st") || key == "outputGain") return "Tone tab";

@@ -68,6 +68,10 @@ set(MU_DSP_SOURCES
     Source/dsp/Maximizer.cpp
     Source/dsp/VocalSpace.cpp
     Source/dsp/RoleDetector.cpp
+    Source/dsp/Pitch.cpp
+    Source/dsp/Tuner.cpp
+    Source/dsp/Doubler.cpp
+    Source/dsp/Reverb.cpp
     Source/analysis/TonalAnalysis.cpp
     Source/session/BalanceEngine.cpp)
 
@@ -87,6 +91,7 @@ target_sources(MusicallyUnorthodox PRIVATE
     Source/ui/MULookAndFeel.cpp
     Source/ui/Widgets.cpp
     Source/ui/HelpText.cpp
+    Source/ui/FXPage.cpp
     Source/ui/HeaderBar.cpp
     Source/ui/MeterRail.cpp
     Source/ui/InfoBar.cpp

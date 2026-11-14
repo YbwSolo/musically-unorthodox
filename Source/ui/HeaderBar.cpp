@@ -5,7 +5,7 @@
 namespace mu
 {
 using namespace theme;
-static const char* const kTabNames[] = { "MIX", "EQ", "DYNAMICS", "TONE", "MASTER", "LEARN" };
+static const char* const kTabNames[] = { "MIX", "EQ", "DYNAMICS", "TONE", "FX", "MASTER", "LEARN" };
 
 HeaderBar::HeaderBar (MUProcessor& p) : proc (p)
 {
@@ -118,6 +118,8 @@ void HeaderBar::tick (float dt)
         repaint (tabArea.expanded (4, 0));
     }
 
+    if (proc.getBus().isLowLatency() != shownLowLatency) { shownLowLatency = ! shownLowLatency; repaint(); }
+
     const auto name = proc.getCurrentPresetName();
     if (name != shownPreset)
     {
@@ -169,6 +171,16 @@ void HeaderBar::paint (juce::Graphics& g)
         const float overlap = juce::jlimit (0.0f, 1.0f, 1.0f - std::abs ((blockX + blockW * 0.5f) - b.getCentreX()) / (b.getWidth() * 0.6f));
         g.setColour (overlap > 0.5f ? onYellow : (i == hoverTab ? text : textDim));
         g.drawText (kTabNames[i], b.translated (0.0f, 1.0f), juce::Justification::centred);
+    }
+
+    // a reminder that the session is in recording mode, not full quality
+    if (shownLowLatency)
+    {
+        const auto last = tabBounds (NumTabs - 1);
+        const auto pill = juce::Rectangle<float> (last.getRight() + 14.0f, last.getCentreY() - 11.0f, 96.0f, 22.0f);
+        g.setColour (yellow); g.drawRoundedRectangle (pill, 11.0f, 1.2f);
+        g.setFont (bodyBold (11.0f));
+        g.drawText ("Low latency", pill, juce::Justification::centred);
     }
 }
 

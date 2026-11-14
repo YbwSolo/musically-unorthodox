@@ -7,13 +7,13 @@ MUEditor::MUEditor (MUProcessor& p)
     : AudioProcessorEditor (p), proc (p),
       status ([this] (const juce::String& s) { info.setStatus (s); }),
       header (p), rail (p), info (p),
-      mixPage (p, status), eqPage (p, status), dynamicsPage (p, status), tonePage (p), masterPage (p, status),
+      mixPage (p, status), eqPage (p, status), dynamicsPage (p, status), tonePage (p), fxPage (p, status), masterPage (p, status),
       learnPage (p, status, [this] (int t) { showTab (t); }),
       settings (p)
 {
     setLookAndFeel (&lnf);
     addAndMakeVisible (root);
-    for (auto* c : std::initializer_list<juce::Component*> { &mixPage, &eqPage, &dynamicsPage, &tonePage, &masterPage, &learnPage }) root.addChildComponent (c);
+    for (auto* c : std::initializer_list<juce::Component*> { &mixPage, &eqPage, &dynamicsPage, &tonePage, &fxPage, &masterPage, &learnPage }) root.addChildComponent (c);
     root.addAndMakeVisible (header);
     root.addAndMakeVisible (rail);
     root.addAndMakeVisible (info);
@@ -71,6 +71,7 @@ juce::Component* MUEditor::page (int t)
         case HeaderBar::EQ:       return &eqPage;
         case HeaderBar::Dynamics: return &dynamicsPage;
         case HeaderBar::Tone:     return &tonePage;
+        case HeaderBar::FX:       return &fxPage;
         case HeaderBar::Master:   return &masterPage;
         default:                  return &learnPage;
     }
@@ -111,6 +112,7 @@ void MUEditor::timerCallback()
         case HeaderBar::EQ:       eqPage.tick (dt); break;
         case HeaderBar::Dynamics: dynamicsPage.tick (dt); break;
         case HeaderBar::Tone:     tonePage.tick (dt); break;
+        case HeaderBar::FX:       fxPage.tick (dt); break;
         case HeaderBar::Master:   masterPage.tick (dt); break;
         default:                  learnPage.tick (dt); break;
     }

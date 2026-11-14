@@ -27,6 +27,9 @@ MUProcessor::MUProcessor()
     pRiderOn = p (ids::riderOn); pRiderTarget = p (ids::riderTarget); pRiderRange = p (ids::riderRange); pRiderSpeed = p (ids::riderSpeed);
     pVsOn = p (ids::vsEnabled); pVsAmount = p (ids::vsAmount); pVsSpeed = p (ids::vsSpeed);
     pStWidth = p (ids::stWidth); pStMonoBass = p (ids::stMonoBass); pStMonoFreq = p (ids::stMonoFreq);
+    pTuneOn = p (ids::tuneOn); pTuneKey = p (ids::tuneKey); pTuneScale = p (ids::tuneScale); pTuneSpeed = p (ids::tuneSpeed); pTuneAmount = p (ids::tuneAmount); pTuneVibrato = p (ids::tuneVibrato);
+    pDblOn = p (ids::dblOn); pDblMix = p (ids::dblMix); pDblDetune = p (ids::dblDetune); pDblTiming = p (ids::dblTiming); pDblWidth = p (ids::dblWidth); pDblVoices = p (ids::dblVoices);
+    pRvOn = p (ids::rvOn); pRvMix = p (ids::rvMix); pRvAuto = p (ids::rvAuto); pRvLength = p (ids::rvLength); pRvDecay = p (ids::rvDecay); pRvPre = p (ids::rvPre); pRvTone = p (ids::rvTone); pRvDuck = p (ids::rvDuck);
 
     // A/B covers everything that shapes the sound; routing and session balance stay put.
     for (auto* param : getParameters())
@@ -51,6 +54,8 @@ MUProcessor::~MUProcessor()
 bool MUProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto in = layouts.getMainInputChannelSet(), out = layouts.getMainOutputChannelSet();
+    // mono in, stereo out lets a mono vocal track have wide doubles and reverb
+    if (in == juce::AudioChannelSet::mono() && out == juce::AudioChannelSet::stereo()) return true;
     if (in != out) return false;
     return in == juce::AudioChannelSet::mono() || in == juce::AudioChannelSet::stereo();
 }
@@ -72,6 +77,9 @@ void MUProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     vocalSpace.prepare (sampleRate, samplesPerBlock, ch);
     stereo.prepare (sampleRate, samplesPerBlock, ch);
     maximizer.prepare (sampleRate, samplesPerBlock, ch);
+    tuner.prepare (sampleRate, samplesPerBlock, ch);
+    doubler.prepare (sampleRate, samplesPerBlock, ch);
+    reverb.prepare (sampleRate, samplesPerBlock, ch);
     deltaBuffer.setSize (ch, juce::jmax (64, samplesPerBlock), false, true, false);
     trimGain.reset (sampleRate, 0.08);
     outGain.reset (sampleRate, 0.03);
@@ -90,7 +98,9 @@ void MUProcessor::updateLatency()
 {
     // The saturator's oversampling delay is always in the path. The maximizer's look-ahead only exists on the
     // master instance, so vocal and instrument tracks stay at about a millisecond for recording.
-    const int latency = saturator.getLatencySamples() + (isMasterInstance() ? maximizer.getLatencySamples() : 0);
+    // Tune adds 20 ms while it is on. In low latency mode the look-ahead stages are out of the path.
+    const bool lowLatency = bus->isLowLatency();
+    const int latency = saturator.getLatencySamples() + tuner.getLatencySamples() + (isMasterInstance() && ! lowLatency ? maximizer.getLatencySamples() : 0);
     if (latency != reportedLatency)
     {
         reportedLatency = latency;
@@ -144,8 +154,25 @@ void MUProcessor::pullParameters()
     st.width = pStWidth->load() * 0.01f; st.monoBass = pStMonoBass->load() > 0.5f; st.monoBelowHz = pStMonoFreq->load();
     stereo.setSettings (st);
 
-    maximizer.setActive (role == Role::Master);
-    maximizer.setEnabled (role == Role::Master && pPeakGuard->load() > 0.5f);
+    const bool lowLatency = bus->isLowLatency();
+    TunerSettings tn;
+    tn.enabled = pTuneOn->load() > 0.5f; tn.key = (int) pTuneKey->load(); tn.scale = (int) pTuneScale->load(); tn.speedMs = pTuneSpeed->load();
+    tn.amount = pTuneAmount->load() * 0.01f; tn.keepVibrato = pTuneVibrato->load() * 0.01f; tn.lowLatency = lowLatency;
+    tuner.setSettings (tn);
+
+    DoublerSettings db;
+    db.enabled = pDblOn->load() > 0.5f; db.mix = pDblMix->load() * 0.01f; db.detuneCents = pDblDetune->load(); db.timing = pDblTiming->load() * 0.01f;
+    db.width = pDblWidth->load() * 0.01f; db.voices = (int) pDblVoices->load();
+    doubler.setSettings (db);
+
+    ReverbSettings rv;
+    rv.enabled = pRvOn->load() > 0.5f; rv.mix = pRvMix->load() * 0.01f; rv.autoTime = pRvAuto->load() > 0.5f; rv.length = (int) pRvLength->load();
+    rv.decaySeconds = pRvDecay->load(); rv.preDelayMs = pRvPre->load(); rv.tone = pRvTone->load() * 0.01f; rv.duck = pRvDuck->load() * 0.01f;
+    rv.bpm = hostBpm.load (std::memory_order_relaxed);
+    reverb.setSettings (rv);
+
+    maximizer.setActive (role == Role::Master && ! lowLatency);
+    maximizer.setEnabled (role == Role::Master && ! lowLatency && pPeakGuard->load() > 0.5f);
     maximizer.setGainDb (pMaxGain->load());
     maximizer.setCeilingDb (pTargetTp->load());
 }
@@ -156,8 +183,17 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     const int n = buffer.getNumSamples();
     const int numCh = buffer.getNumChannels();
     for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c)
-        buffer.clear (c, 0, n);
+    {
+        if (getTotalNumInputChannels() == 1) buffer.copyFrom (c, 0, buffer, 0, 0, n);      // mono in, stereo out: start from the same sound on both sides
+        else buffer.clear (c, 0, n);
+    }
     if (n == 0) return;
+
+    // the song's tempo, for the reverb's timing
+    if (auto* head = getPlayHead())
+        if (auto position = head->getPosition())
+            if (auto bpm = position->getBpm())
+                if (*bpm > 20.0) { hostBpm.store (*bpm, std::memory_order_relaxed); hostTempoKnown.store (true, std::memory_order_relaxed); }
 
     pullParameters();
     const bool bypassed = pBypass->load() > 0.5f;
@@ -185,6 +221,7 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
 
         trimGain.setTargetValue (juce::Decibels::decibelsToGain (pTrim->load()));
         applySmoothedGain (trimGain);
+        tuner.process (buffer);
         gate.process (buffer);
 
         if (listen == Listen::EqDelta && canDelta)
@@ -223,19 +260,22 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             rider.process (buffer);
             vocalSpace.setKeyLevel (bus->getVocalKeyLevel());
             vocalSpace.process (buffer);
+            doubler.process (buffer);
+            reverb.process (buffer);
             stereo.process (buffer);
             outGain.setTargetValue (juce::Decibels::decibelsToGain (pOut->load()));
             applySmoothedGain (outGain);
         }
 
         if (master) mixMeter.process (buffer);         // the mix as it arrives, before any mastering gain
-        masterTrimGain.setTargetValue (juce::Decibels::decibelsToGain (master ? masterTrimDb.load() : 0.0f));
+        masterTrimGain.setTargetValue (juce::Decibels::decibelsToGain (master && ! bus->isLowLatency() ? masterTrimDb.load() : 0.0f));
         applySmoothedGain (masterTrimGain);
         maximizer.process (buffer);
     }
     else
     {
         // keep the latency-bearing stages running so bypass does not shift timing
+        tuner.process (buffer, true);
         saturator.setSettings ({});
         saturator.process (buffer);
         if (master) mixMeter.process (buffer);
@@ -258,6 +298,7 @@ void MUProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::
     if (buffer.getNumSamples() == 0) return;
     maximizer.setActive (getEffectiveRole() == Role::Master);
     maximizer.setEnabled (false);
+    tuner.process (buffer, true);
     saturator.setSettings ({});
     saturator.process (buffer);
     maximizer.process (buffer);
@@ -441,10 +482,45 @@ void MUProcessor::applyMaskingCut (float hz, float db)
 {
     EQBandSettings s;
     s.enabled = true; s.type = EQType::Bell; s.freqHz = hz; s.gainDb = 0.0f; s.q = 1.4f;
-    // Masking cuts are dynamic: they only bite while this track is actually loud there.
-    s.dynamic = true; s.thresholdDb = -30.0f; s.rangeDb = juce::jlimit (-6.0f, -1.0f, db);
-    setBandSettings (pickBandFor (s), s);
+    // Masking cuts are dynamic: they only bite while this track is actually loud there. The threshold is
+    // placed from how loud this track is, so the cut is working at the track's normal level and deepens as it
+    // gets louder; a fixed threshold would sit above a quiet track and never act.
+    const float level = loudness.getShortTerm() > -70.0f ? loudness.getShortTerm() : loudness.getIntegrated();
+    s.dynamic = true;
+    s.thresholdDb = level > -70.0f ? juce::jlimit (-60.0f, -12.0f, level - 16.0f) : -36.0f;
+    s.rangeDb = juce::jlimit (-6.0f, -1.5f, db);
+    // reuse a cut that is already there rather than stacking a second one beside it
+    int band = -1;
+    for (int b = 0; b < kNumEQBands; ++b)
+    {
+        const auto e = getBandSettings (b);
+        if (e.enabled && e.type == EQType::Bell && e.dynamic && std::abs (std::log2 (e.freqHz / hz)) < 0.4f) { band = b; break; }
+    }
+    setBandSettings (band >= 0 ? band : pickBandFor (s), s);
     setParam (ids::eqEnabled, 1.0f);
+}
+
+float MUProcessor::cutDbNear (float hz) const
+{
+    if (getParam (ids::eqEnabled) < 0.5f) return 0.0f;
+    float deepest = 0.0f;
+    for (int b = 0; b < kNumEQBands; ++b)
+    {
+        const auto e = getBandSettings (b);
+        if (! e.enabled || e.type != EQType::Bell || std::abs (std::log2 (e.freqHz / juce::jmax (1.0f, hz))) > 0.4f) continue;
+        deepest = juce::jmin (deepest, e.dynamic ? e.rangeDb : e.gainDb);
+    }
+    return deepest;
+}
+
+juce::String MUProcessor::findKey()
+{
+    const auto g = tuner.guessKey();
+    if (g.secondsHeard < 4.0f) return "Not enough singing heard yet. Switch Tune on, play a verse or a hook, then press Find key again.";
+    setParam (ids::tuneKey, (float) g.key);
+    setParam (ids::tuneScale, g.minor ? 2.0f : 1.0f);
+    return "Set to " + Tuner::keyNames()[g.key] + (g.minor ? " minor" : " major") + " from " + juce::String (juce::roundToInt (g.secondsHeard)) + " seconds of singing"
+         + (g.confidence < 0.6f ? ". The match is loose, so check it against the key of the beat." : ".");
 }
 
 // ---- A/B -----------------------------------------------------------------------------------------
@@ -650,6 +726,10 @@ juce::String MUProcessor::tutorTrackNotes()
     if (getParam (ids::satOn) > 0.5f) on.add ("saturation");
     if (getParam (ids::riderOn) > 0.5f) on.add ("level rider");
     if (getParam (ids::vsEnabled) > 0.5f) on.add ("vocal space");
+    if (getParam (ids::tuneOn) > 0.5f)
+        on.add ("Tune (" + Tuner::keyNames()[(int) getParam (ids::tuneKey)] + " " + Tuner::scaleNames()[(int) getParam (ids::tuneScale)].toLowerCase() + ", speed " + getParamText (ids::tuneSpeed) + ")");
+    if (getParam (ids::dblOn) > 0.5f) on.add (getParam (ids::dblVoices) > 0.5f ? "doubler (stack)" : "doubler");
+    if (getParam (ids::rvOn) > 0.5f) on.add ("reverb (" + juce::String (reverb.currentDecaySeconds(), 1) + " s)");
     if (role == Role::Master && getParam (ids::peakGuard) > 0.5f) on.add ("limiter");
     s << "Also switched on: " << (on.isEmpty() ? juce::String ("nothing") : on.joinIntoString (", ")) << ". ";
 

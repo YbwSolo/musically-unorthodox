@@ -9,6 +9,7 @@
 #include "ui/EQPage.h"
 #include "ui/DynamicsPage.h"
 #include "ui/TonePage.h"
+#include "ui/FXPage.h"
 #include "ui/MasterPage.h"
 #include "ui/LearnPage.h"
 #include "ui/SettingsPanel.h"
@@ -40,6 +41,7 @@ private:
     EQPage eqPage;
     DynamicsPage dynamicsPage;
     TonePage tonePage;
+    FXPage fxPage;
     MasterPage masterPage;
     LearnPage learnPage;
     SettingsPanel settings;

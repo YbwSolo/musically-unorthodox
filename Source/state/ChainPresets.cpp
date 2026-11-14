@@ -37,7 +37,20 @@ namespace
             set (ids::vsEnabled, 0); set (ids::vsAmount, 50); set (ids::vsSpeed, Normal);
             set (ids::stWidth, 100); set (ids::stMonoBass, 0); set (ids::stMonoFreq, 120);
             set (ids::peakGuard, 0); set (ids::masterAutoTrim, 0); set (ids::maxGain, 0);
+            // Tune keeps the key and scale that are already set: a preset must not move a song to another key.
+            set (ids::tuneOn, 0); set (ids::tuneSpeed, 60); set (ids::tuneAmount, 100); set (ids::tuneVibrato, 70);
+            set (ids::dblOn, 0); set (ids::dblMix, 45); set (ids::dblDetune, 9); set (ids::dblTiming, 45); set (ids::dblWidth, 100); set (ids::dblVoices, 0);
+            set (ids::rvOn, 0); set (ids::rvMix, 18); set (ids::rvAuto, 1); set (ids::rvLength, 1); set (ids::rvDecay, 1.2f); set (ids::rvPre, 25); set (ids::rvTone, 50); set (ids::rvDuck, 50);
         }
+        // speed in ms (0 = hard tune), keepVibrato in percent
+        Chain& tune (float speed, float keepVibrato, float amount = 100) { set (ids::tuneOn, 1); set (ids::tuneSpeed, speed); set (ids::tuneVibrato, keepVibrato); set (ids::tuneAmount, amount); return *this; }
+        Chain& dbl (float mix, float detune, float looseness, bool stack = false, float width = 100)
+        {
+            set (ids::dblOn, 1); set (ids::dblMix, mix); set (ids::dblDetune, detune); set (ids::dblTiming, looseness); set (ids::dblVoices, stack ? 1.0f : 0.0f); set (ids::dblWidth, width);
+            return *this;
+        }
+        // length: 0 = one beat, 1 = two beats, 2 = four beats of the song's tempo
+        Chain& verb (float mix, int length, float tone = 50, float duck = 50) { set (ids::rvOn, 1); set (ids::rvAuto, 1); set (ids::rvMix, mix); set (ids::rvLength, (float) length); set (ids::rvTone, tone); set (ids::rvDuck, duck); return *this; }
 
         void set (const juce::String& id, float v)
         {
@@ -124,6 +137,21 @@ namespace
         { Chain c (V, "Rap vocal - aggressive", Role::Vocal, "For drill and hard trap deliveries. Hard 8:1 compression with the fastest attack, more upper-mid bite, heavier saturation, and smoothing on the top so it stays loud without hurting.");
           c.lowCut (100, 1).bell (2, 300, -3.0f, 1.2f).bell (4, 2800, 3.0f, 1.0f).highShelf (6, 9000, 2.0f)
            .gate (-48, 16, 0.5f, 110, 50).comp (Punch, -24, 8, 1, 40, 2).deEss (6500, 7).smooth (30, Highs, Fast).saturate (Tube, 6, 45).ride (6, Fast);
+          add (c); }
+        { Chain c (V, "Rap vocal - tuned and doubled", Role::Vocal, "The punchy rap chain with gentle pitch correction that keeps the delivery natural, a tight double either side, and a short reverb timed to the beat that steps back while you rap.");
+          c.lowCut (90, 1).dyn (2, 250, -3.5f, 1.4f, -26).bell (4, 3500, 2.0f, 0.9f).dyn (5, 5200, -3.0f, 2.0f, -26).highShelf (6, 10000, 1.5f)
+           .gate (-50, 14).comp (Punch, -22, 4, 3, 60, 3).deEss (6000, 5).saturate (Tube, 3, 30).ride (5, Normal)
+           .tune (80, 80).dbl (35, 7, 30).verb (12, 0, 45, 70);
+          add (c); }
+        { Chain c (V, "Melodic trap - hard tune", Role::Vocal, "The snapped, robotic pitch sound of melodic trap. Every note jumps straight onto the scale, so set the key first (Find key on the FX tab). Bright top, firm compression, wide doubles and a two-beat reverb.");
+          c.lowCut (100, 1).bell (2, 280, -2.5f, 1.2f).bell (4, 3200, 2.0f, 0.9f).highShelf (6, 10500, 3.0f)
+           .gate (-50, 12).comp (Punch, -24, 5, 2, 50, 3).deEss (6500, 6).smooth (25, Highs, Normal).saturate (Tape, 3, 30)
+           .tune (0, 0).dbl (40, 10, 40).verb (20, 1, 60, 55);
+          add (c); }
+        { Chain c (V, "Hook stack", Role::Vocal, "Makes one lead take sound like a stacked hook: four extra voices spread left and right, natural pitch correction so the stack is in tune with itself, and a longer reverb for size.");
+          c.lowCut (95, 1).dyn (2, 260, -3.0f, 1.3f, -26).bell (4, 3000, 1.5f, 0.8f).highShelf (6, 11000, 2.5f)
+           .comp (Smooth, -22, 3.5f, 6, 90, 3).deEss (6200, 5).smooth (25, Highs, Normal).ride (4, Normal)
+           .tune (50, 60).dbl (60, 11, 60, true).verb (22, 1, 55, 50);
           add (c); }
         { Chain c (V, "Melodic vocal - smooth", Role::Vocal, "For sung hooks and R&B. Slower, levelling compression that keeps the performance natural, wide presence, open air above 11 kHz and resonance smoothing for a polished top end.");
           c.lowCut (80, 1).dyn (2, 220, -3.0f, 1.3f, -27).bell (4, 3000, 1.5f, 0.8f).highShelf (6, 11000, 3.0f)

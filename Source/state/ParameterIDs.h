@@ -128,6 +128,32 @@ namespace ids
     inline const juce::String riderRange  { "riderRange" };
     inline const juce::String riderSpeed  { "riderSpeed" };
 
+    // Tune (pitch correction)
+    inline const juce::String tuneOn      { "tuneOn" };
+    inline const juce::String tuneKey     { "tuneKey" };
+    inline const juce::String tuneScale   { "tuneScale" };
+    inline const juce::String tuneSpeed   { "tuneSpeed" };
+    inline const juce::String tuneAmount  { "tuneAmount" };
+    inline const juce::String tuneVibrato { "tuneVibrato" };
+
+    // Doubler
+    inline const juce::String dblOn     { "dblOn" };
+    inline const juce::String dblMix    { "dblMix" };
+    inline const juce::String dblDetune { "dblDetune" };
+    inline const juce::String dblTiming { "dblTiming" };
+    inline const juce::String dblWidth  { "dblWidth" };
+    inline const juce::String dblVoices { "dblVoices" };
+
+    // Reverb
+    inline const juce::String rvOn     { "rvOn" };
+    inline const juce::String rvMix    { "rvMix" };
+    inline const juce::String rvAuto   { "rvAuto" };
+    inline const juce::String rvLength { "rvLength" };
+    inline const juce::String rvDecay  { "rvDecay" };
+    inline const juce::String rvPre    { "rvPre" };
+    inline const juce::String rvTone   { "rvTone" };
+    inline const juce::String rvDuck   { "rvDuck" };
+
     // Vocal Space (dynamic EQ on beat/instrument instances, keyed from the vocal instance)
     inline const juce::String vsEnabled { "vsEnabled" };
     inline const juce::String vsAmount  { "vsAmount" };

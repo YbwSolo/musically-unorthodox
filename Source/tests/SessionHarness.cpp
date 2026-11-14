@@ -414,7 +414,7 @@ int main()
                 { "Why does my vocal sound muddy?", "Muddy sound" },                 { "My S sounds are really sharp", "Sharp S sounds" },
                 { "The beat is drowning out my vocal", "Vocal gets lost in the beat" }, { "my 808 disappears on phone speakers", "Bass or 808 missing on small speakers" },
                 { "How loud should my song be for Spotify?", "How loud a finished song should be" }, { "the mix is pumping", "Pumping and over-compression" },
-                { "how do I add reverb", "Reverb and delay" },                       { "my kick and 808 are fighting", "Kick and 808 fighting" },
+                { "how do I add reverb", "Reverb" }, { "how do I get the autotune sound", "Tuning a vocal" }, { "make my hook sound stacked", "Doubles and stacks" },                       { "my kick and 808 are fighting", "Kick and 808 fighting" },
                 { "how do I make my drums punchier", "Punchier drums" },             { "can't hear my vocal over the beat", "Vocal gets lost in the beat" },
                 { "what should I do first, I'm a beginner", "Where to start" },      { "my adlibs are too loud", "Backing vocals and adlibs" } };
             juce::String wrong;
@@ -576,10 +576,98 @@ int main()
         }
     }
 
+    // ---- Fix, FX, low latency, mono to stereo
+    {
+        for (auto* pr : { vocal.get(), beat.get(), bass.get() }) pr->applyChainPreset (findChainPreset ("Clean slate"));
+        remeasure();
+        runSeconds (5.0);
+        const auto before = vocal->getBus().computeMasking();
+        check (! before.empty(), "A collision is found between the tracks", juce::String ((int) before.size()));
+        if (! before.empty())
+        {
+            const auto c = before.front();
+            MUProcessor* covering = nullptr;
+            for (auto* pr : { vocal.get(), beat.get(), bass.get() }) if (pr->getSessionSlot() == c.slotB) covering = pr;
+            vocal->getBus().applyMaskingClash (c);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+            const auto after = vocal->getBus().computeMasking();
+            bool still = false;
+            for (auto& a : after) still = still || (a.slotB == c.slotB && std::abs (std::log2 (a.freqHz / c.freqHz)) < 0.4f);
+            check (! still && covering != nullptr && covering->cutDbNear (c.freqHz) <= -1.5f, "Fix puts a cut on the covering track and the collision leaves the list",
+                   covering != nullptr ? juce::String (covering->cutDbNear (c.freqHz), 1) + " dB at " + juce::String (juce::roundToInt (c.freqHz)) + " Hz" : juce::String ("no track"));
+            if (covering != nullptr)
+            {
+                float threshold = 0.0f;
+                for (int bnd = 0; bnd < kNumEQBands; ++bnd)
+                {
+                    const auto e = covering->getBandSettings (bnd);
+                    if (e.enabled && e.dynamic && std::abs (std::log2 (e.freqHz / c.freqHz)) < 0.4f) threshold = e.thresholdDb;
+                }
+                const float level = covering->getLoudness().getShortTerm();
+                check (threshold < -12.0f && std::abs (threshold - (level - 16.0f)) < 3.0f, "The cut's threshold is fitted to how loud that track is",
+                       juce::String (threshold, 1) + " dB threshold on a track at " + juce::String (level, 1) + " LUFS");
+                runSeconds (2.0);
+                bool biting = false; float depth = 0.0f;
+                for (int bnd = 0; bnd < kNumEQBands; ++bnd)
+                {
+                    const auto e = covering->getBandSettings (bnd);
+                    if (e.enabled && e.dynamic && std::abs (std::log2 (e.freqHz / c.freqHz)) < 0.4f) { biting = covering->getEQ().getBandDynamicOffsetDb (bnd) < -0.5f; depth = covering->getEQ().getBandDynamicOffsetDb (bnd); }
+                }
+                check (biting, "The cut is working while that track plays", juce::String (depth, 1) + " dB right now");
+            }
+        }
+
+        // presets with FX switch them on and leave the song's key alone
+        vocal->setParam (ids::tuneKey, 7.0f); vocal->setParam (ids::tuneScale, 2.0f);
+        vocal->applyChainPreset (findChainPreset ("Hook stack"));
+        check (vocal->getParam (ids::tuneOn) > 0.5f && vocal->getParam (ids::dblOn) > 0.5f && vocal->getParam (ids::dblVoices) > 0.5f && vocal->getParam (ids::rvOn) > 0.5f
+               && (int) vocal->getParam (ids::tuneKey) == 7 && (int) vocal->getParam (ids::tuneScale) == 2, "FX presets switch on tune, doubles and reverb and keep the song's key");
+        runSeconds (3.0);
+        double side = 0.0, midE = 0.0; bool finite = true;
+        for (int i = 0; i < block; ++i)
+        {
+            const float l = v.getSample (0, i), r = v.getSample (1, i);
+            side += (double) (l - r) * (l - r); midE += (double) (l + r) * (l + r);
+            finite = finite && std::isfinite (l) && std::isfinite (r);
+        }
+        check (finite && side > midE * 1.0e-4 && vocal->getTailLengthSeconds() > 0.2 && vocal->getTuner().getOutputNote() > 0.0f,
+               "Tune, doubles and reverb run in the chain and widen a centred vocal", "side/mid energy " + juce::String (side / juce::jmax (1.0e-12, midE), 4));
+
+        // low latency mode: the delaying stages leave the path on every instance, and come back afterwards
+        const int tuned = vocal->getLatencySamples(), mastered = master->getLatencySamples();
+        vocal->getBus().setLowLatency (true);
+        runSeconds (0.5);
+        const int tunedLow = vocal->getLatencySamples(), masteredLow = master->getLatencySamples();
+        check (tuned >= (int) (fs * 0.020) && tunedLow <= tuned - (int) (fs * 0.019) && masteredLow < mastered, "Low latency mode takes the delaying stages out of every instance",
+               "vocal " + juce::String (tuned) + " to " + juce::String (tunedLow) + " samples, master " + juce::String (mastered) + " to " + juce::String (masteredLow));
+        vocal->getBus().setLowLatency (false);
+        runSeconds (0.5);
+        check (vocal->getLatencySamples() == tuned && master->getLatencySamples() == mastered, "Turning low latency off restores full quality");
+        vocal->applyChainPreset (findChainPreset ("Clean slate"));
+
+        // a mono track can load the plugin as mono in, stereo out, so its doubles and reverb can be wide
+        MUProcessor monoToStereo;
+        juce::AudioProcessor::BusesLayout layout;
+        layout.inputBuses.add (juce::AudioChannelSet::mono()); layout.outputBuses.add (juce::AudioChannelSet::stereo());
+        const bool accepted = monoToStereo.checkBusesLayoutSupported (layout) && monoToStereo.setBusesLayout (layout);
+        monoToStereo.setRateAndBufferSizeDetails (fs, block);
+        monoToStereo.prepareToPlay (fs, block);
+        monoToStereo.setParam (ids::dblOn, 1.0f);
+        juce::AudioBuffer<float> mb (2, block);
+        double diff = 0.0, right = 0.0;
+        for (int n = 0; n < 150; ++n)
+        {
+            for (int i = 0; i < block; ++i) { mb.setSample (0, i, vocalSrc.next() * 0.4f); mb.setSample (1, i, 0.0f); }
+            monoToStereo.processBlock (mb, midi);
+            if (n > 100) for (int i = 0; i < block; ++i) { diff += std::abs (mb.getSample (0, i) - mb.getSample (1, i)); right += std::abs (mb.getSample (1, i)); }
+        }
+        check (accepted && right > 1.0 && diff > right * 0.02, "Mono in, stereo out is supported and gives a mono vocal wide doubles", "accepted " + juce::String ((int) accepted));
+    }
+
     // ---- the editor builds, runs and closes cleanly on every tab (needs a display)
     if (juce::SystemStats::getEnvironmentVariable ("DISPLAY", {}).isNotEmpty() || juce::SystemStats::getOperatingSystemType() != juce::SystemStats::Linux)
     {
-        for (int tab = 0; tab < 6; ++tab)
+        for (int tab = 0; tab < 7; ++tab)
         {
             vocal->setCurrentTab (tab);
             std::unique_ptr<juce::AudioProcessorEditor> ed (vocal->createEditor());

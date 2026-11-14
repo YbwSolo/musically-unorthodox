@@ -20,6 +20,7 @@ public:
     virtual void setAcceptsBalance (bool on) = 0;
     virtual bool fillBandsDb (std::array<float, kAnalysisBands>& out) const = 0;
     virtual void applyMaskingCut (float hz, float db) = 0;
+    virtual float cutDbNear (float hz) const = 0;      // the deepest EQ cut this track already has around hz (0 if none)
     virtual void setSessionInstanceNumber (int n) = 0;
     virtual void resetMeasurement() = 0;
 };
@@ -72,6 +73,11 @@ public:
     void setAutoBalance (bool on, BalanceTargets targets);
     bool isAutoBalance() const { return autoBalance; }
 
+    // Low latency mode, for recording through the plugin: every instance in the session drops the stages that
+    // delay the sound. Not saved with the song, so a session always opens in full quality.
+    void setLowLatency (bool on) noexcept { lowLatency.store (on); }
+    bool isLowLatency() const noexcept { return lowLatency.load (std::memory_order_relaxed); }
+
     // "Learn & balance": wipe every instance's integrated reading, listen for a while, then apply the plan.
     void startLearn (float seconds, BalanceTargets targets);
     void cancelLearn();
@@ -95,6 +101,7 @@ private:
     std::array<Slot, kMaxInstances> slots;
     mutable juce::CriticalSection lock;
     bool autoBalance = false;
+    std::atomic<bool> lowLatency { false };
     BalanceTargets targets;
     BalancePlan lastPlan;
     int nextInstanceNumber = 1;

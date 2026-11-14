@@ -101,6 +101,8 @@ std::vector<TrackInfo> SessionBus::collectTracks() const
         t.role = s.client->getEffectiveRole();
         const float integ = s.integrated.load();
         t.levelLufs = integ > -70.0f ? integ : s.shortTerm.load();
+        t.shortLufs = s.shortTerm.load();
+        t.playing = s.active.load();
         t.truePeakDb = s.truePeak.load();
         t.trimDb = s.client->getTrimDb();
         t.acceptsBalance = s.client->acceptsBalance();
@@ -145,7 +147,16 @@ std::array<float, kAnalysisBands> SessionBus::bandCentres() const
 
 std::vector<MaskingClash> SessionBus::computeMasking() const
 {
-    return findMasking (collectTracks(), bandCentres());
+    auto clashes = findMasking (collectTracks(), bandCentres());
+    // a clash that already has its cut in place on the covering track has been dealt with
+    const juce::ScopedLock sl (lock);
+    clashes.erase (std::remove_if (clashes.begin(), clashes.end(), [this] (const MaskingClash& c)
+    {
+        if (c.slotB < 0 || c.slotB >= kMaxInstances) return false;
+        const auto& s = slots[(size_t) c.slotB];
+        return s.used.load() && s.client != nullptr && s.client->cutDbNear (c.freqHz) <= -1.0f;
+    }), clashes.end());
+    return clashes;
 }
 
 void SessionBus::applyMaskingClash (const MaskingClash& c)

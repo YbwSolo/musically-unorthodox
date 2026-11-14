@@ -4,6 +4,8 @@
 #include <juce_dsp/juce_dsp.h>
 #include <cstdio>
 #include <cmath>
+#include <functional>
+#include <vector>
 #include "dsp/LoudnessMeter.h"
 #include "dsp/EQEngine.h"
 #include "dsp/Compressor.h"
@@ -20,6 +22,10 @@
 #include "dsp/VocalSpace.h"
 #include "dsp/RoleDetector.h"
 #include "session/BalanceEngine.h"
+#include "dsp/Pitch.h"
+#include "dsp/Tuner.h"
+#include "dsp/Doubler.h"
+#include "dsp/Reverb.h"
 
 using namespace mu;
 
@@ -701,6 +707,229 @@ int main()
         check (an.hasLongTerm(), "Analyser builds its long-term average");
         an.resetLongTerm();
         check (! an.hasLongTerm(), "Long-term average can be restarted");
+    }
+
+    // ================================================================ pitch, tune, doubler, reverb
+    // A voice-like tone: a fundamental with harmonics that get quieter, optionally with vibrato.
+    auto voiceTone = [fs] (float hz, float seconds, int channels, float vibratoCents = 0.0f, float vibratoHz = 5.5f)
+    {
+        const int n = (int) (fs * seconds);
+        juce::AudioBuffer<float> b (channels, n);
+        double phase = 0.0;
+        for (int i = 0; i < n; ++i)
+        {
+            const double f = hz * std::pow (2.0, vibratoCents * std::sin (juce::MathConstants<double>::twoPi * vibratoHz * i / fs) / 1200.0);
+            phase += juce::MathConstants<double>::twoPi * f / fs;
+            float v = 0.0f;
+            for (int k = 1; k <= 8; ++k) v += (float) std::sin (phase * k) / (float) k;
+            for (int c = 0; c < channels; ++c) b.setSample (c, i, 0.2f * v);
+        }
+        return b;
+    };
+    // Follows the pitch of a signal with a fresh detector; returns the notes heard after the first "skip" seconds.
+    auto trackNotes = [fs] (const juce::AudioBuffer<float>& b, float skip)
+    {
+        PitchDetector d; d.prepare (fs);
+        std::vector<float> notes;
+        for (int i = 0; i < b.getNumSamples(); ++i)
+            if (d.push (b.getSample (0, i)) && i > (int) (fs * skip) && d.frequency() > 0.0f)
+                notes.push_back (69.0f + 12.0f * std::log2 (d.frequency() / 440.0f));
+        return notes;
+    };
+    auto meanOf = [] (const std::vector<float>& v) { double s = 0; for (float x : v) s += x; return v.empty() ? 0.0f : (float) (s / (double) v.size()); };
+    auto spanOf = [] (const std::vector<float>& v) { float lo = 1e9f, hi = -1e9f; for (float x : v) { lo = std::min (lo, x); hi = std::max (hi, x); } return v.empty() ? 0.0f : hi - lo; };
+    auto rmsOf = [] (const juce::AudioBuffer<float>& b, int from) { return b.getRMSLevel (0, from, b.getNumSamples() - from); };
+    auto inBlocks = [] (juce::AudioBuffer<float>& b, int block, const std::function<void (juce::AudioBuffer<float>&)>& run)
+    {
+        for (int pos = 0; pos < b.getNumSamples(); pos += block)
+        {
+            const int len = std::min (block, b.getNumSamples() - pos);
+            juce::AudioBuffer<float> view (b.getArrayOfWritePointers(), b.getNumChannels(), pos, len);
+            run (view);
+        }
+    };
+
+    {
+        // --- the detector names the right note across the range a voice covers
+        juce::String worst; float worstCents = 0.0f;
+        for (float hz : { 82.41f, 110.0f, 164.81f, 220.0f, 329.63f, 440.0f, 659.26f, 880.0f })
+        {
+            auto t = voiceTone (hz, 0.6f, 1);
+            const auto notes = trackNotes (t, 0.2f);
+            const float cents = notes.empty() ? 999.0f : std::abs (meanOf (notes) - (69.0f + 12.0f * std::log2 (hz / 440.0f))) * 100.0f;
+            if (cents > worstCents) { worstCents = cents; worst = juce::String (hz, 1) + " Hz off by " + juce::String (cents, 1) + " cents"; }
+        }
+        check (worstCents < 4.0f, "Pitch detector is within 4 cents from 82 Hz to 880 Hz", worst);
+
+        juce::Random rng (3);
+        juce::AudioBuffer<float> noise (1, (int) fs);
+        for (int i = 0; i < noise.getNumSamples(); ++i) noise.setSample (0, i, 0.2f * (rng.nextFloat() * 2.0f - 1.0f));
+        check (trackNotes (noise, 0.1f).size() < 5, "Pitch detector does not invent a note in noise", juce::String ((int) trackNotes (noise, 0.1f).size()) + " frames");
+        juce::AudioBuffer<float> silence (1, (int) fs); silence.clear();
+        check (trackNotes (silence, 0.0f).empty(), "Pitch detector stays quiet in silence");
+    }
+    {
+        // --- hard tune: a note sung 40 cents flat comes out exactly on the note, at the same level
+        Tuner t; t.prepare (fs, 256, 2);
+        TunerSettings ts; ts.enabled = true; ts.speedMs = 0.0f; ts.keepVibrato = 0.0f; ts.amount = 1.0f; ts.scale = 0;
+        t.setSettings (ts);
+        const float flat = 440.0f * std::pow (2.0f, -40.0f / 1200.0f);
+        auto in = voiceTone (flat, 1.5f, 2);
+        auto out = in;
+        inBlocks (out, 256, [&t] (juce::AudioBuffer<float>& v) { t.process (v); });
+        const auto notes = trackNotes (out, 0.4f);
+        check (std::abs (meanOf (notes) - 69.0f) * 100.0f < 3.0f && spanOf (notes) * 100.0f < 6.0f, "Hard tune lands a flat note exactly on pitch",
+               juce::String ((meanOf (notes) - 69.0f) * 100.0f, 1) + " cents off, wobble " + juce::String (spanOf (notes) * 100.0f, 1) + " cents");
+        const float change = juce::Decibels::gainToDecibels (rmsOf (out, (int) fs / 2) / rmsOf (in, (int) fs / 2));
+        check (std::abs (change) < 1.0f, "Tuning does not change the level", juce::String (change, 2) + " dB");
+        check (t.getLatencySamples() == (int) std::round (fs * 0.020) && t.getTargetNote() == 69, "Tune reports its 20 ms delay and the note it chose");
+
+        // --- the scale decides where a note goes: C sharp is not in C major, so a slightly sharp C sharp goes up to D
+        Tuner s; s.prepare (fs, 256, 1);
+        ts.key = 0; ts.scale = 1; s.setSettings (ts);
+        auto cs = voiceTone (277.18f * std::pow (2.0f, 10.0f / 1200.0f), 1.2f, 1);
+        inBlocks (cs, 128, [&s] (juce::AudioBuffer<float>& v) { s.process (v); });
+        const auto moved = trackNotes (cs, 0.4f);
+        check (std::abs (meanOf (moved) - 62.0f) * 100.0f < 4.0f, "Tune follows the chosen key and scale", juce::String (meanOf (moved), 2) + " (62 is D)");
+        check (Tuner::nearestAllowed (61.4f, 0, 1) == 62 && Tuner::nearestAllowed (60.4f, 0, 1) == 60 && Tuner::noteAllowed (69, 9, 2) && ! Tuner::noteAllowed (61, 9, 4),
+               "Scales contain the right notes");
+    }
+    {
+        // --- natural tune: the centre of the note is corrected, the vibrato stays
+        Tuner t; t.prepare (fs, 256, 1);
+        TunerSettings ts; ts.enabled = true; ts.speedMs = 60.0f; ts.keepVibrato = 1.0f; ts.amount = 1.0f;
+        t.setSettings (ts);
+        auto in = voiceTone (440.0f * std::pow (2.0f, -35.0f / 1200.0f), 3.0f, 1, 30.0f);
+        const float before = spanOf (trackNotes (in, 1.0f));
+        inBlocks (in, 256, [&t] (juce::AudioBuffer<float>& v) { t.process (v); });
+        const auto notes = trackNotes (in, 1.0f);
+        check (std::abs (meanOf (notes) - 69.0f) * 100.0f < 8.0f && spanOf (notes) > before * 0.6f, "Natural tune centres the note and keeps the vibrato",
+               juce::String ((meanOf (notes) - 69.0f) * 100.0f, 1) + " cents off centre, vibrato " + juce::String (spanOf (notes) * 100.0f, 0) + " of " + juce::String (before * 100.0f, 0) + " cents");
+    }
+    {
+        // --- with nothing to correct, Tune is a pure delay; switched off it is not in the path at all
+        Tuner t; t.prepare (fs, 256, 2);
+        TunerSettings ts; ts.enabled = true; t.setSettings (ts);
+        juce::Random rng (5);
+        juce::AudioBuffer<float> in (2, (int) fs);
+        for (int c = 0; c < 2; ++c) for (int i = 0; i < in.getNumSamples(); ++i) in.setSample (c, i, 0.3f * (rng.nextFloat() * 2.0f - 1.0f));
+        auto out = in;
+        inBlocks (out, 100, [&t] (juce::AudioBuffer<float>& v) { t.process (v, true); });
+        const int d = t.getLatencySamples();
+        float worst = 0.0f;
+        for (int i = (int) fs / 4; i < out.getNumSamples(); ++i) worst = std::max (worst, std::abs (out.getSample (1, i) - in.getSample (1, i - d)));
+        check (worst < 2.0e-3f, "Tune passes sound through unchanged when asked to (delay only)", "largest difference " + juce::String (worst, 5));
+        ts.lowLatency = true; t.setSettings (ts);
+        check (t.getLatencySamples() == 0, "Low latency mode: Tune reports no delay");
+        ts.enabled = false; t.setSettings (ts);
+        auto untouched = in;
+        t.process (untouched);
+        check (untouched.getSample (0, 1000) == in.getSample (0, 1000) && t.getLatencySamples() == 0, "Tune switched off leaves the sound alone");
+    }
+    {
+        // --- key finding: a melody in A minor is heard as A minor
+        Tuner t; t.prepare (fs, 256, 1);
+        TunerSettings ts; ts.enabled = true; t.setSettings (ts);
+        const std::pair<int, float> melody[] = { { 57, 0.9f }, { 60, 0.4f }, { 64, 0.6f }, { 62, 0.3f }, { 59, 0.3f }, { 57, 0.8f }, { 65, 0.3f }, { 64, 0.5f }, { 55, 0.3f }, { 57, 0.9f } };
+        for (auto& m : melody)
+        {
+            auto tone = voiceTone (440.0f * std::pow (2.0f, ((float) m.first - 69.0f) / 12.0f), m.second, 1);
+            inBlocks (tone, 256, [&t] (juce::AudioBuffer<float>& v) { t.process (v); });
+        }
+        const auto g = t.guessKey();
+        check (g.key == 9 && g.minor && g.secondsHeard > 3.0f, "Key finder hears A minor", Tuner::keyNames()[g.key] + (g.minor ? " minor" : " major") + ", confidence " + juce::String (g.confidence, 2));
+    }
+    {
+        // --- doubler: adds copies left and right that differ from each other, and leaves the lead in the middle
+        Doubler d; d.prepare (fs, 256, 2);
+        DoublerSettings ds; ds.enabled = true; ds.mix = 0.6f; ds.width = 1.0f; d.setSettings (ds);
+        auto in = voiceTone (220.0f, 3.0f, 2, 12.0f);
+        auto out = in;
+        inBlocks (out, 256, [&d] (juce::AudioBuffer<float>& v) { d.process (v); });
+        const int from = (int) fs;
+        double ll = 0, rr = 0, lr = 0, sideE = 0, midE = 0; bool finite = true;
+        for (int i = from; i < out.getNumSamples(); ++i)
+        {
+            const float l = out.getSample (0, i) - in.getSample (0, i), r = out.getSample (1, i) - in.getSample (1, i);      // only what was added
+            ll += l * l; rr += r * r; lr += l * r;
+            const float side = 0.5f * (out.getSample (0, i) - out.getSample (1, i)), mid = 0.5f * (out.getSample (0, i) + out.getSample (1, i));
+            sideE += side * side; midE += mid * mid;
+            finite = finite && std::isfinite (l) && std::isfinite (r);
+        }
+        const float corr = (float) (lr / std::sqrt (ll * rr + 1e-20));
+        const float added = juce::Decibels::gainToDecibels ((float) std::sqrt ((ll + rr) / 2.0 / (out.getNumSamples() - from)) / rmsOf (in, from));
+        check (finite && corr < 0.6f && sideE > midE * 0.01, "Doubler adds different copies on the left and the right", "left/right likeness " + juce::String (corr, 2));
+        check (added > -14.0f && added < -1.0f, "Doubles sit under the lead, not over it", juce::String (added, 1) + " dB against the lead");
+        ds.voices = 1; d.setSettings (ds);
+        check (d.getNumVoices() == 4 && std::abs (d.getVoicePan (0) + 1.0f) < 0.01f, "Stack mode uses four voices");
+        ds.enabled = false; d.setSettings (ds);
+        auto off = in; d.process (off);
+        check (off.getSample (0, 5000) == in.getSample (0, 5000), "Doubler switched off leaves the sound alone");
+    }
+    {
+        // --- reverb: the decay time is what was asked for, and the tempo maths is right
+        auto decayOf = [fs] (float seconds, float tone)
+        {
+            Reverb r; r.prepare (fs, 512, 2);
+            ReverbSettings rs; rs.enabled = true; rs.autoTime = false; rs.decaySeconds = seconds; rs.preDelayMs = 0.0f; rs.mix = 1.0f; rs.duck = 0.0f; rs.tone = tone;
+            r.setSettings (rs);
+            juce::AudioBuffer<float> b (2, (int) (fs * (seconds * 1.6f + 0.5f)));
+            b.clear(); b.setSample (0, 0, 1.0f); b.setSample (1, 0, 1.0f);
+            for (int pos = 0; pos < b.getNumSamples(); pos += 512)
+            {
+                juce::AudioBuffer<float> view (b.getArrayOfWritePointers(), 2, pos, std::min (512, b.getNumSamples() - pos));
+                r.process (view);
+            }
+            b.setSample (0, 0, 0.0f); b.setSample (1, 0, 0.0f);                 // take the dry click back out
+            // Schroeder integration: energy still to come at each moment, in dB; fit the fall from -5 to -25 dB
+            std::vector<double> rest ((size_t) b.getNumSamples());
+            double acc = 0.0;
+            for (int i = b.getNumSamples() - 1; i >= 0; --i) { acc += (double) b.getSample (0, i) * b.getSample (0, i) + (double) b.getSample (1, i) * b.getSample (1, i); rest[(size_t) i] = acc; }
+            int t5 = -1, t25 = -1;
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const double db = 10.0 * std::log10 (rest[(size_t) i] / rest[0] + 1e-30);
+                if (t5 < 0 && db <= -5.0) t5 = i;
+                if (t25 < 0 && db <= -25.0) { t25 = i; break; }
+            }
+            return (t5 >= 0 && t25 > t5) ? (float) (3.0 * (t25 - t5) / fs) : 0.0f;
+        };
+        const float d1 = decayOf (1.0f, 0.5f), d2 = decayOf (2.5f, 0.5f);
+        check (near (d1, 1.0f, 0.2f) && near (d2, 2.5f, 0.5f), "Reverb decays in the time it is set to", juce::String (d1, 2) + " s for 1.0, " + juce::String (d2, 2) + " s for 2.5");
+        check (near (Reverb::beatMs (120.0), 500.0f, 0.01f) && near (Reverb::autoPreDelayMs (120.0), 31.25f, 0.01f) && near (Reverb::autoDecaySeconds (120.0, 1), 1.0f, 0.001f)
+               && near (Reverb::autoDecaySeconds (128.0, 2), 1.875f, 0.001f) && near (Reverb::autoDecaySeconds (90.0, 0), 0.6667f, 0.001f),
+               "Reverb timing follows the tempo (60,000 / BPM)");
+
+        // nothing arrives before the pre-delay; the dry sound is untouched; the tail stays put at long decays
+        Reverb r; r.prepare (fs, 512, 2);
+        ReverbSettings rs; rs.enabled = true; rs.autoTime = true; rs.bpm = 120.0; rs.length = 1; rs.mix = 1.0f; rs.duck = 0.0f;
+        r.setSettings (rs);
+        juce::AudioBuffer<float> b (2, (int) fs); b.clear(); b.setSample (0, 0, 1.0f); b.setSample (1, 0, 1.0f);
+        inBlocks (b, 512, [&r] (juce::AudioBuffer<float>& v) { r.process (v); });
+        float early = 0.0f, later = 0.0f;
+        for (int i = 1; i < (int) (fs * 0.030); ++i) early = std::max (early, std::abs (b.getSample (0, i)));
+        for (int i = (int) (fs * 0.032); i < (int) (fs * 0.2); ++i) later = std::max (later, std::abs (b.getSample (0, i)));
+        check (b.getSample (0, 0) == 1.0f && early < 1.0e-4f && later > 0.01f, "Reverb waits for the pre-delay and leaves the dry sound alone",
+               "before " + juce::String (early, 6) + ", after " + juce::String (later, 3));
+
+        Reverb longOne; longOne.prepare (fs, 512, 2);
+        rs.autoTime = false; rs.decaySeconds = 10.0f; rs.mix = 1.0f; longOne.setSettings (rs);
+        juce::Random rng (9);
+        juce::AudioBuffer<float> loud (2, (int) fs * 12);
+        for (int c = 0; c < 2; ++c) for (int i = 0; i < loud.getNumSamples(); ++i) loud.setSample (c, i, 0.25f * (rng.nextFloat() * 2.0f - 1.0f));
+        inBlocks (loud, 512, [&longOne] (juce::AudioBuffer<float>& v) { longOne.process (v); });
+        const float peak = loud.getMagnitude (0, loud.getNumSamples());
+        check (std::isfinite (peak) && peak < 4.0f, "Reverb stays stable with a 10 second tail", "peak " + juce::String (peak, 2));
+
+        // ducking: the reverb is quieter while the dry sound plays than after it stops
+        Reverb duck; duck.prepare (fs, 512, 2);
+        rs.decaySeconds = 2.0f; rs.duck = 1.0f; rs.mix = 0.5f; duck.setSettings (rs);
+        auto burst = voiceTone (220.0f, 2.0f, 2);
+        inBlocks (burst, 512, [&duck] (juce::AudioBuffer<float>& v) { duck.process (v); });
+        const float during = duck.getDuckDb();
+        juce::AudioBuffer<float> gap (2, (int) fs); gap.clear();
+        inBlocks (gap, 512, [&duck] (juce::AudioBuffer<float>& v) { duck.process (v); });
+        check (during < -6.0f && duck.getDuckDb() > -1.0f, "Reverb steps back while the voice sings and returns in the gaps", juce::String (during, 1) + " dB during, " + juce::String (duck.getDuckDb(), 1) + " dB after");
     }
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED", failures, failures == 1 ? "" : "s");

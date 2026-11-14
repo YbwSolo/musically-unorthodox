@@ -41,6 +41,7 @@ private:
     juce::Rectangle<int> dialArea, actionArea, lanesArea, collisionArea;
     float march = 0.0f, refreshTimer = 0.0f, dialValue = -60.0f, dialPeak = -60.0f, learnProgress = 0.0f, pulse = 0.0f;
     bool hasMaster = false;
-    float mixLufs = -100.0f, mixPeak = -100.0f, targetLufs = -18.0f, targetPeak = -6.0f;
+    float mixLufs = -100.0f, mixPeak = -100.0f, targetLufs = -18.0f, targetPeak = -6.0f, liveLufs = -100.0f, fixedShow = 0.0f;
+    juce::String fixedNote;
 };
 }
