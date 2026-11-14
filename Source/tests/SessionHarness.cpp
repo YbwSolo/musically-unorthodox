@@ -392,10 +392,21 @@ int main()
         const auto prompt = vocal->tutorPrompt ("Why does my vocal sound muddy?");
         const auto trackNotes = vocal->tutorTrackNotes();
         const auto dumpTo = juce::SystemStats::getEnvironmentVariable ("MU_DUMP_TUTOR_PROMPT", {});
-        if (dumpTo.isNotEmpty()) juce::File (dumpTo).replaceWithText (trackNotes);
+        const auto facts = vocal->tutorFacts();
+        if (dumpTo.isNotEmpty())
+        {
+            juce::File (dumpTo).replaceWithText (trackNotes);
+            juce::String lines;
+            for (auto& k : facts.getAllKeys()) lines << k << "=" << facts[k] << "\n";
+            juce::File (dumpTo).getSiblingFile ("sample_tutor_facts.txt").replaceWithText (lines);
+        }
+        const auto balanceNotes = tutor::notesFor ("Is my mix balanced right now?", facts);
+        check (facts["balance"].contains ("should come") && balanceNotes.contains (facts["balance"]) && ! balanceNotes.containsChar ('{')
+               && facts["mixloudness"].contains ("LUFS") && facts["width"].contains ("correlation"),
+               "Measurements are turned into finished sentences for the tutor", facts["balance"]);
         check (trackNotes.contains ("Lead vocal") && trackNotes.contains ("LUFS") && trackNotes.contains ("THE WHOLE SESSION") && trackNotes.contains ("tracks have the plugin"),
                "Tutor is told about this track and the session around it", juce::String (trackNotes.length()) + " characters");
-        check (prompt.contains ("NOTES FOR THIS QUESTION") && prompt.contains ("Mud is a build-up") && prompt.lastIndexOf ("NOTES FOR THIS QUESTION") < prompt.lastIndexOf ("THIS TRACK\n"),
+        check (prompt.contains ("GUIDE NOTES FOR THIS QUESTION\n") && prompt.contains ("Mud is a build-up") && prompt.lastIndexOf ("GUIDE NOTES FOR THIS QUESTION\n") < prompt.lastIndexOf ("THIS TRACK\n"),
                "Tutor is handed the guide notes that match the question");
         {
             // the right note must come first for the questions students actually ask

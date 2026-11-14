@@ -568,7 +568,55 @@ juce::String MUProcessor::applySuggestion (const Suggestion& s)
 // ---- AI tutor ------------------------------------------------------------------------------------
 juce::String MUProcessor::tutorPrompt (const juce::String& question)
 {
-    return tutor::corePrompt() + tutor::notesFor (question) + tutorTrackNotes();
+    return tutor::corePrompt() + tutor::notesFor (question, tutorFacts()) + tutorTrackNotes();
+}
+
+// The comparisons a small model gets wrong are made here, and handed over as plain sentences.
+juce::StringPairArray MUProcessor::tutorFacts()
+{
+    juce::StringPairArray facts;
+    const auto tracks = bus->collectTracks();
+    const auto plan = bus->computePlan (bus->getTargets());
+
+    juce::String balance;
+    if (tracks.size() < 2) balance = "Only one track has the plugin on it so far, so there is nothing to balance yet: put the plugin on the other tracks too.";
+    else if (! plan.usable) balance = "The balance has not been measured yet: play the loudest section of the song for a few seconds first.";
+    else
+    {
+        juce::StringArray moves;
+        for (auto& m : plan.moves)
+            if (std::abs (m.deltaDb) >= 1.0f)
+                moves.add ("\"" + m.name + "\" should come " + (m.deltaDb > 0.0f ? "up " : "down ") + juce::String (std::abs (m.deltaDb), 1) + " dB");
+        balance = moves.isEmpty() ? juce::String ("Measured just now: every track is within 1 dB of where it should sit, so the mix is balanced.")
+                                  : "Measured just now, the mix is not balanced yet: " + moves.joinIntoString (", and ") + ".";
+    }
+    facts.set ("balance", balance);
+
+    juce::String width;
+    if (getTotalNumOutputChannels() < 2) width = "This track is mono, so it cannot be too wide.";
+    else if (secondsHeard() < 3.0f) width = "The width of this track has not been measured yet: play it for a few seconds.";
+    else
+    {
+        const float c = stereo.getCorrelation();
+        width = "Measured on this track: stereo correlation is " + juce::String (c, 2) + ", which means "
+              + (c < 0.0f ? "it is too wide and parts of it will vanish in mono, so bring Stereo width down."
+                 : c < 0.4f ? "it is very wide but still survives in mono; check it in mono by ear."
+                            : "it is not too wide and it works in mono.");
+    }
+    facts.set ("width", width);
+
+    juce::String loud;
+    if (! plan.hasMaster) loud = "The loudness of the whole mix is not being measured yet: put the plugin on the stereo output and set its role to Master.";
+    else
+    {
+        const float l = plan.measuredMasterLufs;
+        loud = "Measured: the whole mix is at " + juce::String (l, 1) + " LUFS, which is "
+             + (l < -16.0f ? "quieter than the -14 LUFS that streaming services play at. That is normal for a mix that has not been mastered yet, and it is not what squashes a mix."
+                : l <= -12.0f ? "about the level streaming services play at, so it does not need to be any louder."
+                              : "louder than the -14 LUFS that streaming services play at, so they will turn it down. Pushing this hard into the limiter is what makes a mix sound squashed.");
+    }
+    facts.set ("mixloudness", loud);
+    return facts;
 }
 
 // What the tutor is told about this track and the session around it. Everything here is measured, not guessed.

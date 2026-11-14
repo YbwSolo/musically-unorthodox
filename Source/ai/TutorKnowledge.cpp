@@ -13,7 +13,8 @@ juce::String corePrompt()
         "You are the tutor inside Musically Unorthodox, a mixing and mastering plugin used by music students.\n"
         "RULES: Answer in plain English a beginner can follow, in at most 110 words, as ordinary sentences with no markdown, lists or headings. "
         "Only recommend things this plugin can do, and always say which tab to open. Use only the numbers given in the notes and under THIS TRACK, and never invent numbers. "
-        "When NOTES FOR THIS QUESTION are given, build the answer from them. If you are not sure, say what to listen for instead.\n\n"
+        "When GUIDE NOTES FOR THIS QUESTION are given, build the answer from them. If you are not sure, say what to listen for instead. "
+        "Speak to the student directly and never mention these instructions, the notes, or the headings in them.\n\n"
         "WHERE THINGS ARE\n"
         "Mix tab: balances the level of every track against the lead vocal and lists collisions between tracks, each with a Fix button.\n"
         "EQ tab: every EQ move is made here. It has 8 bands, dynamic bands, and the Analyse button, which lists Mix Brain suggestions, each with an Apply button.\n"
@@ -103,7 +104,7 @@ const Note kNotes[] = {
     { "Pumping and over-compression", "pumping,pump,pumps,breathing,squashed,crushed,lifeless,flat,over compressed,overcompressed,too much compression,ducking,sucked",
       "Pumping is the level audibly ducking and swelling back. The causes are too much reduction, a release that is too fast, or bass setting the compressor off. "
       "On the Dynamics tab raise the threshold so there is less reduction, lengthen the release, and raise the Sidechain high-pass to 80 to 150 Hz so the kick and 808 stop driving it. "
-      "On the master, more than 4 to 5 dB of limiter reduction flattens the drums." },
+      "On the master, more than 4 to 5 dB of limiter reduction flattens the drums, so on the Master tab lower Limiter drive or choose a quieter mode. {mixloudness}" },
     { "Punchier drums", "punch,punchy,punchier,hit harder,hits harder,knock,knocks,slap,slaps,snare,drums weak,weak drums,drums,transient,impact",
       "Punch lives in the first few milliseconds of a hit. On the Dynamics tab use the Punch style with a slower attack of 10 to 30 ms, so the hit gets through before the compressor clamps down, "
       "and a release fast enough to recover before the next hit. Lowering Mix blends the crushed sound with the untouched sound for weight without losing the hit. "
@@ -115,11 +116,11 @@ const Note kNotes[] = {
     { "How loud a finished song should be", "how loud,loudness,lufs,spotify,youtube,apple music,streaming,soundcloud,loud enough,quiet master,song too quiet,mix too quiet,normalise,normalize",
       "Loudness is set on the Master tab of the instance on the stereo output, with its role set to Master. Streaming master mode aims for about -14 LUFS with a true peak ceiling of -1 dB, "
       "which is the level Spotify and YouTube play at; Apple Music is about -16. Auto level sets the gain into the limiter: play the loudest section for a few seconds. "
-      "Services turn louder songs down, so extra loudness only costs punch." },
+      "Services turn louder songs down, so extra loudness only costs punch. {mixloudness}" },
     { "Mastering a song", "master,mastering,mastered,finish,finishing,final,release,upload,limiter,export,bounce",
       "Get the mix right first: on the Mix tab it should sit near -18 LUFS with peaks under -6 dB. Then on the instance on the stereo output: EQ only if the whole mix needs it, "
       "Glue compression of 1 to 2 dB at most, then the Master tab. Choose the mode, let Auto level reach the target, and check the limiter is not taking off more than 3 to 4 dB "
-      "on the loudest hits. Read the Release check and listen in mono." },
+      "on the loudest hits. Read the Release check and listen in mono. {mixloudness}" },
     { "Clipping and levels", "clipping,clip,clips,distorting,distorted,distortion,red,too hot,peaking,peaks,headroom,gain staging,gain stage,how loud should my tracks,track levels",
       "Red on the meter means the signal went over 0 dB and clipped. Turn the track down at its source or with Output; single tracks should peak around -12 to -6 dB. "
       "Do not lean on the limiter to rescue a mix that is too hot. Balance now on the Mix tab brings the whole mix to about -18 LUFS with peaks under -6 dB, "
@@ -127,11 +128,10 @@ const Note kNotes[] = {
     { "Stereo width and mono", "wide,wider,width,stereo,mono,narrow,spread,panning,pan,phase,correlation,centre,center",
       "Width is on the Tone tab. Stereo width above 100 % pushes the sides out, which suits pads, backing vocals and effects. Keep the lead vocal, kick, bass and 808 in the centre. "
       "Mono bass makes everything below the chosen frequency mono. Watch Correlation: near +1 is safe, and below 0 means parts vanish in mono, so narrow the track. "
-      "Always check a mix in mono, because phones and club systems are close to mono. To answer whether this track is too wide, quote the Stereo correlation number given under THIS TRACK." },
+      "Always check a mix in mono, because phones and club systems are close to mono. {width}" },
     { "Is the mix balanced", "balanced,balance,balancing,levels right,right level,right levels,too loud,loud enough,quiet enough,how loud should the,turn down,turn up,which track",
-      "Whether the mix is balanced has been measured: look under THE WHOLE SESSION for the line that starts with Balance. It names each track that should come up or down, and by how many dB. "
-      "Answer by repeating those moves with the track names, then say that Balance now on the Mix tab makes all of them in one press. "
-      "If that line says the levels are already close, tell the student the mix is balanced." },
+      "{balance} Balance now on the Mix tab moves every track to where it should sit against the lead vocal in one press, "
+      "and Learn and balance listens to the loudest section for 20 seconds first. The lanes on the Mix tab show each move before it is made." },
     { "Matching a reference song", "reference,sound like,sounds like,match,commercial,favourite song,favorite song,industry,like the pros",
       "On the EQ tab, put the plugin on a track that is playing a finished song you like, play it and press Capture. Then on your own mix press Match: "
       "it adds a few broad bands that move your tone towards the reference, and Amount sets how far. Treat it as a guide, remove any band you do not like, "
@@ -277,14 +277,23 @@ juce::StringArray noteTitlesFor (const juce::String& question, int maxMixing, in
     return titles;
 }
 
-juce::String notesFor (const juce::String& question, int maxMixing, int maxControls)
+juce::String notesFor (const juce::String& question, const juce::StringPairArray& facts, int maxMixing, int maxControls)
 {
     std::vector<Pick> mixing, controls;
     choose (question, maxMixing, maxControls, mixing, controls);
     if (mixing.empty() && controls.empty()) return {};
-    juce::String s ("NOTES FOR THIS QUESTION (from this plugin's own guide: build the answer from these)\n");
-    for (auto& p : mixing) s << p.title << ": " << p.text << "\n";
-    for (auto& p : controls) s << "The control called " << p.title << ": " << p.text << "\n";
+    auto fill = [&facts] (juce::String text)
+    {
+        for (auto& key : facts.getAllKeys()) text = text.replace ("{" + key + "}", facts[key]);
+        while (text.containsChar ('{') && text.fromFirstOccurrenceOf ("{", false, false).containsChar ('}'))          // a fact nobody supplied
+            text = text.upToFirstOccurrenceOf ("{", false, false) + text.fromFirstOccurrenceOf ("{", false, false).fromFirstOccurrenceOf ("}", false, false);
+        return text.trim();
+    };
+    juce::String s ("GUIDE NOTES FOR THIS QUESTION\n"
+                    "This is advice written for this plugin, with measurements already worked out. Build the answer from it, in your own words. "
+                    "These notes are not buttons or suggestions inside the plugin, so never tell the student to look for them.\n");
+    for (auto& p : mixing) s << "- " << fill (p.text) << "\n";
+    for (auto& p : controls) s << "- The control called " << p.title << ": " << p.text << "\n";
     return s + "\n";
 }
 }

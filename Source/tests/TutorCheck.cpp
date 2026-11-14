@@ -1,7 +1,8 @@
 // Runs the built-in AI tutor end to end, the way the plugin does: installs it from a release feed, starts the
 // helper program, and asks questions with a real tutor prompt. Used on the Mac build machine so every release
 // proves the tutor works with the real helper and the real model.
-//   MUTutorCheck <feed base url> <track notes file> [questions file]
+//   MUTutorCheck <feed base url> <track notes file> <facts file> [questions file]
+// The track notes and facts files are a snapshot of a real session, written by the session harness.
 // The questions file has one question per line; a line starting with "+ " is a follow-up to the one before.
 // MU_TUTOR_DIR chooses where the tutor is installed; MU_TUTOR_ARGS adds arguments for the helper.
 #include <juce_core/juce_core.h>
@@ -13,13 +14,16 @@
 int main (int argc, char* argv[])
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
-    if (argc < 3) { std::printf ("usage: MUTutorCheck <feed base url> <track notes file> [questions file]\n"); return 2; }
+    if (argc < 4) { std::printf ("usage: MUTutorCheck <feed base url> <track notes file> <facts file> [questions file]\n"); return 2; }
     const juce::String feed (argv[1]);
     const auto cwd = juce::File::getCurrentWorkingDirectory();
     const auto trackNotes = cwd.getChildFile (juce::String (argv[2])).loadFileAsString();
     const juce::File folder (juce::SystemStats::getEnvironmentVariable ("MU_TUTOR_DIR", juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("mu-tutor-check").getFullPathName()));
     juce::StringArray questions;
-    if (argc > 3) questions.addLines (cwd.getChildFile (juce::String (argv[3])).loadFileAsString());
+    juce::StringPairArray facts;
+    for (auto& line : juce::StringArray::fromLines (cwd.getChildFile (juce::String (argv[3])).loadFileAsString()))
+        if (line.containsChar ('=')) facts.set (line.upToFirstOccurrenceOf ("=", false, false), line.fromFirstOccurrenceOf ("=", false, false));
+    if (argc > 4) questions.addLines (cwd.getChildFile (juce::String (argv[4])).loadFileAsString());
     questions.removeEmptyStrings();
     if (questions.isEmpty()) questions = { "Why does my vocal sound muddy and what should I do about it?", "What does the attack knob on the compressor do?" };
     if (trackNotes.length() < 200) { std::printf ("FAIL  track notes file is missing or empty\n"); return 1; }
@@ -53,7 +57,7 @@ int main (int argc, char* argv[])
         if (! followUp) ++conversation;
         const auto lookUp = followUp ? previous + " " + q : q;
         previous = q;
-        const auto prompt = mu::tutor::corePrompt() + mu::tutor::notesFor (lookUp) + trackNotes;
+        const auto prompt = mu::tutor::corePrompt() + mu::tutor::notesFor (lookUp, facts) + trackNotes;
         const auto t1 = juce::Time::getMillisecondCounterHiRes();
         ai.ask (prompt, q, conversation);
         for (int i = 0; i < 9000 && ai.getStatus().answerId == id; ++i) juce::Thread::sleep (100);

@@ -50,6 +50,8 @@ LocalAI::LocalAI() : juce::Thread ("MU tutor"), feedBase (MU_UPDATE_BASE_URL)
     extraArgs = juce::SystemStats::getEnvironmentVariable ("MU_TUTOR_ARGS", {});
     const auto dir = juce::SystemStats::getEnvironmentVariable ("MU_TUTOR_DIR", {});
     if (dir.isNotEmpty()) { testFolder = juce::File (dir); testing = true; }
+    const auto feed = juce::SystemStats::getEnvironmentVariable ("MU_TUTOR_FEED", {});
+    if (feed.isNotEmpty()) { feedBase = feed; testing = true; }
    #if ! JUCE_MAC
     if (! testing) status.setup = Setup::Unsupported;
    #endif
