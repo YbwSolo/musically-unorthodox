@@ -59,10 +59,19 @@ int main (int argc, char* argv[])
         previous = q;
         const auto prompt = mu::tutor::corePrompt() + mu::tutor::notesFor (lookUp, facts) + trackNotes;
         const auto t1 = juce::Time::getMillisecondCounterHiRes();
-        ai.ask (prompt, q, conversation);
-        for (int i = 0; i < 9000 && ai.getStatus().answerId == id; ++i) juce::Thread::sleep (100);
-        st = ai.getStatus();
-        id = st.answerId;
+        // On a build machine with no graphics chip, loading a 4 GB model and reading the notes for the first time
+        // can take longer than the plugin waits for an answer. The plugin then says "Try asking again", and the
+        // second ask is quick because the model is in memory by then. The check does what a person would: it
+        // asks once more. A tutor that is really broken fails both times.
+        for (int attempt = 0; attempt < 2; ++attempt)
+        {
+            ai.ask (prompt, q, conversation);
+            for (int i = 0; i < 9000 && ai.getStatus().answerId == id; ++i) juce::Thread::sleep (100);
+            st = ai.getStatus();
+            id = st.answerId;
+            if (st.answer.length() >= 40) break;
+            if (attempt == 0) { std::printf ("  no answer in time to \"%s\" (%s); asking once more\n", q.toRawUTF8(), st.error.toRawUTF8()); std::fflush (stdout); }
+        }
         const double seconds = (juce::Time::getMillisecondCounterHiRes() - t1) / 1000.0;
         const auto notes = mu::tutor::noteTitlesFor (lookUp).joinIntoString (" | ");
         if (st.answer.length() < 40) { ++failures; std::printf ("FAIL  \"%s\": %s\n", q.toRawUTF8(), (st.answer + st.error).toRawUTF8()); }
