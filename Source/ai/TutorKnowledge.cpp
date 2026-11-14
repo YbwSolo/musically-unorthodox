@@ -46,12 +46,11 @@ juce::String corePrompt()
         "or open the EQ tab, press Analyse and press Apply on that suggestion. Either one makes a small cut on the covering track only in the range where "
         "the two clash, so the vocal comes through without the beat getting quieter overall.\n"
         "When a Mix Brain suggestion under THIS TRACK fits the question, point to it: tell the student to open the EQ tab, press Analyse and press Apply on that suggestion.\n\n"
-        "EXAMPLES OF GOOD ANSWERS\n"
+        "EXAMPLE OF A GOOD ANSWER\n"
         "Question: What does attack do? Answer: The compressor starts turning the sound down the moment it goes over the threshold. "
         "Attack sets how quickly it gets to the full turn-down. A fast attack clamps the start of every hit, and a slow attack lets the punch through first. "
-        "Open the Dynamics tab to try it.\n"
-        "Question: My guitar sounds boxy. Answer: Boxy means too much between 400 and 800 Hz. Open the EQ tab, add a bell band in that range and pull it down a few dB "
-        "until it clears up. Pressing Analyse there will also list anything Mix Brain can hear.\n\n";
+        "Open the Dynamics tab to try it. "
+        "Never reuse the wording of this example for a different question.\n\n";
 }
 
 namespace
@@ -61,7 +60,7 @@ struct Note { const char* title; const char* keys; const char* text; };
 // Mixing notes written for this plugin. Keys are the words a student might use, comma separated; a key of two
 // or more words must appear as a phrase. Keep every note consistent with the lessons and the help text.
 const Note kNotes[] = {
-    { "Vocal gets lost in the beat", "buried,drown,drowning,lost,sit,sits,on top,cut through,cant hear,hear my vocal,vocal quiet,vocal too quiet,too quiet,vocal louder,louder vocal,behind the beat,beat too loud,louder than the vocal",
+    { "Vocal gets lost in the beat", "buried,drown,drowning,lost,sit,sits,on top,cut through,cant hear,hear my vocal,vocal quiet,vocal too quiet,vocal louder,louder vocal,behind the beat,beat too loud,louder than the vocal",
       "A vocal that gets lost needs three things, in this order. Level: on the Mix tab, Balance now sets every track against the lead vocal. "
       "Space: press Fix on any collision on the Mix tab, or switch on Vocal space on the Tone tab of the beat so it dips only while the vocal sings. "
       "Evenness: on the vocal, use the compressor on the Dynamics tab with 3 to 6 dB of reduction so quiet words stay audible. Do not just boost the vocal." },
@@ -128,7 +127,11 @@ const Note kNotes[] = {
     { "Stereo width and mono", "wide,wider,width,stereo,mono,narrow,spread,panning,pan,phase,correlation,centre,center",
       "Width is on the Tone tab. Stereo width above 100 % pushes the sides out, which suits pads, backing vocals and effects. Keep the lead vocal, kick, bass and 808 in the centre. "
       "Mono bass makes everything below the chosen frequency mono. Watch Correlation: near +1 is safe, and below 0 means parts vanish in mono, so narrow the track. "
-      "Always check a mix in mono, because phones and club systems are close to mono." },
+      "Always check a mix in mono, because phones and club systems are close to mono. To answer whether this track is too wide, quote the Stereo correlation number given under THIS TRACK." },
+    { "Is the mix balanced", "balanced,balance,balancing,levels right,right level,right levels,too loud,loud enough,quiet enough,how loud should the,turn down,turn up,which track",
+      "Whether the mix is balanced has been measured: look under THE WHOLE SESSION for the line that starts with Balance. It names each track that should come up or down, and by how many dB. "
+      "Answer by repeating those moves with the track names, then say that Balance now on the Mix tab makes all of them in one press. "
+      "If that line says the levels are already close, tell the student the mix is balanced." },
     { "Matching a reference song", "reference,sound like,sounds like,match,commercial,favourite song,favorite song,industry,like the pros",
       "On the EQ tab, put the plugin on a track that is playing a finished song you like, play it and press Capture. Then on your own mix press Match: "
       "it adds a few broad bands that move your tone towards the reference, and Amount sets how far. Treat it as a guide, remove any band you do not like, "
@@ -160,7 +163,7 @@ const Note kNotes[] = {
       "A low cut removes everything below its frequency. On the EQ tab use one on anything that is not the bass, kick or 808: about 80 to 100 Hz on a lead vocal, "
       "120 to 200 Hz on backing vocals and bright instruments. It clears rumble and frees headroom. Slope sets how steep it is; 12 or 24 dB per octave is usual. "
       "Set it too high and the track goes thin." },
-    { "Level rider or compressor", "rider,ride,riding,uneven,inconsistent,some words,quiet words,loud words,volume jumps,automation,automate",
+    { "Level rider or compressor", "rider,ride,riding,uneven,inconsistent,some words,in some words,quiet in some,too loud in,quiet words,loud words,every word,volume jumps,automation,automate",
       "The Level rider on the Tone tab moves the volume slowly, like a hand on a fader: quiet lines come up and loud lines come down. "
       "It evens out a performance without the squashed sound. Use it for differences from one phrase to the next, and the compressor on the Dynamics tab for peaks from one word to the next. "
       "With the rider doing the slow work, the compressor needs less reduction." },
@@ -241,14 +244,15 @@ void choose (const juce::String& rawQuestion, int maxMixing, int maxControls, st
         if (const int s = scoreKeys (question, words, n.keys); s >= 2) mixing.push_back ({ s, n.title, n.text });
 
     // the plugin's own help: one entry per control, matched on the words of its name
-    static const juce::StringArray tooCommon { "band", "amount", "mode", "range", "speed", "display", "listen", "show", "hear", "what", "auto", "level", "track", "tracks" };
+    static const juce::StringArray tooCommon { "band", "amount", "mode", "range", "speed", "display", "listen", "show", "hear", "what", "auto", "level", "track", "tracks",
+                                               "vocal", "space", "learn", "change", "with", "frequency", "input", "output", "check", "take", "part", "side", "removed" };
     for (auto& [key, entry] : helpTable())
     {
         if (key == "eq.ask" || key.startsWith ("header.update") || key == "bypass") continue;
         juce::StringArray titleWords;
         titleWords.addTokens (normalise (entry.title).replaceCharacter ('/', ' '), " ()", "");
         juce::String keys;
-        for (auto& w : titleWords) if (w.length() >= 3 && ! tooCommon.contains (w)) keys << w << ",";
+        for (auto& w : titleWords) if ((w.length() >= 4 || w == "eq" || w == "q") && ! tooCommon.contains (w)) keys << w << ",";
         if (titleWords.size() > 1) keys << normalise (entry.title).trim();              // the whole name as a phrase
         if (const int s = scoreKeys (question, words, keys); s >= 2)
             controls.push_back ({ s, entry.title + " (" + tabFor (key) + ")", entry.body });

@@ -1,17 +1,26 @@
 #pragma once
 #include <juce_core/juce_core.h>
-#include <juce_events/juce_events.h>
 #include <utility>
 #include <vector>
+#include <juce_events/juce_events.h>
 #include "../state/LocalSettings.h"
 
 namespace mu
 {
 // What the release feed says about the built-in tutor: a small helper program and the language model it runs.
+struct TutorModel
+{
+    juce::String id, name, url, sha256;                 // id is "light" or "smart"
+    juce::int64 bytes = 0;
+    int minMemoryGb = 0;                                // how much memory the computer needs for this one
+    bool appleSilicon = false;                          // true: only offered on Apple-silicon Macs
+};
+
 struct TutorPack
 {
     juce::String version, file, sha256;                 // helper: a zip published next to latest.json
-    juce::String modelName, modelUrl, modelSha256;      // model: one large file, fetched once
+    std::vector<TutorModel> models;                     // lightest first
+    juce::String modelName, modelUrl, modelSha256;      // the model chosen for this computer: one large file
     juce::int64 modelBytes = 0;
 };
 
@@ -33,6 +42,12 @@ public:
         Setup setup = Setup::NotInstalled;
         float progress = 0.0f;
         juce::String setupMessage;
+        bool upgradeAvailable = false;      // the feed offers a different model or a newer helper than the one installed
+        juce::String upgradeName;
+        juce::int64 upgradeBytes = 0;
+        juce::String offerName;             // the model this computer would download, once the feed has been read
+        juce::int64 offerBytes = 0;
+        juce::String otherId, otherName;    // the other model on offer, if there is one ("light" or "smart")
     };
 
     LocalAI();
@@ -45,6 +60,7 @@ public:
     void installBuiltIn();                                                 // download the helper and the model
     void cancelInstall();
     void removeBuiltIn();
+    void preferModel (const juce::String& id);                             // "light", "smart", or empty for automatic
     Status getStatus() const;
 
     // Pure helpers, covered by the tests.
@@ -54,6 +70,8 @@ public:
     static juce::String buildChatRequest (const juce::String& systemPrompt, const juce::String& question, const Earlier& earlier = {});
     static juce::String parseAnswer (const juce::String& json);
     static bool parseTutorFeed (const juce::String& json, TutorPack& out, bool anyModelHost = false);
+    // Which model suits a computer: the preferred one if it is on offer, otherwise the smartest one it can run.
+    static int pickModel (const std::vector<TutorModel>& models, const juce::String& preferredId, bool appleSilicon, int memoryGb);
     static juce::String sha256Of (const juce::File& f);
 
     // Test hooks.
@@ -74,7 +92,10 @@ private:
     void stopServer();
     juce::StringArray candidateFolders() const;
     juce::File installFolder() const;
-    bool findInstalled (juce::File& helper, juce::File& model, juce::String& modelName) const;
+    struct Installed { juce::File helper, model; juce::String modelName, version; };
+    bool findInstalled (Installed& out) const;
+    void readOffer (const Installed* have);
+    void choose (TutorPack& pack) const;
 
     mutable juce::CriticalSection lock;
     Status status;
@@ -89,7 +110,7 @@ private:
     juce::File helperPath, modelPath;
     Earlier history;
     int historyOwner = 0;
-    juce::int64 historyTime = 0;
+    juce::int64 historyTime = 0, lastUpgradeCheck = 0;
     juce::SharedResourcePointer<LocalSettings> settings;
 };
 }

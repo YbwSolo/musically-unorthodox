@@ -22,7 +22,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> roleAtt;
     Segmented sizeSwitch { juce::StringArray { "Compact", "Standard", "Large" } };
     ParamToggle takePart;
-    juce::TextButton closeButton, resetButton, checkButton, installButton, aiButton;
+    juce::TextButton closeButton, resetButton, checkButton, installButton, aiButton, aiRemove;
     juce::OwnedArray<juce::Slider> offsetSliders;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> offsetAtts;
     std::vector<std::pair<juce::String, juce::Rectangle<int>>> labels;

@@ -13,6 +13,7 @@ const std::map<juce::String, HelpEntry>& helpTable()
         { "header.settings",{ "Settings", "Track role, window size, and how this track takes part in the session balance." } },
         { "header.update",  { "Update", "A newer version of the plugin is ready. Open Settings to install it; it takes a few seconds and loads the next time you open your music software." } },
         { "eq.ask",         { "Ask the AI tutor", "Type a question about this track in your own words. The answer comes from an AI model running on this computer, and it is given this track's measurements to work from. Treat it as a second opinion and trust your ears." } },
+        { "ai.model",       { "Tutor model", "The lighter model is a 2 GB download and runs on any Mac. The smarter model is 3 GB, gives fuller answers that use more of what the plugin has measured, and wants an Apple-silicon Mac with 16 GB of memory. The plugin picks the one that suits this Mac; this button switches." } },
         { "role",           { "Track role", "Tells the plugin what this track is, so it knows how loud it should sit and what a healthy tone looks like. Auto guesses from the sound. Put one instance on the Stereo Out and set it to Master." } },
 
         // ---- meters

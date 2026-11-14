@@ -169,7 +169,7 @@ juce::File LocalAI::installFolder() const
     return {};
 }
 
-bool LocalAI::findInstalled (juce::File& helper, juce::File& model, juce::String& modelName) const
+bool LocalAI::findInstalled (Installed& out) const
 {
     for (auto& path : candidateFolders())
     {
@@ -179,10 +179,36 @@ bool LocalAI::findInstalled (juce::File& helper, juce::File& model, juce::String
         const auto h = folder.getChildFile ("helper").getChildFile (archFolder()).getChildFile ("llama-server");
         const auto m = folder.getChildFile (manifest.getProperty ("model", "").toString());
         if (! h.existsAsFile() || ! m.existsAsFile() || m.getSize() != (juce::int64) manifest.getProperty ("modelBytes", 0)) continue;
-        helper = h; model = m; modelName = manifest.getProperty ("modelName", "built-in model").toString();
+        out.helper = h; out.model = m;
+        out.modelName = manifest.getProperty ("modelName", "built-in model").toString();
+        out.version = manifest.getProperty ("version", "").toString();
         return true;
     }
     return false;
+}
+
+// Once in a while, read the release feed: which model this computer would get, whether there is another to
+// choose, and whether what is installed (if anything) is different from what is on offer now.
+void LocalAI::readOffer (const Installed* have)
+{
+    const auto now = juce::Time::currentTimeMillis();
+    if (lastUpgradeCheck != 0 && now - lastUpgradeCheck < (juce::int64) 6 * 3600 * 1000) return;
+    lastUpgradeCheck = now;
+    juce::String feed;
+    httpStatus (feedBase + "/latest.json", 8000, &feed);
+    TutorPack pack;
+    if (! parseTutorFeed (feed, pack, testing)) return;
+    choose (pack);
+    const bool newModel = have != nullptr && have->model.getFileName() != "model-" + pack.modelSha256.substring (0, 12) + ".gguf";
+    const bool newHelper = have != nullptr && have->version != pack.version;
+    const juce::ScopedLock sl (lock);
+    status.upgradeAvailable = newModel || newHelper;
+    status.upgradeName = pack.modelName;
+    status.upgradeBytes = newModel ? pack.modelBytes : 0;
+    status.offerName = pack.modelName; status.offerBytes = pack.modelBytes;
+    status.otherId.clear(); status.otherName.clear();
+    for (auto& m : pack.models)
+        if (m.sha256 != pack.modelSha256) { status.otherId = m.id; status.otherName = m.name; }
 }
 
 //==================================================================== feed
@@ -190,19 +216,58 @@ bool LocalAI::parseTutorFeed (const juce::String& json, TutorPack& out, bool any
 {
     const auto t = juce::JSON::parse (json).getProperty ("tutor", juce::var());
     if (! t.isObject()) return false;
-    const auto m = t.getProperty ("model", juce::var());
     out.version = t.getProperty ("version", "").toString();
     out.file = t.getProperty ("file", "").toString();
     out.sha256 = t.getProperty ("sha256", "").toString().toLowerCase();
-    out.modelName = m.getProperty ("name", "").toString();
-    out.modelUrl = m.getProperty ("url", "").toString();
-    out.modelSha256 = m.getProperty ("sha256", "").toString().toLowerCase();
-    out.modelBytes = (juce::int64) m.getProperty ("bytes", 0);
-    // the helper is joined onto our own release address, so it must be a plain file name; the model may only
-    // come from the one model host we expect
+    out.models.clear();
+    auto read = [&] (const juce::var& m)
+    {
+        TutorModel model;
+        model.id = m.getProperty ("id", "light").toString();
+        model.name = m.getProperty ("name", "").toString();
+        model.url = m.getProperty ("url", "").toString();
+        model.sha256 = m.getProperty ("sha256", "").toString().toLowerCase();
+        model.bytes = (juce::int64) m.getProperty ("bytes", 0);
+        model.minMemoryGb = (int) m.getProperty ("minMemoryGb", 0);
+        model.appleSilicon = (bool) m.getProperty ("appleSilicon", false);
+        // a model may only come from the one model host we expect
+        if ((anyModelHost || model.url.startsWith ("https://huggingface.co/")) && model.sha256.length() == 64 && model.bytes > 0) out.models.push_back (model);
+    };
+    const auto list = t.getProperty ("models", juce::var());
+    if (auto* models = list.getArray()) for (auto& m : *models) read (m);
+    if (out.models.empty()) read (t.getProperty ("model", juce::var()));          // older feeds name a single model
+    if (out.models.empty()) return false;
+    const auto& first = out.models.front();
+    out.modelName = first.name; out.modelUrl = first.url; out.modelSha256 = first.sha256; out.modelBytes = first.bytes;
+    // the helper is joined onto our own release address, so it must be a plain file name
     const bool safeFile = out.file.isNotEmpty() && out.file.containsOnly (kPlainName) && ! out.file.startsWith (".");
-    const bool safeModel = anyModelHost || out.modelUrl.startsWith ("https://huggingface.co/");
-    return safeFile && safeModel && out.version.isNotEmpty() && out.sha256.length() == 64 && out.modelSha256.length() == 64 && out.modelBytes > 0;
+    return safeFile && out.version.isNotEmpty() && out.sha256.length() == 64;
+}
+
+int LocalAI::pickModel (const std::vector<TutorModel>& models, const juce::String& preferredId, bool appleSilicon, int memoryGb)
+{
+    if (preferredId.isNotEmpty())
+        for (size_t i = 0; i < models.size(); ++i) if (models[i].id == preferredId) return (int) i;
+    int best = 0;
+    for (size_t i = 0; i < models.size(); ++i)
+        if (memoryGb >= models[i].minMemoryGb && (appleSilicon || ! models[i].appleSilicon)) best = (int) i;       // listed lightest first
+    return best;
+}
+
+void LocalAI::choose (TutorPack& pack) const
+{
+    auto preferred = juce::SystemStats::getEnvironmentVariable ("MU_TUTOR_MODEL", {});
+    if (preferred.isEmpty()) preferred = settings->get ("tutorModel");
+    const int memoryGb = juce::roundToInt ((double) juce::SystemStats::getMemorySizeInMegabytes() / 1024.0);
+    const auto& m = pack.models[(size_t) pickModel (pack.models, preferred, archFolder() == "arm64", memoryGb)];
+    pack.modelName = m.name; pack.modelUrl = m.url; pack.modelSha256 = m.sha256; pack.modelBytes = m.bytes;
+}
+
+void LocalAI::preferModel (const juce::String& id)
+{
+    settings->set ("tutorModel", id);
+    lastUpgradeCheck = 0;
+    refresh();
 }
 
 juce::String LocalAI::sha256Of (const juce::File& f)
@@ -283,6 +348,7 @@ void LocalAI::doInstall()
     if (! parseTutorFeed (feed, pack, testing))
     { fail (feed.isEmpty() ? "Could not reach the download server. Check the internet connection and try again."
                            : "The AI tutor is not ready to download yet. Update the plugin first, then try again."); return; }
+    choose (pack);
 
     const auto folder = installFolder();
     if (folder == juce::File()) { fail ("There is nowhere on this computer the tutor can be saved."); return; }
@@ -331,6 +397,11 @@ void LocalAI::doInstall()
     manifest->setProperty ("modelName", pack.modelName);
     manifest->setProperty ("modelBytes", pack.modelBytes);
     folder.getChildFile ("tutor.json").replaceWithText (juce::JSON::toString (juce::var (manifest)));
+    {
+        const juce::ScopedLock sl (lock);
+        status.upgradeAvailable = false;
+    }
+    lastUpgradeCheck = juce::Time::currentTimeMillis();
     detect();
 }
 
@@ -450,9 +521,11 @@ juce::String LocalAI::parseAnswer (const juce::String& json)
 
 void LocalAI::detect()
 {
-    juce::File helper, model;
-    juce::String builtInName;
-    const bool builtIn = findInstalled (helper, model, builtInName);
+    Installed have;
+    const bool builtIn = findInstalled (have);
+    readOffer (builtIn ? &have : nullptr);
+    const auto helper = have.helper, model = have.model;
+    const auto builtInName = have.modelName;
 
     juce::String ollamaModel;
     bool ollamaEmpty = false;
@@ -475,6 +548,7 @@ void LocalAI::detect()
     status.builtIn = builtIn;
     status.available = builtIn || ollamaModel.isNotEmpty();
     status.model = builtIn ? builtInName : ollamaModel;
+    if (! builtIn) status.upgradeAvailable = false;
     if (builtIn) { status.setup = Setup::Ready; status.setupMessage.clear(); status.progress = 1.0f; }
     else if (status.setup == Setup::Ready || status.setup == Setup::Downloading) { status.setup = Setup::NotInstalled; status.setupMessage.clear(); }
     if (! status.available) status.error = ollamaEmpty ? "" : "Ollama is running but no chat model is installed.";

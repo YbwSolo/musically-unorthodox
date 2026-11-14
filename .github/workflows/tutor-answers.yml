@@ -22,9 +22,6 @@ jobs:
           - id: qwen35
             name: "Qwen3.5 4B"
             url: https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF/resolve/main/Qwen_Qwen3.5-4B-Q4_K_M.gguf
-          - id: phi4mini
-            name: "Phi-4 mini"
-            url: https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf
     steps:
       - uses: actions/checkout@v4
 
@@ -69,4 +66,4 @@ jobs:
           MU_TUTOR_ARGS: "--device none"
         run: |
           BIN="$(find build -type f -name MUTutorCheck -perm +111 | head -1)"
-          "$BIN" "file://$PWD/feed" Source/tests/sample_track_notes.txt Source/tests/tutor_questions.txt
+          "$BIN" "file://$PWD/feed" Source/tests/sample_track_notes.txt Source/tests/tutor_questions_recheck.txt

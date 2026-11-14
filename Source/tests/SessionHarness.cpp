@@ -455,6 +455,14 @@ int main()
                    && ! LocalAI::parseTutorFeed (feedText ("tutor.zip", "https://elsewhere.example/m.gguf"), tp)
                    && ! LocalAI::parseTutorFeed ("{ \"build\": 7 }", tp), "Tutor feed rejects paths, other model hosts and feeds without a tutor");
             check (LocalAI::parseAnswer ("{\"choices\":[{\"message\":{\"content\":\"### Tip\\n* Cut 300 Hz\"}}]}") == "Tip\n- Cut 300 Hz", "Built-in tutor answers are read and cleaned");
+            const juce::String two = "{ \"tutor\": { \"version\": \"t1\", \"file\": \"tutor.zip\", \"sha256\": \"" + sha + "\", \"models\": ["
+                "{ \"id\": \"light\", \"name\": \"Light\", \"url\": \"https://huggingface.co/a/l.gguf\", \"sha256\": \"" + sha + "\", \"bytes\": 2000 },"
+                "{ \"id\": \"smart\", \"name\": \"Smart\", \"url\": \"https://huggingface.co/a/s.gguf\", \"sha256\": \"" + juce::String::repeatedString ("ef", 32) + "\", \"bytes\": 3000, \"minMemoryGb\": 16, \"appleSilicon\": true } ] } }";
+            TutorPack both;
+            check (LocalAI::parseTutorFeed (two, both) && both.models.size() == 2 && both.modelName == "Light", "Tutor feed can offer a lighter and a smarter model");
+            check (LocalAI::pickModel (both.models, {}, true, 16) == 1 && LocalAI::pickModel (both.models, {}, true, 8) == 0 && LocalAI::pickModel (both.models, {}, false, 32) == 0
+                   && LocalAI::pickModel (both.models, "smart", false, 8) == 1 && LocalAI::pickModel (both.models, "light", true, 64) == 0,
+                   "The smarter model goes to Macs that can run it, and a chosen model is respected");
         }
         const juce::File helperScript (juce::SystemStats::getEnvironmentVariable ("MU_TEST_TUTOR_HELPER", {}));
         if (helperScript.existsAsFile())
@@ -526,6 +534,26 @@ int main()
                     second.refresh();
                     juce::Thread::sleep (400);
                     check (second.getStatus().available && second.getStatus().builtIn, "Other instances find the installed tutor");
+                }
+                {
+                    // the feed now names a different model: the installed tutor offers the upgrade and takes it
+                    juce::FileOutputStream out (model);
+                    out.writeText ("a newer model", false, false, nullptr);
+                }
+                writeFeed (LocalAI::sha256Of (model));
+                {
+                    LocalAI later;
+                    later.setAddressForTesting ("http://127.0.0.1:9");
+                    later.configureForTesting (feedUrl, home);
+                    later.refresh();
+                    juce::Thread::sleep (500);
+                    auto up = later.getStatus();
+                    check (up.available && up.upgradeAvailable && up.upgradeBytes == model.getSize(), "An installed tutor notices a newer model in the feed");
+                    later.installBuiltIn();
+                    up = settle (later);
+                    int models = 0;
+                    for (const auto& e : juce::RangedDirectoryIterator (home, false, "model-*", juce::File::findFiles)) { ++models; juce::ignoreUnused (e); }
+                    check (up.setup == LocalAI::Setup::Ready && ! up.upgradeAvailable && models == 1, "Upgrading swaps the model and removes the old one", up.setupMessage);
                 }
                 ai.removeBuiltIn();
                 juce::Thread::sleep (600);

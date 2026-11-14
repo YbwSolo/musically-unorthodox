@@ -38,21 +38,31 @@ jobs:
         run: bash scripts/make_installer.sh build/MusicallyUnorthodox_artefacts/Release "${GITHUB_RUN_NUMBER}"
 
       # Proves the tutor on a real Mac before anything is published: installs it from the feed just written,
-      # starts the helper and asks two questions with the real model. The model is kept between builds.
-      - name: Keep the tutor model between builds
+      # starts the helper and asks questions with both real models. The models are kept between builds.
+      - name: Keep the tutor models between builds
         uses: actions/cache@v4
         with:
           path: tutor-check
-          key: tutor-model-6c1a2b411610
+          key: tutor-models-${{ hashFiles('scripts/make_installer.sh', 'scripts/make_tutor_pack.sh') }}
+          restore-keys: tutor-models-
 
-      - name: AI tutor check (real helper, real model)
+      - name: AI tutor check (lighter model)
         env:
-          MU_TUTOR_DIR: ${{ github.workspace }}/tutor-check
+          MU_TUTOR_DIR: ${{ github.workspace }}/tutor-check/light
+          MU_TUTOR_MODEL: light
           MU_TUTOR_ARGS: "--device none"
         run: |
           BIN="$(find build -type f -name MUTutorCheck -perm +111 | head -1)"
-          echo "Using $BIN"
           "$BIN" "file://$PWD/dist" Source/tests/sample_track_notes.txt
+
+      - name: AI tutor check (smarter model)
+        env:
+          MU_TUTOR_DIR: ${{ github.workspace }}/tutor-check/smart
+          MU_TUTOR_MODEL: smart
+          MU_TUTOR_ARGS: "--device none"
+        run: |
+          BIN="$(find build -type f -name MUTutorCheck -perm +111 | head -1)"
+          "$BIN" "file://$PWD/dist" Source/tests/sample_track_notes.txt Source/tests/tutor_question_one.txt
 
       - name: Upload installer
         uses: actions/upload-artifact@v4

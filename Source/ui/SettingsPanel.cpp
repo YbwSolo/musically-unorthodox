@@ -33,12 +33,21 @@ SettingsPanel::SettingsPanel (MUProcessor& p) : proc (p), takePart (p, ids::auto
         switch (ai.getStatus().setup)
         {
             case LocalAI::Setup::Downloading: ai.cancelInstall(); break;
-            case LocalAI::Setup::Ready:       ai.removeBuiltIn(); break;
+            case LocalAI::Setup::Ready:       if (ai.getStatus().upgradeAvailable) ai.installBuiltIn(); else ai.removeBuiltIn(); break;
             case LocalAI::Setup::Unsupported: ai.refresh(); break;
             default:                          ai.installBuiltIn(); break;
         }
     };
+    styleButton (aiRemove, "Remove", false, "ai.model");
+    aiRemove.onClick = [this]
+    {
+        auto& ai = proc.getAI();
+        const auto st = ai.getStatus();
+        if (st.setup == LocalAI::Setup::Ready && st.upgradeAvailable) ai.removeBuiltIn();
+        else if (st.otherId.isNotEmpty()) ai.preferModel (st.otherId);
+    };
     for (auto* c : std::initializer_list<juce::Component*> { &roleBox, &sizeSwitch, &takePart, &closeButton, &resetButton, &checkButton, &installButton, &aiButton }) addAndMakeVisible (c);
+    addChildComponent (aiRemove);
 
     for (int r = (int) Role::Vocal + 1; r < (int) Role::Master; ++r)
     {
@@ -72,6 +81,13 @@ void SettingsPanel::refresh()
     juce::String aiNow, aiLabel;
     const bool aiBusy = ai.setup == Setup::Downloading;
     if (aiBusy)                          { aiNow = ai.setupMessage + "\nYou can keep working while it downloads."; aiLabel = "Stop"; }
+    else if (ai.setup == Setup::Ready && ai.upgradeAvailable)
+    {
+        aiNow = "On (" + ai.model + "). "
+              + (ai.upgradeBytes > 0 ? "Ready to download: " + ai.upgradeName + ", about " + juce::String ((double) ai.upgradeBytes / 1.0e9, 1) + " GB. " : juce::String ("A small update for the tutor is ready. "))
+              + "The one you have keeps working until the new one is in place.";
+        aiLabel = ai.upgradeBytes > 0 ? "Download it" : "Update tutor";
+    }
     else if (ai.setup == Setup::Ready)   { aiNow = "On. Ask it questions from the Mix Brain panel on the EQ tab. It runs on this computer (" + ai.model + "), so it works without the internet and nothing you ask leaves the room."; aiLabel = "Remove"; }
     else if (ai.setup == Setup::Unsupported)
     {
@@ -81,11 +97,18 @@ void SettingsPanel::refresh()
     else
     {
         aiNow = ai.setup == Setup::Failed ? ai.setupMessage
-              : juce::String ("Off. One press downloads it (about 2 GB, once). After that it runs on this computer: free, no account, no internet needed, and nothing you ask leaves the room.");
+              : "Off. One press downloads it (" + (ai.offerBytes > 0 ? ai.offerName + ", about " + juce::String ((double) ai.offerBytes / 1.0e9, 1) + " GB" : juce::String ("2 to 3 GB"))
+                + ", once). After that it runs on this computer: free, no account, no internet needed, and nothing you ask leaves the room.";
         if (ai.available && ai.setup != Setup::Failed) aiNow = "On, through Ollama (" + ai.model + "). The built-in tutor does the same job without Ollama.";
         aiLabel = ai.setup == Setup::Failed ? "Try again" : "Turn on AI tutor";
     }
     if (aiButton.getButtonText() != aiLabel) aiButton.setButtonText (aiLabel);
+    // second button: Remove while an upgrade is on offer, otherwise the choice between the lighter and the smarter model
+    const bool upgrading = ai.setup == Setup::Ready && ai.upgradeAvailable;
+    const bool canSwitch = ! aiBusy && ai.otherId.isNotEmpty() && (ai.setup == Setup::Ready || ai.setup == Setup::NotInstalled || ai.setup == Setup::Failed);
+    const juce::String second = upgrading ? "Remove" : (ai.otherId == "smart" ? "Use smarter model" : "Use lighter model");
+    if (aiRemove.getButtonText() != second) aiRemove.setButtonText (second);
+    aiRemove.setVisible (upgrading || canSwitch);
     const float aiP = aiBusy ? ai.progress : 0.0f;
 
     if (d != detected || line != updateLine || prog != showProgress || std::abs (st.progress - progress) > 0.004f || n != notes || aiNow != aiLine
@@ -195,6 +218,9 @@ void SettingsPanel::resized()
     labels.push_back ({ "#AI tutor", crow (18) });
     aiText = crow (68);
     aiBar = crow (4);
-    aiButton.setBounds (crow (28).removeFromLeft (150));
+    auto aiRow = crow (28);
+    aiButton.setBounds (aiRow.removeFromLeft (150));
+    aiRow.removeFromLeft (8);
+    aiRemove.setBounds (aiRow.removeFromLeft (150));
 }
 }
