@@ -164,13 +164,20 @@ std::vector<MaskingClash> findMasking (const std::vector<TrackInfo>& tracks, con
 
             // Look for bands where the lower-priority track is near its own peak AND louder than the
             // priority track in absolute terms inside the priority track's important region.
+            // Where the priority track needs to be heard. A voice is understood between about 250 Hz and 6 kHz;
+            // whatever a raw vocal has under that is rumble and plosives, and nothing should be cut out of a beat
+            // to make room for those.
+            const bool voice = hi->role == Role::Vocal || hi->role == Role::BackingVocal;
+            const float needLo = voice ? 250.0f : 60.0f, needHi = voice ? 6000.0f : 12000.0f;
             int bestBand = -1; float bestScore = 0.0f;
             for (int i = 2; i < kAnalysisBands - 2; ++i)
             {
+                if (centres[(size_t) i] < needLo || centres[(size_t) i] > needHi) continue;
                 const float hiRel = hi->bandsDb[(size_t) i] - hiMax;     // <= 0
                 const float loRel = lo->bandsDb[(size_t) i] - loMax;
                 if (hiRel < -18.0f) continue;                              // not important to the priority track
-                const float absDiff = (lo->bandsDb[(size_t) i] + lo->levelLufs) - (hi->bandsDb[(size_t) i] + hi->levelLufs);
+                // (the band levels are measured after each track's fader, so they are compared as they are)
+                const float absDiff = lo->bandsDb[(size_t) i] - hi->bandsDb[(size_t) i];
                 const float score = absDiff + loRel * 0.5f + 6.0f;       // > 0 means the lower track is sitting on top
                 if (score > bestScore) { bestScore = score; bestBand = i; }
             }

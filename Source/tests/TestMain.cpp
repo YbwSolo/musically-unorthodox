@@ -280,6 +280,15 @@ int main()
             check (clashes[0].freqHz > 1200.0f && clashes[0].freqHz < 4000.0f, "Clash in presence region", juce::String (clashes[0].freqHz, 0));
             check (clashes[0].suggestedCutDb < 0.0f && clashes[0].suggestedCutDb >= -4.0f, "Cut is modest", juce::String (clashes[0].suggestedCutDb, 1));
         }
+        // A voice has nothing to defend under 250 Hz. On real sessions the old rule asked for cuts in the beat at
+        // 50 and 130 Hz "to uncover the vocal", which only took the weight out of the beat.
+        for (int b = 0; b < kAnalysisBands; ++b)
+        {
+            const float hz = centres[(size_t) b];
+            voc.bandsDb[(size_t) b] = (hz > 40.0f && hz < 180.0f) ? -20.0f : -45.0f;
+            beat.bandsDb[(size_t) b] = (hz > 40.0f && hz < 180.0f) ? -14.0f : -45.0f;
+        }
+        check (findMasking ({ voc, beat }, centres).empty(), "Bass in the beat is not treated as covering the voice");
     }
 
 
@@ -647,6 +656,30 @@ int main()
         const auto centres = analysisBandCentres();
         auto target = roleTargetCurve (Role::Vocal);
         check (analyseTone (target, Role::Vocal).empty(), "A vocal with a normal tonal balance gets no suggestions");
+
+        // A raw recording is not a finished vocal with a small problem. Shay's five sessions were 6 to 17 dB short
+        // of a finished voice somewhere between 2 and 8 kHz, so the lift is sized to the gap, inside a ceiling.
+        {
+            auto dull = target;
+            for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 1800.0f) dull[(size_t) b] -= 11.0f;
+            float presence = 0.0f, air = 0.0f;
+            for (auto& x : analyseTone (dull, Role::Vocal))
+                if (x.kind == Suggestion::Kind::EqBand && ! x.band.dynamic)
+                {
+                    if (x.band.type == EQType::Bell && x.band.freqHz > 2000.0f && x.band.freqHz < 4000.0f) presence = x.band.gainDb;
+                    if (x.band.type == EQType::HighShelf) air = x.band.gainDb;
+                }
+            check (presence >= 5.0f && presence <= 7.0f && air >= 4.0f && air <= 8.0f, "A recording 11 dB dull from 2 kHz up gets a presence and air lift sized to the gap, inside its ceiling",
+                   "presence +" + juce::String (presence, 1) + " dB, air +" + juce::String (air, 1) + " dB");
+            // The voice is judged against its own body (250 Hz to 1 kHz). Boom underneath the voice is a low-end
+            // problem; it must not make the rest of the voice read as thin or dull.
+            auto boomy = target;
+            for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] < 160.0f) boomy[(size_t) b] += 12.0f;
+            bool lifted = false;
+            for (auto& x : analyseTone (boomy, Role::Vocal))
+                if (x.kind == Suggestion::Kind::EqBand && ! x.band.dynamic && x.band.gainDb > 0.0f && x.band.freqHz > 1000.0f) lifted = true;
+            check (! lifted, "Boom under a voice does not make the analysis brighten the voice");
+        }
 
         auto muddy = target;
         for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 180.0f && centres[(size_t) b] < 420.0f) muddy[(size_t) b] += 8.0f;
@@ -1493,35 +1526,93 @@ int main()
         check (std::abs (leftAlone - (57.0f - 0.08f)) < 0.02f && std::abs (stillFixed - 57.0f) < 0.04f, "Flex leaves a note that is 8 cents out as it was sung and still corrects one that is 35 cents out",
                juce::String ((leftAlone - 57.0f) * 100.0f, 1) + " cents and " + juce::String ((stillFixed - 57.0f) * 100.0f, 1) + " cents from the note");
 
-        // Keep slides: a slow slide from A3 up to B3 and back, natural speed. With keep slides the voice is left
-        // nearer to what was sung while it is moving, and a held note is still tuned.
+        // Gentle tuning, note to note: a note sung 40 cents flat, then a note sung in tune, over and over. The
+        // correction the flat note needed must not be carried on to the note that needed none.
+        {
+            Tuner t; t.prepare (fs, 256, 1);
+            TunerSettings ts; ts.enabled = true; ts.key = 9; ts.scale = 1; ts.speedMs = 80.0f; ts.keepVibrato = 0.0f; ts.hold = 0.3f;
+            t.setSettings (ts);
+            const int n = (int) (fs * 5.0);
+            juce::AudioBuffer<float> b (1, n);
+            double phase = 0.0;
+            for (int i = 0; i < n; ++i)
+            {
+                const double c = std::fmod ((double) i / fs, 0.6);
+                const double sung = c < 0.3 ? 56.6 : 61.0;                                           // A3 40 cents flat, then C#4 in tune
+                phase += juce::MathConstants<double>::twoPi * 440.0 * std::pow (2.0, (sung - 69.0) / 12.0) / fs;
+                float v = 0.0f; for (int h = 1; h <= 8; ++h) v += (float) std::sin (phase * h) / (float) h;
+                b.setSample (0, i, 0.2f * v);
+            }
+            inBlocks (b, 256, [&] (juce::AudioBuffer<float>& v) { t.process (v); });
+            PitchDetector d; d.prepare (fs);
+            double early = 0.0, late = 0.0, flatLate = 0.0; int earlyN = 0, lateN = 0, flatN = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                if (! d.push (b.getSample (0, i)) || d.frequency() <= 0.0f) continue;
+                const double tt = (double) i / fs - 0.045;
+                if (tt < 1.2) continue;
+                const float out = 69.0f + 12.0f * std::log2 (d.frequency() / 440.0f);
+                const double c = std::fmod (tt, 0.6);
+                if (c > 0.36 && c < 0.44) { early += std::abs (out - 61.0f); ++earlyN; }             // 60 to 140 ms into the in-tune note
+                if (c > 0.48 && c < 0.58) { late += std::abs (out - 61.0f); ++lateN; }
+                if (c > 0.2 && c < 0.28)  { flatLate += std::abs (out - 57.0f); ++flatN; }
+            }
+            const float e = (float) (early / juce::jmax (1, earlyN)) * 100.0f, l = (float) (late / juce::jmax (1, lateN)) * 100.0f, f = (float) (flatLate / juce::jmax (1, flatN)) * 100.0f;
+            check (e < 8.0f && l < 4.0f && f < 8.0f, "Gentle tuning: the correction a flat note needed is not carried on to the next note, and the flat note is still brought in",
+                   "in-tune note " + juce::String (e, 1) + " cents off early on and " + juce::String (l, 1) + " later; the flat note ends " + juce::String (f, 1) + " cents off (sung 40 off)");
+        }
+
+        // Keep slides, on the shape real singing has: slide up to a note, hold it (30 cents flat), slide down to the
+        // next, hold that (30 cents flat). While the voice is travelling it is left nearer to what was sung; once it
+        // has landed the note is tuned, straight away and not a fifth of a second later.
+        struct SlideResult { float movedWhileSliding = 0.0f, offWhileHeld = 0.0f; };
         auto slide = [&] (float keep)
         {
             Tuner t; t.prepare (fs, 256, 1);
             TunerSettings ts; ts.enabled = true; ts.key = 9; ts.scale = 1; ts.speedMs = 40.0f; ts.keepVibrato = 0.5f; ts.hold = 0.3f; ts.keepSlides = keep;
             t.setSettings (ts);
-            const int n = (int) (fs * 4.0);
+            const int n = (int) (fs * 5.0);
             juce::AudioBuffer<float> b (1, n), dryCopy;
+            auto sungAt = [] (double tt)
+            {
+                const double c = std::fmod (tt, 1.0), lo = 56.7, hi = 58.7;                      // A3 and B3, both 30 cents flat
+                if (c < 0.25) return lo + (hi - lo) * 0.5 * (1.0 - std::cos (juce::MathConstants<double>::pi * c / 0.25));
+                if (c < 0.5)  return hi;
+                if (c < 0.75) return hi + (lo - hi) * 0.5 * (1.0 - std::cos (juce::MathConstants<double>::pi * (c - 0.5) / 0.25));
+                return lo;
+            };
             double phase = 0.0;
             for (int i = 0; i < n; ++i)
             {
-                const double tt = (double) i / fs;
-                const double note = 57.0 + 1.0 - std::cos (juce::MathConstants<double>::twoPi * tt / 0.5);        // 57..59 and back, twice a second: 8 semitones a second
-                phase += juce::MathConstants<double>::twoPi * 440.0 * std::pow (2.0, (note - 69.0) / 12.0) / fs;
+                phase += juce::MathConstants<double>::twoPi * 440.0 * std::pow (2.0, (sungAt ((double) i / fs) - 69.0) / 12.0) / fs;
                 float v = 0.0f; for (int h = 1; h <= 8; ++h) v += (float) std::sin (phase * h) / (float) h;
                 b.setSample (0, i, 0.2f * v);
             }
-            dryCopy.makeCopyOf (b);
             inBlocks (b, 256, [&] (juce::AudioBuffer<float>& v) { t.process (v); });
-            // compare the pitch of the result with the pitch that went in, 20 ms earlier (the tuner's delay)
-            juce::AudioBuffer<float> shifted (1, n); shifted.clear(); shifted.copyFrom (0, (int) (fs * 0.02), dryCopy, 0, 0, n - (int) (fs * 0.02));
-            const auto a = trackNotes (shifted, 1.0f), c = trackNotes (b, 1.0f);
-            double sum = 0.0; const size_t m = std::min (a.size(), c.size());
-            for (size_t i = 0; i < m; ++i) sum += std::abs (a[i] - c[i]);
-            return m > 0 ? (float) (sum / (double) m) * 100.0f : 0.0f;
+            // the pitch that comes out, moment by moment, against the pitch that went in 20 ms earlier (the tuner's delay)
+            PitchDetector d; d.prepare (fs);
+            SlideResult r; int slides = 0, holds = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                if (! d.push (b.getSample (0, i)) || d.frequency() <= 0.0f) continue;
+                const double tt = (double) i / fs - 0.045;                                        // the tuner's delay and half the detector's window
+                if (tt < 1.0) continue;
+                const float out = 69.0f + 12.0f * std::log2 (d.frequency() / 440.0f);
+                const double c = std::fmod (tt, 1.0);
+                const bool sliding = (c > 0.06 && c < 0.19) || (c > 0.56 && c < 0.69);
+                const bool held = (c > 0.38 && c < 0.48) || (c > 0.88 && c < 0.98);                // 130 ms after landing, to the end of the note
+                if (sliding) { r.movedWhileSliding += std::abs (out - (float) sungAt (tt)); ++slides; }
+                if (held)    { r.offWhileHeld += std::abs (out - (c < 0.5 ? 59.0f : 57.0f)); ++holds; }
+            }
+            r.movedWhileSliding *= 100.0f / (float) juce::jmax (1, slides);
+            r.offWhileHeld *= 100.0f / (float) juce::jmax (1, holds);
+            return r;
         };
-        const float pulled = slide (0.0f), kept = slide (1.0f);
-        check (kept < pulled * 0.82f && pulled > 12.0f, "Keep slides leaves a sliding voice nearer to what was sung", juce::String (pulled, 1) + " cents moved without it, " + juce::String (kept, 1) + " cents with it");
+        const auto pulled = slide (0.0f), kept = slide (1.0f);
+        check (kept.movedWhileSliding < pulled.movedWhileSliding * 0.9f && pulled.movedWhileSliding > 8.0f, "Keep slides leaves a sliding voice nearer to what was sung",
+               juce::String (pulled.movedWhileSliding, 1) + " cents moved without it, " + juce::String (kept.movedWhileSliding, 1) + " cents with it");
+        check (kept.offWhileHeld < 8.0f && pulled.offWhileHeld < 8.0f, "A note the voice slid into is tuned once it lands, with Keep slides on or off (sung 30 cents flat)",
+               juce::String (pulled.offWhileHeld, 1) + " cents off without it, " + juce::String (kept.offWhileHeld, 1) + " cents with it");
         const float heldStill = tuned (flatA, [] (TunerSettings& ts) { ts.speedMs = 40.0f; ts.keepSlides = 1.0f; }, 3.0f);
         check (std::abs (heldStill - 57.0f) < 0.05f, "With keep slides on, a held note is still tuned", juce::String ((heldStill - 57.0f) * 100.0f, 1) + " cents from the note");
     }
@@ -1579,6 +1670,31 @@ int main()
             spikeDb = juce::Decibels::gainToDecibels (b.getMagnitude (0, from, (int) (fs * 0.004)));
             bodyDb = juce::Decibels::gainToDecibels (b.getRMSLevel (0, from + (int) (fs * 0.06), (int) (fs * 0.08)));
         };
+        // A thump before a word (a plosive, a hand on the stand). Measured on real takes it was often the loudest
+        // thing in the recording, and a leveller that hears it holds the following words down. The Vocal style
+        // does not listen below 110 Hz, whatever the sidechain filter is set to.
+        auto wordAfterThump = [&] (CompStyle style, bool thump)
+        {
+            Compressor c; c.prepare (fs, 256, 2);
+            CompressorSettings st; st.enabled = true; st.thresholdDb = -24.0f; st.ratio = 3.5f; st.attackMs = 10.0f; st.releaseMs = 90.0f; st.kneeDb = 8.0f; st.autoMakeup = false; st.style = style;
+            c.setSettings (st);
+            const int n = (int) (fs * 3.0), cycle = (int) (fs * 0.5);
+            juce::AudioBuffer<float> b (2, n);
+            for (int i = 0; i < n; ++i)
+            {
+                const int at = i % cycle;
+                float v = at >= (int) (fs * 0.06) && at < (int) (fs * 0.3) ? 0.2f * (float) std::sin (juce::MathConstants<double>::twoPi * 400.0 * i / fs) : 0.0f;      // the word
+                if (thump && at < (int) (fs * 0.05)) v += 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 55.0 * at / fs);                                  // the thump before it
+                b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+            inBlocks (b, 256, [&] (juce::AudioBuffer<float>& v) { c.process (v); });
+            return juce::Decibels::gainToDecibels (b.getRMSLevel (0, cycle * 4 + (int) (fs * 0.15), (int) (fs * 0.14)));      // the word, from 100 ms after the thump (the catcher takes the thump itself and lets go in 50 ms)
+        };
+        const float duckedVocal = wordAfterThump (CompStyle::Vocal, false) - wordAfterThump (CompStyle::Vocal, true);
+        const float duckedSmooth = wordAfterThump (CompStyle::Smooth, false) - wordAfterThump (CompStyle::Smooth, true);
+        check (std::abs (duckedVocal) < 1.0f && duckedSmooth > 2.0f, "Vocal style: a thump before a word does not push the word down",
+               "word " + juce::String (duckedVocal, 1) + " dB lower after a thump in the Vocal style, " + juce::String (duckedSmooth, 1) + " dB lower in Smooth with no sidechain filter");
+
         float spikeSmooth, bodySmooth, spikeVocal, bodyVocal;
         pattern (CompStyle::Smooth, spikeSmooth, bodySmooth); pattern (CompStyle::Vocal, spikeVocal, bodyVocal);
         check (spikeVocal < spikeSmooth - 1.5f && std::abs (bodyVocal - bodySmooth) < 1.0f, "Vocal style: the catcher takes the spikes down and leaves the body of the words to the leveller",

@@ -745,6 +745,9 @@ int main()
         for (int i = 0; i < 20 && master->getBus().getLearnState().active; ++i) runSeconds (1.0);
         const auto message = master->getBus().getLearnState().message;
         check (vocal->getParam (ids::compEnabled) > 0.5f && message.contains ("compressor was switched on"), "Learn and balance compresses a vocal whose loud words tower over the rest", message);
+        // Learn also fits the EQ of a vocal nobody has touched to the voice that is there, and says so
+        check (message.contains ("was fitted to the voice") == ! vocal->isEqUntouched(), "Learn fits the EQ of an untouched vocal to the voice and says so, or leaves a voice that is already right alone",
+               message.contains ("was fitted to the voice") ? juce::String ("fitted") : juce::String ("left alone"));
         waitFor (8.0);
         check (master->getBus().getLearnState().message.contains ("Balanced again"), "...and balances once more when the new levels have been heard", master->getBus().getLearnState().message);
         master->getBus().setTrackLocked (vocal->getSessionSlot(), false);
@@ -755,6 +758,22 @@ int main()
         vocal->setParam (ids::outputGain, 0.0f);
         vocal->applyChainPreset (findChainPreset ("Clean slate"));
         vocal->setParam (ids::role, (float) Role::Auto);
+
+        // A suggestion is what is still missing with the EQ as it stands: applying it again adds to the band that is
+        // already doing that job, up to a ceiling, instead of replacing it or stacking a second band on top
+        {
+            Suggestion lift; lift.kind = Suggestion::Kind::EqBand; lift.action = "Boost +5.0 dB at 3.0 kHz";
+            lift.band.enabled = true; lift.band.type = EQType::Bell; lift.band.freqHz = 3000.0f; lift.band.gainDb = 5.0f; lift.band.q = 0.7f;
+            vocal->applySuggestion (lift);
+            auto nearby = lift; nearby.band.freqHz = 3400.0f;
+            const auto said3 = vocal->applySuggestion (nearby);
+            int bands = 0; float gain = 0.0f;
+            for (int b = 0; b < kNumEQBands; ++b) if (vocal->getParam (ids::eqBandEnabled (b)) > 0.5f) { ++bands; gain = vocal->getBandSettings (b).gainDb; }
+            check (bands == 1 && std::abs (gain - 8.0f) < 0.01f && said3.contains ("added to what was there"), "A second boost in the same place is added to the first, and the total stops at +8 dB",
+                   juce::String (bands) + " band, " + juce::String (gain, 1) + " dB. " + said3);
+            vocal->applyChainPreset (findChainPreset ("Clean slate"));
+            vocal->setParam (ids::role, (float) Role::Auto);
+        }
 
         // every preset of every tool loads and switches its tool on; the robot borrows the scale and gives it back
         vocal->setParam (ids::tuneKey, 7.0f); vocal->setParam (ids::tuneScale, 2.0f);

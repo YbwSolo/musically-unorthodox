@@ -1,4 +1,6 @@
 #include "TonalAnalysis.h"
+#include <algorithm>
+#include <vector>
 #include <cmath>
 
 namespace mu
@@ -81,7 +83,9 @@ namespace
     {
         Suggestion s;
         s.title = title; s.why = why; s.freqHz = freq; s.amountDb = amountDev;
-        const float g = -juce::jlimit (1.5f, 4.5f, amountDev * 0.6f);
+        // Sized to what was measured: about two thirds of the excess, up to 6 dB. (Recordings sent in from real
+        // sessions were 2 to 6 dB heavy here; the old limit of 4.5 dB at 60 % left most of that in.)
+        const float g = -juce::jlimit (1.5f, 6.0f, amountDev * 0.7f);
         s.band.enabled = true; s.band.type = EQType::Bell; s.band.freqHz = freq; s.band.q = q;
         if (dynamic)
         {
@@ -97,11 +101,13 @@ namespace
         return s;
     }
 
-    Suggestion boost (const juce::String& title, const juce::String& why, EQType type, float freq, float lackingDev, float q)
+    // most: the largest boost this kind of move may make. A raw vocal is usually 6 to 15 dB short of a finished
+    // one in the presence and air ranges, so those need room; a boost for body or weight stays small.
+    Suggestion boost (const juce::String& title, const juce::String& why, EQType type, float freq, float lackingDev, float q, float most = 3.0f)
     {
         Suggestion s;
         s.title = title; s.why = why; s.freqHz = freq; s.amountDb = lackingDev;
-        const float g = juce::jlimit (1.0f, 3.0f, -lackingDev * 0.4f);
+        const float g = juce::jlimit (1.0f, most, -lackingDev * (most > 3.0f ? 0.6f : 0.4f));
         s.band.enabled = true; s.band.type = type; s.band.freqHz = freq; s.band.q = q; s.band.gainDb = g;
         s.action = juce::String (type == EQType::Bell ? "Boost +" : "Shelf +") + juce::String (g, 1) + " dB at " + hz (freq);
         return s;
@@ -121,10 +127,17 @@ BandArray roleTargetCurve (Role role)
 {
     switch (role)
     {
+        // Where a finished vocal sits, relative to its body. The starting point is the published long-term spectrum
+        // of speech (Byrne et al. 1994; as one-third octave levels worked out from the published spectrum levels,
+        // about -8 dB at 1 kHz, -13 at 2 kHz, -15 at 3 kHz and -18 at 5 kHz against 500 Hz), which is also where
+        // the raw recordings this was checked on sit. On top of that goes
+        // what mixing normally adds: 5 to 7 dB of presence and air once the low-mids are cleaned, the top is lifted
+        // and the voice is compressed. (Up to build 12 this curve asked for about 10 dB over a natural voice at
+        // 2 to 3 kHz. That is more than a mix engineer adds, and chasing it would have made voices hard.)
         case Role::Vocal:
-            return curveFrom ({ { 80, -26 }, { 120, -11 }, { 200, -3 }, { 300, 0 }, { 500, 0 }, { 1000, -2 }, { 2000, -4 }, { 3000, -5 }, { 5000, -8 }, { 8000, -12 }, { 12000, -17 }, { 16000, -24 } });
+            return curveFrom ({ { 80, -26 }, { 120, -11 }, { 200, -3 }, { 300, 0 }, { 500, 0 }, { 1000, -4 }, { 2000, -8 }, { 3000, -8.5f }, { 5000, -10.5f }, { 8000, -12.5f }, { 12000, -16 }, { 16000, -23 } });
         case Role::BackingVocal:
-            return curveFrom ({ { 100, -26 }, { 160, -10 }, { 250, -3 }, { 400, 0 }, { 800, 0 }, { 2000, -3 }, { 3000, -4 }, { 5000, -6 }, { 8000, -9 }, { 12000, -14 }, { 16000, -22 } });
+            return curveFrom ({ { 100, -26 }, { 160, -10 }, { 250, -3 }, { 400, 0 }, { 800, -2 }, { 2000, -7 }, { 3000, -8 }, { 5000, -9.5f }, { 8000, -11 }, { 12000, -14.5f }, { 16000, -22 } });
         case Role::Bass808:
             return curveFrom ({ { 30, -6 }, { 45, 0 }, { 60, 0 }, { 100, -4 }, { 200, -12 }, { 500, -22 }, { 1000, -30 }, { 3000, -40 } });
         case Role::Kick:
@@ -198,6 +211,24 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role)
         rel[(size_t) b] = m[(size_t) b] - mMean;
         dev[(size_t) b] = rel[(size_t) b] - (target[(size_t) b] - tMean);
     }
+    const bool voice = role == Role::Vocal || role == Role::BackingVocal;
+    if (voice)
+    {
+        // A voice is judged against its own body (250 Hz to 1 kHz), the way an engineer hears it: "this needs
+        // more presence", "this has too much low mid". Measuring against the average of the whole range instead
+        // lets a hole in the presence range drag the average down, so the body then reads as too loud and the
+        // hole as half as deep as it is. (Seen on real recordings: a voice 14 dB short at 2 to 3 kHz was being
+        // answered with a 5 dB cut at 1 kHz and a 3 dB boost.)
+        std::vector<float> body;
+        for (int b = 0; b < kAnalysisBands; ++b)
+            if (centres[(size_t) b] >= 250.0f && centres[(size_t) b] <= 1000.0f) body.push_back (m[(size_t) b] - target[(size_t) b]);
+        if (! body.empty())
+        {
+            std::sort (body.begin(), body.end());
+            const float anchor = body[body.size() / 2];
+            for (int b = 0; b < kAnalysisBands; ++b) dev[(size_t) b] = (m[(size_t) b] - target[(size_t) b]) - anchor;
+        }
+    }
     auto excess = [&] (float lo, float hi) { return regionStat (dev, m, centres, lo, hi, true); };
     auto lack   = [&] (float lo, float hi) { return regionStat (dev, m, centres, lo, hi, false); };
 
@@ -208,7 +239,7 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role)
             out.push_back (lowCut ("Rumble under the voice",
                 "There is energy below 70 Hz that is not the singer: mic-stand knocks, plosives and room rumble. It eats headroom and makes the compressor react to things you cannot hear. A low cut removes it without touching the voice.",
                 role == Role::BackingVocal ? 130.0f : 85.0f, 1));
-        if (auto r = excess (180.0f, 350.0f); r.meanDev > 3.0f)
+        if (auto r = excess (180.0f, 350.0f); r.meanDev > 2.5f)
             out.push_back (cut ("Mud around " + hz (r.peakHz),
                 "The low mids are " + db (r.meanDev) + " heavier than a balanced vocal. This is the 'mud' zone: it makes a vocal sound boxed-in and fights the body of the beat. A dynamic cut only pulls it down when it builds up, so quiet lines keep their warmth.",
                 r.peakHz, r.meanDev, 1.4f, true, r.peakDb));
@@ -216,7 +247,10 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role)
             out.push_back (cut ("Boxy around " + hz (r.peakHz),
                 "There is " + db (r.meanDev) + " extra energy in the 'cardboard box' range, usually from the room or recording close to a wall. A medium-width cut opens the vocal up.",
                 r.peakHz, r.meanDev, 1.6f, false, r.peakDb));
-        if (auto r = excess (800.0f, 1600.0f); r.meanDev > 3.5f)
+        // A voice that is short of presence reads as forward around 1 kHz only because everything above it is
+        // missing. Cutting there as well would take away the little intelligibility it has; the presence lift
+        // puts the balance right instead.
+        if (auto r = excess (800.0f, 1600.0f); r.meanDev > 3.5f && lack (1600.0f, 4500.0f).meanDev > -3.0f)
             out.push_back (cut ("Nasal around " + hz (r.peakHz),
                 "The vocal is " + db (r.meanDev) + " forward in the nasal / honky range. A narrow cut here makes it sound less like it is coming through a phone.",
                 r.peakHz, r.meanDev, 2.0f, false, r.peakDb));
@@ -232,18 +266,29 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role)
             s.action = "Switch on the de-esser at " + hz (r.peakHz);
             out.push_back (s);
         }
-        if (auto r = lack (2000.0f, 4500.0f); r.meanDev < -4.0f)
+        // Presence: the boost goes where the hole actually is (anywhere from 2 to 4 kHz) and is wide enough to
+        // lift the whole range that carries the words.
+        if (auto r = lack (1600.0f, 4500.0f); r.meanDev < -3.0f)
             out.push_back (boost ("Needs presence",
-                "The vocal is " + db (r.meanDev) + " short in the 2-4 kHz range where words become understandable. A gentle, wide boost brings it forward so you do not have to turn the whole vocal up.",
-                EQType::Bell, 3000.0f, r.meanDev, 0.9f));
-        if (auto r = lack (9000.0f, 16000.0f); r.meanDev < -5.0f)
+                "The vocal is " + db (r.meanDev) + " short in the 2-4 kHz range where words become understandable. That is what makes a vocal sound dull and buried however loud it is. A wide boost brings it forward so you do not have to turn the whole vocal up.",
+                EQType::Bell, juce::jlimit (2200.0f, 3800.0f, r.peakHz), r.meanDev, 0.7f, 7.0f));
+        if (auto r = lack (6500.0f, 15000.0f); r.meanDev < -4.0f)
+        {
+            // a recording that is already rolling off by 5 kHz (a dark microphone, or one sung into from the side)
+            // needs the shelf to start lower than one that is only missing its very top
+            const bool rollsOffEarly = lack (4500.0f, 6500.0f).meanDev < -7.0f;
             out.push_back (boost ("Needs air",
-                "There is very little above 10 kHz, so the vocal sounds closed-in next to a bright beat. A high shelf adds the breathy 'expensive' top end. Do this after the de-esser so it does not bring the S sounds back.",
-                EQType::HighShelf, 10000.0f, r.meanDev, 0.71f));
-        if (auto r = lack (120.0f, 250.0f); r.meanDev < -6.0f && role == Role::Vocal)
+                "The top of the voice, above " + juce::String (rollsOffEarly ? "5" : "7") + " kHz, is " + db (r.meanDev) + " short, so the vocal sounds closed-in next to a bright beat. A high shelf adds the breathy, finished top end. The de-esser comes after the EQ, so it keeps the S sounds in check.",
+                EQType::HighShelf, rollsOffEarly ? 5500.0f : 9000.0f, r.meanDev, 0.71f, 8.0f));
+        }
+        // Thin means light where every voice has weight: 180 to 380 Hz. Below that depends on who is singing (a
+        // woman's voice, or a man in a high register, has nothing at 120 to 180 Hz and is not thin for it; the
+        // old rule looked there, and on real sessions it asked for 3 to 6 dB at 180 Hz on voices that had no
+        // business having it, which is low-mid weight a muddy mix does not need).
+        if (auto r = lack (180.0f, 380.0f); r.meanDev < -5.0f && role == Role::Vocal)
             out.push_back (boost ("Thin: missing body",
                 "The chest range of the voice is " + db (r.meanDev) + " lighter than usual, often because the high-pass is set too high or the singer was far from the mic. A small boost puts the weight back.",
-                EQType::Bell, 180.0f, r.meanDev, 1.0f));
+                EQType::Bell, juce::jlimit (200.0f, 300.0f, r.peakHz), r.meanDev, 1.0f));
     }
     else if (role == Role::Bass808)
     {

@@ -91,6 +91,8 @@ const Note kNotes[] = {
     { "Dull sound, clarity and air", "dull,dark,clarity,clear,clearer,crisp,air,airy,sparkle,shine,brighter,bright,presence,polished,professional,expensive",
       "Clarity comes from 2 to 5 kHz, where words are understood, and air comes from above 8 kHz. On the EQ tab a wide high shelf from 8 to 10 kHz of 1 to 3 dB adds air, "
       "and a wide bell of 1 to 2 dB around 3 kHz adds presence. Remove mud first: a cut at 250 to 350 Hz often makes a track sound brighter with no boost at all. "
+      "A raw vocal recording is different: it is often 6 dB or more short of a finished vocal between 2 and 8 kHz, and small boosts leave it dull. "
+      "Loading a vocal preset, or Learn and balance on a vocal whose EQ has not been touched, measures that gap and fits the presence and air to it, up to 9 dB. Analyse on the EQ tab lists what is still missing. "
       "Brightening makes S sounds sharper, so check the de-esser afterwards." },
     { "Boomy low end", "boomy,boom,rumble,too much bass,bass too loud,808 too loud,bassy,low end,sub,subs,woofy",
       "Boom is too much below 100 Hz. On tracks that are not the bass, kick or 808, a low cut on the EQ tab at 80 to 120 Hz removes low end that nobody hears but that eats headroom. "
@@ -107,6 +109,7 @@ const Note kNotes[] = {
     { "Compressor settings for a vocal", "compressor settings,compress my vocal,compress a vocal,compression settings,how much compression,set the compressor,set up the compressor,vocal compression,ratio,threshold",
       "Starting point for a vocal on the Dynamics tab: style Vocal, ratio about 3 to 1, attack 10 to 15 ms so the consonants get through, release about 100 ms. "
       "The Vocal style is two compressors in one: a leveller that evens out the phrases and a fast catcher that only takes the peaks, so neither has to work hard. "
+      "It does not listen below 110 Hz, so a plosive or a knock does not push the next words down. "
       "Then lower the threshold until the meter shows 3 to 6 dB of reduction on the loud words. Auto set does this from the level it has measured. "
       "If the vocal sounds flat, thick or lifeless, it is being compressed too much: raise the threshold." },
     { "Pumping and over-compression", "pumping,pump,pumps,breathing,squashed,crushed,lifeless,flat,over compressed,overcompressed,too much compression,ducking,sucked",
@@ -139,7 +142,8 @@ const Note kNotes[] = {
       "Always check a mix in mono, because phones and club systems are close to mono." },
     { "Is the mix balanced", "balanced,balance,balancing,levels right,right level,right levels,too loud,loud enough,quiet enough,how loud should the,turn down,turn up,which track",
       "{balance} Balance now on the Mix tab moves every track to where it should sit against the lead vocal in one press, "
-      "and Learn and balance listens to the loudest section for 20 seconds first. The lanes on the Mix tab show each move before it is made." },
+      "and Learn and balance listens to the loudest section for 20 seconds first. The lanes on the Mix tab show each move before it is made. "
+      "Learn and balance also fits the EQ of a vocal whose EQ has not been touched to that voice, and says so in its message." },
     { "Matching a reference song", "reference,sound like,sounds like,match,commercial,favourite song,favorite song,industry,like the pros",
       "On the EQ tab, put the plugin on a track that is playing a finished song you like, play it and press Capture. Then on your own mix press Match: "
       "it adds a few broad bands that move your tone towards the reference, and Amount sets how far. Treat it as a guide, remove any band you do not like, "

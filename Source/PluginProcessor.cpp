@@ -434,6 +434,7 @@ void MUProcessor::timerCallback()
     loudness.readIntegrated();
     mixMeter.readIntegrated();
     pumpAnalysis();
+    noteEqForMeasurement();
     updateLatency();
     lufsHistory.push (loudness.getShortTerm());
 
@@ -1074,20 +1075,28 @@ juce::String MUProcessor::applySuggestion (const Suggestion& s)
     {
         case Suggestion::Kind::EqBand:
         {
-            const int b = pickBandFor (s.band);
-            setBandSettings (b, s.band);
+            bool added = false;
+            const int b = mergeEqBand (s.band, added);
+            if (b < 0) return "Left as it is: the EQ is already doing as much as it should here (about 10 dB at most in one place, and no band is replaced to make room). If it still sounds wrong, free a band on the EQ tab or look at the recording itself: mic position, distance, a pop shield.";
             setParam (ids::eqEnabled, 1.0f);
-            spectrum.resetLongTerm();
-            return "Band " + juce::String (b + 1) + " set: " + s.action;
+            restartSpectrumAverage();
+            if (! added) return "Band " + juce::String (b + 1) + " set: " + s.action;
+            // The suggestion was measured with the EQ already working, so it is what is still missing: it goes on
+            // top of the band that is already doing that job instead of replacing it or stacking a second one.
+            const auto now = getBandSettings (b);
+            const float amount = now.dynamic ? now.rangeDb : now.gainDb;
+            return "Band " + juce::String (b + 1) + " moved to " + (amount >= 0.0f ? "+" : "") + juce::String (amount, 1) + " dB at "
+                 + (now.freqHz >= 1000.0f ? juce::String (now.freqHz / 1000.0f, 1) + " kHz" : juce::String (juce::roundToInt (now.freqHz)) + " Hz")
+                 + " (" + s.action.substring (0, 1).toLowerCase() + s.action.substring (1) + ", added to what was there)";
         }
         case Suggestion::Kind::DeEsser:
         {
             setParam (ids::dsFreq, juce::jlimit (2000.0f, 12000.0f, s.freqHz));
             setParam (ids::dsRange, juce::jlimit (3.0f, 8.0f, std::abs (s.amountDb)));
-            const float level = loudness.getShortTerm();
+            const float level = toolLevel();
             if (level > -60.0f) setParam (ids::dsThreshold, juce::jlimit (-60.0f, 0.0f, level - 8.0f));
             setParam (ids::dsOn, 1.0f);
-            spectrum.resetLongTerm();
+            restartSpectrumAverage();
             return "De-esser switched on (Dynamics tab): " + s.action;
         }
         case Suggestion::Kind::Saturation:
@@ -1096,7 +1105,7 @@ juce::String MUProcessor::applySuggestion (const Suggestion& s)
             setParam (ids::satDrive, 6.0f);
             setParam (ids::satMix, 35.0f);
             setParam (ids::satOn, 1.0f);
-            spectrum.resetLongTerm();
+            restartSpectrumAverage();
             return "Saturation switched on (Tone tab): " + s.action;
         }
         case Suggestion::Kind::Masking:
@@ -1306,7 +1315,7 @@ juce::String MUProcessor::matchReference (float amount01)
           << (band.freqHz >= 1000.0f ? juce::String (band.freqHz / 1000.0f, 1) + " kHz" : juce::String (juce::roundToInt (band.freqHz)) + " Hz");
     }
     setParam (ids::eqEnabled, 1.0f);
-    spectrum.resetLongTerm();
+    restartSpectrumAverage();
     return "Matched towards \"" + name + "\": " + s + ". These are ordinary bands, so adjust or remove any you do not like.";
 }
 
@@ -1421,11 +1430,165 @@ juce::String MUProcessor::applyChainPreset (int index)
     apvts.state.setProperty ("chainPresetName", currentPreset, nullptr);
     juce::String note;
     fitThresholds (p.role, note);
-    spectrum.resetLongTerm();
+    // A vocal chain's EQ is a starting shape. It is then fitted to the voice on this track, from what has been
+    // heard of it, so a dark recording gets the lift it needs and a bright one is not made brighter.
+    if (p.fitsTone && (p.role == Role::Vocal || p.role == Role::BackingVocal))
+    {
+        const auto fitted = fitTone();
+        if (fitted.startsWith ("EQ fitted") || fitted.startsWith ("The tone")) note << " " << fitted;
+    }
+    restartSpectrumAverage();
     if (p.role == Role::Master) { masterTrimDb.store (0.0f); autoLevelHeld.store (false); }
     resetMeasurement();                 // readings taken with the old chain no longer describe this track
     rememberLoaded ("chain", scopeParams ("chain"));
     return p.name + " loaded." + note;
+}
+
+// ---- Tone fitted to the voice ---------------------------------------------------------------------
+// The long-term spectrum is measured at the output, so it has the EQ in it. To know what the voice itself sounds
+// like, the EQ that was in force during the measurement is remembered: set outright whenever the average starts
+// again, and otherwise following the EQ at the same pace as the average does.
+void MUProcessor::restartSpectrumAverage()
+{
+    spectrum.resetLongTerm();
+    const auto centres = analysisBandCentres();
+    for (int b = 0; b < kAnalysisBands; ++b) measuredThroughEq[(size_t) b] = eqResponseDbAt (centres[(size_t) b]);
+}
+
+void MUProcessor::noteEqForMeasurement()
+{
+    const auto centres = analysisBandCentres();
+    for (int b = 0; b < kAnalysisBands; ++b)
+        measuredThroughEq[(size_t) b] += (eqResponseDbAt (centres[(size_t) b]) - measuredThroughEq[(size_t) b]) * 0.02f;      // timer runs every 100 ms: about 5 s
+}
+
+float MUProcessor::eqResponseDbAt (float hz) const
+{
+    if (getParam (ids::eqEnabled) < 0.5f) return 0.0f;
+    const double fs = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
+    float total = 0.0f;
+    for (int b = 0; b < kNumEQBands; ++b)
+    {
+        auto band = getBandSettings (b);
+        if (! band.enabled) continue;
+        if (band.dynamic) band.gainDb = band.rangeDb * 0.4f;         // a dynamic band works part of the time; count it for that much
+        band.dynamic = false;
+        total += EQEngine::bandResponseDb (band, hz, fs);
+    }
+    return total;
+}
+
+bool MUProcessor::isEqUntouched() const
+{
+    if (getParam (ids::eqEnabled) < 0.5f) return true;
+    for (int b = 0; b < kNumEQBands; ++b) if (getParam (ids::eqBandEnabled (b)) > 0.5f) return false;
+    return true;
+}
+
+// Puts an EQ move into the EQ. If a band of the same kind is already working the same area the move is added to
+// it; otherwise it takes a free band. Either way the whole EQ is kept inside what a mix engineer would call a big
+// move, not a broken one: nothing automatic takes the EQ past 10 dB up or down at the place it is working on.
+// Returns the band used, or -1 if the EQ is already doing as much as it should there.
+int MUProcessor::mergeEqBand (EQBandSettings band, bool& addedToExisting)
+{
+    addedToExisting = false;
+    const bool shelf = band.type == EQType::HighShelf || band.type == EQType::LowShelf;
+    if (! band.dynamic && band.type != EQType::LowCut && band.type != EQType::HighCut && std::abs (band.gainDb) > 0.01f)
+    {
+        // where this move does its work: a shelf an octave beyond its corner, anything else at its centre
+        const float at = band.type == EQType::HighShelf ? juce::jmin (16000.0f, band.freqHz * 2.0f) : band.type == EQType::LowShelf ? juce::jmax (30.0f, band.freqHz * 0.5f) : band.freqHz;
+        const float already = eqResponseDbAt (at);
+        const float room = band.gainDb > 0.0f ? juce::jmax (0.0f, 10.0f - already) : juce::jmin (0.0f, -10.0f - already);
+        band.gainDb = band.gainDb > 0.0f ? juce::jmin (band.gainDb, room) : juce::jmax (band.gainDb, room);
+        if (std::abs (band.gainDb) < 0.5f) return -1;
+    }
+    int into = -1;
+    for (int b = 0; b < kNumEQBands && into < 0; ++b)
+    {
+        const auto have = getBandSettings (b);
+        if (have.enabled && have.type == band.type && have.dynamic == band.dynamic && band.type != EQType::LowCut && band.type != EQType::HighCut
+            && std::abs (std::log2 (have.freqHz / juce::jmax (20.0f, band.freqHz))) < (shelf ? 1.3f : 0.6f)) into = b;
+    }
+    if (into < 0)
+    {
+        into = pickBandFor (band);
+        const auto there = getBandSettings (into);
+        // A free band, or the slot that kind of filter always uses: it goes in as it is.
+        if (! there.enabled || band.type == EQType::LowCut || band.type == EQType::HighCut) { setBandSettings (into, band); return into; }
+        // Every band is in use. The move is never allowed to wipe out a band that is doing a different job (it
+        // used to replace the nearest one): it joins a band of its own kind if there is one, or is left out.
+        if (there.type != band.type || there.dynamic != band.dynamic) return -1;
+    }
+    const auto have = getBandSettings (into);
+    const float most = shelf ? 9.0f : 8.0f;
+    if (band.dynamic) band.rangeDb = juce::jlimit (-9.0f, most, have.rangeDb + band.rangeDb);
+    else              band.gainDb = juce::jlimit (-9.0f, most, have.gainDb + band.gainDb);
+    band.freqHz = std::sqrt (have.freqHz * band.freqHz);
+    band.q = juce::jmin (have.q, band.q);
+    if (band.dynamic) band.thresholdDb = have.thresholdDb;
+    setBandSettings (into, band);
+    addedToExisting = true;
+    return into;
+}
+
+// A raw vocal is not a finished vocal with a small problem: across five real sessions the recordings were 6 to
+// 17 dB short of a finished voice somewhere between 2 and 8 kHz, and a fixed "+2 dB of presence" left them dull.
+// So the EQ is fitted to the voice that is there. previousEq is what the EQ was doing while the measurement was
+// taken (the measurement is of the output), so that can be taken back out.
+juce::String MUProcessor::fitTone()
+{
+    const auto role = getEffectiveRole();
+    if (role != Role::Vocal && role != Role::BackingVocal) return {};
+    BandArray bands {};
+    if (secondsHeard() < 3.0f || ! fillBandsDb (bands)) return "Play the track for a few seconds first, so its tone can be measured.";
+    const auto centres = analysisBandCentres();
+    // what the voice will sound like through the EQ as it is set now: the measurement, less the EQ that was in
+    // force while it was taken, plus the EQ in force now
+    for (int b = 0; b < kAnalysisBands; ++b) bands[(size_t) b] += eqResponseDbAt (centres[(size_t) b]) - measuredThroughEq[(size_t) b];
+
+    juce::StringArray did;
+    bool lifted = false;
+    for (auto& s : analyseTone (bands, role))
+    {
+        if (s.kind == Suggestion::Kind::DeEsser) { applySuggestion (s); did.add ("de-esser on"); continue; }
+        if (s.kind != Suggestion::Kind::EqBand) continue;
+        // The fit never adds weight below 500 Hz by itself. Whether a voice needs more body is a judgement to make
+        // by ear with the beat playing (Analyse will still suggest it); getting it wrong is how a mix turns muddy.
+        if (! s.band.dynamic && s.band.gainDb > 0.0f && s.band.freqHz < 500.0f) continue;
+        bool added = false;
+        const int used = mergeEqBand (s.band, added);
+        if (used < 0) continue;
+        const auto band = getBandSettings (used);
+        if (! band.dynamic && band.gainDb > 3.5f && band.freqHz > 1500.0f) lifted = true;
+        did.add (s.action.substring (0, 1).toLowerCase() + s.action.substring (1));
+    }
+    if (getParam (ids::eqBandEnabled (0)) < 0.5f)
+    {
+        // every vocal gets a low cut: nothing a voice needs is under 80 Hz, and what is there makes the compressor work for nothing
+        EQBandSettings cutLows; cutLows.enabled = true; cutLows.type = EQType::LowCut; cutLows.freqHz = role == Role::BackingVocal ? 120.0f : 85.0f; cutLows.q = 0.71f; cutLows.slope = 1;
+        setBandSettings (0, cutLows);
+        did.add ("low cut at " + juce::String (juce::roundToInt (cutLows.freqHz)) + " Hz");
+    }
+    if (did.isEmpty()) return "The tone of this voice is already where a finished vocal sits, so the EQ was left alone.";
+    setParam (ids::eqEnabled, 1.0f);
+    // Brightening a voice brightens its S sounds too. The de-esser sits after the EQ; make sure it is watching.
+    if (lifted && getParam (ids::dsOn) < 0.5f)
+    {
+        setParam (ids::dsFreq, 6500.0f); setParam (ids::dsRange, 5.0f);
+        if (toolLevel() > -60.0f) setParam (ids::dsThreshold, juce::jlimit (-60.0f, 0.0f, toolLevel() - 8.0f));
+        setParam (ids::dsOn, 1.0f);
+        did.add ("de-esser on to keep the S sounds in check");
+    }
+    restartSpectrumAverage();
+    return "EQ fitted to this voice: " + did.joinIntoString (", ") + ". It is all on the EQ tab, to adjust or undo.";
+}
+
+juce::String MUProcessor::fitToneIfUntouched()
+{
+    const auto role = getEffectiveRole();
+    if ((role != Role::Vocal && role != Role::BackingVocal) || ! isEqUntouched() || secondsHeard() < 3.0f) return {};
+    const auto said = fitTone();
+    return said.startsWith ("EQ fitted") ? said : juce::String();
 }
 
 // ---- Presets of your own --------------------------------------------------------------------------
@@ -1524,7 +1687,7 @@ juce::String MUProcessor::applyUserPreset (const UserPreset& preset)
                 note = " This track is " + juce::String (std::abs (shift), 1) + " dB " + (shift > 0.0f ? "louder" : "quieter") + " than the one it was saved on, so the thresholds were moved by that much.";
             }
         }
-        spectrum.resetLongTerm();
+        restartSpectrumAverage();
         resetMeasurement();
     }
     else apvts.state.setProperty ("preset_" + preset.scope, preset.name, nullptr);

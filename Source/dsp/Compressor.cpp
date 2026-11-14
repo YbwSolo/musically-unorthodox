@@ -77,10 +77,13 @@ void Compressor::process (juce::AudioBuffer<float>& buffer) noexcept
 
     for (int c = 0; c < ch; ++c) dry.copyFrom (c, 0, buffer, c, 0, n);
 
-    const bool useSc = live.sidechainHpHz > 25.0f;
-    if (useSc && std::abs (live.sidechainHpHz - scHz) > 0.5f)
+    // The Vocal style never lets the lows drive it: on real recordings a plosive or a thump is often the loudest
+    // thing in the take, and a leveller that hears it holds the next few words down.
+    const float scWanted = (live.style == CompStyle::Vocal && live.sidechainHpHz <= 25.0f) ? 110.0f : live.sidechainHpHz;
+    const bool useSc = scWanted > 25.0f;
+    if (useSc && std::abs (scWanted - scHz) > 0.5f)
     {
-        scHz = live.sidechainHpHz;
+        scHz = scWanted;
         scCoeffs = EQEngine::computeCoefficients ({ true, EQType::LowCut, scHz, 0.0f, 0.7071f }, fs);
     }
 
@@ -107,9 +110,9 @@ void Compressor::process (juce::AudioBuffer<float>& buffer) noexcept
     if (adaptiveRelCoef <= 0.0f) adaptiveRelCoef = fixedRelCoef;
 
     // Vocal style, second stage: catches what is still more than 10 dB above the threshold after levelling
-    const float catchThr = live.thresholdDb + 10.0f;
+    const float catchThr = live.thresholdDb + live.catchOverDb;
     const float catchAtt = std::exp (-1.0f / (float) (fs * 0.0003));
-    const float catchRel = std::exp (-1.0f / (float) (fs * 0.050));
+    const float catchRel = std::exp (-1.0f / (float) (fs * 0.001 * juce::jmax (1.0f, live.catchReleaseMs)));
 
     float minGain = 0.0f;
     for (int i = 0; i < n; ++i)
@@ -136,7 +139,7 @@ void Compressor::process (juce::AudioBuffer<float>& buffer) noexcept
             const float deep = juce::jlimit (0.0f, 1.0f, -slowGr / (style == CompStyle::Glue ? 4.0f : 6.0f));
             const float relMs = style == CompStyle::Glue  ? baseRel * (1.0f + 3.0f * deep)
                               : style == CompStyle::Clean ? baseRel * (0.8f + 1.7f * deep)
-                                                          : baseRel * (0.5f + 3.5f * deep);
+                                                          : baseRel * (0.5f + (vocal ? live.levelRelease : 3.5f) * deep);
             adaptiveRelCoef = std::exp (-1.0f / (float) (fs * 0.001 * relMs));
         }
         const float relCoef = adaptiveRelease ? adaptiveRelCoef : fixedRelCoef;
@@ -154,7 +157,7 @@ void Compressor::process (juce::AudioBuffer<float>& buffer) noexcept
             if (after >= catchHeld) { catchHeld = after; catchHoldLeft = holdSamples; }
             else if (catchHoldLeft > 0) --catchHoldLeft;
             else catchHeld += (after - catchHeld) * dropCoef;
-            const float gc = juce::jmax (-9.0f, computeGainDb (juce::Decibels::gainToDecibels (catchHeld, -100.0f), catchThr, 6.0f, 3.0f));
+            const float gc = juce::jmax (-live.catchMaxDb, computeGainDb (juce::Decibels::gainToDecibels (catchHeld, -100.0f), catchThr, 6.0f, 3.0f));
             catchGain = gc < catchGain ? catchAtt * catchGain + (1.0f - catchAtt) * gc
                                        : catchRel * catchGain + (1.0f - catchRel) * gc;
         }

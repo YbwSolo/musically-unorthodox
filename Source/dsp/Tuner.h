@@ -74,7 +74,8 @@ private:
     bool voiced = false;
     float period = 240.0f, ratio = 1.0f, shift = 0.0f, slowNote = 0.0f;
     float periodNow = 240.0f, outPeriodNow = 240.0f;      // what the engine is given: the same values, moved smoothly between measurements
-    int unsureFrames = 0, framesOnNote = 0;
+    int unsureFrames = 0, framesOnNote = 0, centreFrames = 0;
+    std::array<float, 16> centreHist {};
     float sliding = 0.0f;                                 // how fast the voice is travelling, in semitones a second
     std::array<float, 18> recent {}; int recentCount = 0, recentAt = 0;      // the last 180 ms of pitch
     bool snap = true;

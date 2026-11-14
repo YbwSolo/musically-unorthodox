@@ -21,6 +21,11 @@ struct CompressorSettings
     float mix = 1.0f;            // 0..1
     CompStyle style = CompStyle::Clean;
     float sidechainHpHz = 20.0f; // <= 25 Hz means off
+    // Vocal style only: how the peak catcher behaves (lab tools can move these; the plugin uses the defaults)
+    float catchOverDb = 10.0f;      // starts this far above the threshold
+    float catchReleaseMs = 50.0f;
+    float catchMaxDb = 9.0f;        // never takes off more than this
+    float levelRelease = 2.0f;      // how much the leveller's release stretches when it is working hard
 };
 
 // Feed-forward stereo-linked compressor with five behaviours:

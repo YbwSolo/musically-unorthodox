@@ -49,7 +49,7 @@ int main (int argc, char** argv)
     juce::MidiBuffer midi;
     juce::AudioBuffer<float> v (2, block), b (2, block), mix (2, block);
     juce::int64 pos = 0;
-    std::unique_ptr<juce::FileOutputStream> recVoiceIn, recVoiceOut, recSum, recMix;
+    std::unique_ptr<juce::FileOutputStream> recVoiceIn, recVoiceOut, recSum, recMix, recBeatOut, recVoiceSt, recMixSt;
     auto runSeconds = [&] (double seconds)
     {
         const int blocks = (int) (seconds * fs / block);
@@ -62,11 +62,17 @@ int main (int argc, char** argv)
                 if (recVoiceIn != nullptr) { recVoiceIn->writeFloat (vs); recSum->writeFloat (0.5f * (vs + vs + music[2 * m] + music[2 * m + 1])); }
             }
             vocal->processBlock (v, midi); beat->processBlock (b, midi);
+            if (recBeatOut != nullptr) for (int i = 0; i < block; ++i) recBeatOut->writeFloat (0.5f * (b.getSample (0, i) + b.getSample (1, i)));
             mix.clear();
             for (auto* s : { &v, &b }) for (int c = 0; c < 2; ++c) mix.addFrom (c, 0, *s, c, 0, block);
             master->processBlock (mix, midi);
             if (recVoiceOut != nullptr)
-                for (int i = 0; i < block; ++i) { recVoiceOut->writeFloat (0.5f * (v.getSample (0, i) + v.getSample (1, i))); recMix->writeFloat (0.5f * (mix.getSample (0, i) + mix.getSample (1, i))); }
+                for (int i = 0; i < block; ++i)
+                {
+                    recVoiceOut->writeFloat (0.5f * (v.getSample (0, i) + v.getSample (1, i))); recMix->writeFloat (0.5f * (mix.getSample (0, i) + mix.getSample (1, i)));
+                    recVoiceSt->writeFloat (v.getSample (0, i)); recVoiceSt->writeFloat (v.getSample (1, i));         // the same in stereo, for listening
+                    recMixSt->writeFloat (mix.getSample (0, i)); recMixSt->writeFloat (mix.getSample (1, i));
+                }
             head.seconds += (double) block / fs;
             for (auto* p : { vocal.get(), beat.get(), master.get() }) p->pumpAnalysis();
             if (n % 10 == 0) juce::MessageManager::getInstance()->runDispatchLoopUntil (1);
@@ -75,6 +81,17 @@ int main (int argc, char** argv)
     };
     auto waitFor = [&] (double wallSeconds) { const double until = juce::Time::getMillisecondCounterHiRes() + wallSeconds * 1000.0; while (juce::Time::getMillisecondCounterHiRes() < until) runSeconds (1.0); };
 
+    // name=value,name=value: parameters set by hand after everything automatic has run, to try one change at a time
+    auto applyOverrides = [&]
+    {
+        for (auto& pair : juce::StringArray::fromTokens (opt["set"], ",", ""))
+        {
+            const auto id = pair.upToFirstOccurrenceOf (":", false, false);
+            if (vocal->apvts.getParameter (id) != nullptr) vocal->setParam (id, pair.fromFirstOccurrenceOf (":", false, false).getFloatValue());
+            else if (id.isNotEmpty()) std::printf ("no such control: %s\n", id.toRawUTF8());
+        }
+    };
+    const bool quick = opt["quick"] == "1";              // the vocal chain only: no Learn, no waiting on the clock
     juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
     runSeconds (10.0);
     if (opt.containsKey ("preset"))
@@ -83,21 +100,33 @@ int main (int argc, char** argv)
         std::printf ("preset: %s\n", index >= 0 ? vocal->applyChainPreset (index).toRawUTF8() : "not found");
         runSeconds (4.0);
     }
-    master->learnAndBalance (6.0f);
-    waitFor (9.0);
-    waitFor (7.0);
-    for (int round = 0; round < 3; ++round)
+    if (opt["fit"] == "1") { std::printf ("fit: %s\n", vocal->fitTone().toRawUTF8()); runSeconds (6.0); }
+    if (! quick)
     {
-        auto hot = master->getBus().findHotPeaks();
-        if (hot.empty()) break;
-        std::printf ("to fix: %s\n", master->getBus().tamePeaks (hot.front().slot).toRawUTF8());
-        waitFor (7.5);
+        master->learnAndBalance (6.0f);
+        waitFor (9.0);
+        waitFor (7.0);
+        for (int round = 0; round < 3; ++round)
+        {
+            auto hot = master->getBus().findHotPeaks();
+            if (hot.empty()) break;
+            std::printf ("to fix: %s\n", master->getBus().tamePeaks (hot.front().slot).toRawUTF8());
+            waitFor (7.5);
+        }
     }
     if (opt["suggest"] == "1")
     {
+        vocal->startListening();
+        runSeconds (9.0);
         juce::String status;
         for (auto& s : vocal->analyse (status)) std::printf ("suggestion applied: %s -> %s\n", s.title.toRawUTF8(), vocal->applySuggestion (s).toRawUTF8());
         runSeconds (3.0);
+    }
+    applyOverrides();
+    runSeconds (2.0);
+    {
+        const auto key = master->getBus().findSongKey();
+        std::printf ("song key: %s\n", key.found ? (key.text() + " from " + key.source + (key.fromName ? " (name)" : ", confidence " + juce::String (key.confidence, 2))).toRawUTF8() : "not found");
     }
     std::printf ("vocal: trim %.1f dB, comp %s style %d thr %.1f ratio %.1f att %.0f rel %.0f, eq %s, sat %s, rider %s, reverb %s, guard %s\n", vocal->getTrimDb(),
                  vocal->getParam (ids::compEnabled) > 0.5f ? "on" : "off", (int) vocal->getParam (ids::compStyle), vocal->getParam (ids::compThreshold), vocal->getParam (ids::compRatio),
@@ -110,8 +139,10 @@ int main (int argc, char** argv)
     pos = 0;
     recVoiceIn = std::make_unique<juce::FileOutputStream> (folder.getChildFile ("voice-in.f32")); recVoiceOut = std::make_unique<juce::FileOutputStream> (folder.getChildFile ("voice-out.f32"));
     recSum = std::make_unique<juce::FileOutputStream> (folder.getChildFile ("sum-in.f32")); recMix = std::make_unique<juce::FileOutputStream> (folder.getChildFile ("mix-out.f32"));
-    for (auto* s : { recVoiceIn.get(), recVoiceOut.get(), recSum.get(), recMix.get() }) { s->setPosition (0); s->truncate(); }
-    runSeconds (juce::jmin (30.0, (double) voiceLen / fs));
+    recBeatOut = std::make_unique<juce::FileOutputStream> (folder.getChildFile ("beat-out.f32"));
+    recVoiceSt = std::make_unique<juce::FileOutputStream> (folder.getChildFile ("voice-st.f32")); recMixSt = std::make_unique<juce::FileOutputStream> (folder.getChildFile ("mix-st.f32"));
+    for (auto* s : { recVoiceIn.get(), recVoiceOut.get(), recSum.get(), recMix.get(), recBeatOut.get(), recVoiceSt.get(), recMixSt.get() }) { s->setPosition (0); s->truncate(); }
+    runSeconds (juce::jmin (opt.containsKey ("seconds") ? (double) opt["seconds"].getFloatValue() : 30.0, (double) voiceLen / fs));
     std::printf ("vocal compressor reduction now %.1f dB\n", vocal->getCompressor().getGainReductionDb());
     return 0;
 }

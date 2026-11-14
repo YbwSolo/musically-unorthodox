@@ -14,6 +14,7 @@ struct ChainPreset
     juce::String blurb;        // what it does and when to reach for it
     Role role;
     std::vector<ParamValue> values;
+    bool fitsTone = false;     // vocal chains: after loading, the EQ is fitted to the voice on the track
 };
 
 // Whole-chain starting points. Each one sets every module, so loading a preset never leaves

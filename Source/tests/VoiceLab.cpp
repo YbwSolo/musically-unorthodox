@@ -47,6 +47,7 @@ int main (int argc, char** argv)
     fx.setSettings (ps);
     CompressorSettings cs; cs.enabled = true; cs.thresholdDb = num ("thr", -30.0f); cs.ratio = num ("ratio", 4.0f); cs.attackMs = num ("att", 3.0f); cs.releaseMs = num ("rel", 60.0f);
     cs.kneeDb = num ("knee", 3.0f); cs.style = (CompStyle) (int) num ("style", 1); cs.sidechainHpHz = num ("schp", 20.0f); cs.autoMakeup = num ("makeup", 1.0f) > 0.5f;
+    cs.catchOverDb = num ("catchover", cs.catchOverDb); cs.catchReleaseMs = num ("catchrel", cs.catchReleaseMs); cs.catchMaxDb = num ("catchmax", cs.catchMaxDb); cs.levelRelease = num ("lrel", cs.levelRelease);
     comp.setSettings (cs);
    #if MU_LAB_OLD
     muold::Compressor oldComp; oldComp.prepare (fs, block, 2);

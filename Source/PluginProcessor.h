@@ -114,6 +114,7 @@ public:
     float getPeakOverDb() const override;
     bool isCompressorOn() const override { return getParam (ids::compEnabled) > 0.5f; }
     juce::String tamePeaks() override;
+    juce::String fitToneIfUntouched() override;
     void turnOutputDown (float db) override { setParam (ids::outputGain, juce::jlimit (-24.0f, 24.0f, getParam (ids::outputGain) - db)); }
     float getStereoCorrelation() const override { return getTotalNumOutputChannels() > 1 ? stereo.getCorrelation() : 1.0f; }
 
@@ -236,6 +237,12 @@ public:
     void learnAndBalance (float seconds = 20.0f);
     juce::String autoCompressor();     // sets the compressor from role + measured level
     juce::String applyChainPreset (int index);
+    // Fits the EQ to this voice: takes what the EQ is doing now back out of what was measured, works out what a
+    // finished vocal still needs, and adds that to the EQ. Returns what it did, in words.
+    juce::String fitTone();
+    int mergeEqBand (EQBandSettings band, bool& addedToExisting);
+    float eqResponseDbAt (float hz) const;          // what the fixed part of the EQ does at one frequency
+    bool isEqUntouched() const;
 
     // ---- presets of your own. scope is "chain" for the whole plugin, or a tool's id ("tune", "reverb", ...).
     std::vector<juce::String> scopeParams (const juce::String& scope) const;        // which controls a preset of that scope holds
@@ -346,6 +353,9 @@ private:
     using AF = std::atomic<float>*;
     AF pRole = nullptr, pBypass = nullptr, pTrim = nullptr, pOut = nullptr, pAutoBal = nullptr;
     std::atomic<bool> trimBeforeChain { false };
+    BandArray measuredThroughEq {};       // what the EQ was doing, band by band, while the long-term spectrum was being measured
+    void noteEqForMeasurement();
+    void restartSpectrumAverage();
     LevelProbe inputProbe;                // the level of the track as it reaches the tools
     float toolLevel() const;              // that level, or the output level without the fader if nothing has been heard at the input yet
     std::map<juce::String, std::vector<ParamValue>> loadedPreset;      // per scope: the values the loaded preset set, to tell when they have been changed

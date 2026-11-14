@@ -471,11 +471,23 @@ void SessionBus::timerCallback()
                 if ((h.role == Role::Vocal || h.role == Role::BackingVocal) && ! h.compressorOn && h.crestDb > 13.0f && h.overDb + move > 0.5f)
                     if (tamePeaks (h.slot).isNotEmpty()) tamed.add ("\"" + h.name + "\"");
             }
+            // A voice nobody has EQ'd yet gets its tone fitted to what was just heard of it. A raw vocal is usually
+            // well short of a finished one in the range that carries the words, and no balance can fix that.
+            juce::StringArray shaped;
+            {
+                const juce::ScopedLock sl (lock);
+                for (auto& s : slots)
+                    if (s.used.load() && s.client != nullptr && s.client->fitToneIfUntouched().isNotEmpty()) shaped.add ("\"" + s.client->getDisplayName() + "\"");
+            }
             const juce::ScopedLock sl (lock);
             learnMessage = "Balanced. " + plan.summary.replace ("Balanced. ", "");
             if (! tamed.isEmpty())
+                learnMessage << " The loud words on " << tamed.joinIntoString (" and ") << " were far above the rest, so the compressor was switched on there (Dynamics tab).";
+            if (! shaped.isEmpty())
+                learnMessage << " The EQ on " << shaped.joinIntoString (" and ") << " was fitted to the voice (EQ tab).";
+            if (! tamed.isEmpty() || ! shaped.isEmpty())
             {
-                learnMessage << " The loud words on " << tamed.joinIntoString (" and ") << " were far above the rest, so the compressor was switched on there (Dynamics tab). Balancing once more in a few seconds.";
+                learnMessage << " Balancing once more in a few seconds.";
                 rebalanceAtMs = nowMs + 6500.0;
             }
         }

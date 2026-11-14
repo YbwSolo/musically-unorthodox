@@ -111,6 +111,7 @@ namespace
             set (ids::riderOn, 1); set (ids::riderRange, range); set (ids::riderSpeed, speed); set (ids::riderTarget, target);
             return *this;
         }
+        Chain& fit() { p.fitsTone = true; return *this; }      // after loading, the EQ is fitted to the voice on the track
         Chain& makeSpace (float amount, Speed speed = Normal) { set (ids::vsEnabled, 1); set (ids::vsAmount, amount); set (ids::vsSpeed, speed); return *this; }
         Chain& stereo (float width, bool monoBass = false, float freq = 120) { set (ids::stWidth, width); set (ids::stMonoBass, monoBass ? 1.0f : 0.0f); set (ids::stMonoFreq, freq); return *this; }
         Chain& master (int mode, float lufs, float ceiling)
@@ -138,38 +139,38 @@ namespace
         { Chain c (V, "Rap vocal - punchy", Role::Vocal, "Upfront and consistent. Low cut at 90 Hz, mud kept in check, presence at 3.5 kHz, two-stage vocal compression (a 3.5:1 leveller with a peak catcher behind it), de-esser, a little tube grit and a level rider.");
           c.lowCut (90, 1).dyn (2, 250, -3.5f, 1.4f, -26).bell (4, 3500, 2.0f, 0.9f).dyn (5, 5200, -3.0f, 2.0f, -26).highShelf (6, 10000, 1.5f)
            .gate (-50, 14).comp (Vocal, -22, 3.5f, 10, 90, 8).deEss (6000, 5).saturate (Tube, 3, 30).ride (5, Normal);
-          add (c); }
+          c.fit(); add (c); }
         { Chain c (V, "Rap vocal - aggressive", Role::Vocal, "For drill and hard trap deliveries. Firm 5:1 vocal compression with a quick attack, more upper-mid bite, heavier saturation, and smoothing on the top so it stays loud without hurting.");
           c.lowCut (100, 1).bell (2, 300, -3.0f, 1.2f).bell (4, 2800, 3.0f, 1.0f).highShelf (6, 9000, 2.0f)
            .gate (-48, 16, 0.5f, 110, 50).comp (Vocal, -24, 5, 5, 70, 6).deEss (6500, 7).smooth (30, Highs, Fast).saturate (Tube, 6, 45).ride (6, Fast);
-          add (c); }
+          c.fit(); add (c); }
         { Chain c (V, "Rap vocal - tuned and doubled", Role::Vocal, "The punchy rap chain with gentle pitch correction that keeps the delivery natural, a tight double either side, and a short reverb timed to the beat that steps back while you rap.");
           c.lowCut (90, 1).dyn (2, 250, -3.5f, 1.4f, -26).bell (4, 3500, 2.0f, 0.9f).dyn (5, 5200, -3.0f, 2.0f, -26).highShelf (6, 10000, 1.5f)
            .gate (-50, 14).comp (Vocal, -22, 3.5f, 10, 90, 8).deEss (6000, 5).saturate (Tube, 3, 30).ride (5, Normal)
            .tune (80, 80).dbl (35, 7, 30).verb (12, 0, 45, 70);
-          add (c); }
+          c.fit(); add (c); }
         { Chain c (V, "Melodic trap - hard tune", Role::Vocal, "The snapped, robotic pitch sound of melodic trap. Every note jumps straight onto the scale, so set the key first (Find key on the FX tab). Bright top, firm compression, wide doubles and a two-beat reverb.");
           c.lowCut (100, 1).bell (2, 280, -2.5f, 1.2f).bell (4, 3200, 2.0f, 0.9f).highShelf (6, 10500, 3.0f)
            .gate (-50, 12).comp (Vocal, -23, 4, 8, 90, 6).deEss (6500, 6).smooth (25, Highs, Normal).saturate (Tape, 3, 30)
            .tune (0, 0).dbl (40, 10, 40).verb (20, 1, 60, 55);
-          add (c); }
+          c.fit(); add (c); }
         { Chain c (V, "Hook stack", Role::Vocal, "Makes one lead take sound like a stacked hook: four extra voices spread left and right, natural pitch correction so the stack is in tune with itself, and a longer reverb for size.");
           c.lowCut (95, 1).dyn (2, 260, -3.0f, 1.3f, -26).bell (4, 3000, 1.5f, 0.8f).highShelf (6, 11000, 2.5f)
            .comp (Vocal, -22, 3.5f, 10, 110, 8).deEss (6200, 5).smooth (25, Highs, Normal).ride (4, Normal)
            .tune (50, 60).dbl (60, 11, 60, true).verb (22, 1, 55, 50);
-          add (c); }
+          c.fit(); add (c); }
         { Chain c (V, "Melodic vocal - smooth", Role::Vocal, "For sung hooks and R&B. Slower, levelling compression that keeps the performance natural, wide presence, open air above 11 kHz and resonance smoothing for a polished top end.");
           c.lowCut (80, 1).dyn (2, 220, -3.0f, 1.3f, -27).bell (4, 3000, 1.5f, 0.8f).highShelf (6, 11000, 3.0f)
            .gate (-52, 12, 1.5f, 200, 90).comp (Vocal, -22, 3, 15, 140, 8).deEss (7000, 5).smooth (35, Full, Normal).saturate (Tape, 3, 25).ride (6, Normal);
-          add (c); }
+          c.fit(); add (c); }
         { Chain c (V, "Melodic vocal - bright pop", Role::Vocal, "Airy and forward. More top end and firmer 3.5:1 levelling so every word sits on top of a dense beat.");
           c.lowCut (95, 1).dyn (2, 240, -3.5f, 1.3f, -27).bell (3, 600, -1.5f, 1.2f).bell (4, 4000, 2.5f, 0.9f).highShelf (6, 12000, 4.0f)
            .gate (-52, 12, 1.5f, 180, 80).comp (Vocal, -23, 3.5f, 10, 110, 8).deEss (7500, 6).smooth (40, Highs, Normal).saturate (Tape, 2, 20).ride (6, Normal);
-          add (c); }
+          c.fit(); add (c); }
         { Chain c (V, "Backing vocals", Role::BackingVocal, "Sits behind the lead: higher low cut, a dip where the lead's words live, firm levelling, extra de-essing and a wider image.");
           c.lowCut (150, 1).bell (2, 350, -3.0f, 1.2f).bell (4, 2600, -2.0f, 0.8f).highShelf (6, 10000, 3.0f)
            .comp (Vocal, -24, 4, 8, 110, 8).deEss (6500, 8).smooth (30, Full, Normal).ride (4, Normal, -24).stereo (130);
-          add (c); }
+          c.fit(); add (c); }
         { Chain c (V, "Adlibs", Role::BackingVocal, "Thin, bright and out of the way of the main vocal. Low cut at 180 Hz, capped top, crunchy saturation.");
           c.lowCut (180, 1).bell (2, 400, -3.0f, 1.2f).bell (4, 4000, 2.0f, 1.0f).highShelf (6, 10000, 2.0f).highCut (14000, 0)
            .comp (Vocal, -22, 4, 8, 90, 6).deEss (6000, 6).saturate (Tube, 5, 40).stereo (120);
@@ -180,7 +181,7 @@ namespace
         { Chain c (V, "Spoken word", Role::Vocal, "For podcasts, interviews and skits. Even, close and clear without sounding processed.");
           c.lowCut (80, 1).bell (2, 250, -2.0f, 1.2f).bell (4, 4000, 2.0f, 0.9f)
            .gate (-48, 20, 2.0f, 220, 120).comp (Vocal, -22, 3, 12, 150, 8).deEss (6000, 5).ride (8, Slow);
-          add (c); }
+          c.fit(); add (c); }
 
         // ------------------------------------------------------------------ drums and bass
         { Chain c (D, "Kick - punch", Role::Kick, "Weight at 60 Hz, the cardboard at 400 Hz removed, click at 3.5 kHz, and compression with a slow attack so the hit gets through before it clamps.");

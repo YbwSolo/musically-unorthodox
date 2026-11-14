@@ -36,14 +36,17 @@ Logic: Audio Units > Musically Unorthodox. Also installs the VST3 and a standalo
 2. Name the tracks in your music software ("rap", "808", "beat 128 bpm Gmin"). With the role on Auto the plugin
    reads the name to know what the track is, and reads the key of the song from it when the name says it.
    Or pick a preset from the header, or set the role under Settings. Presets fit their thresholds to how loud the
-   track is, so load them while the song plays.
+   track is, and vocal presets fit their EQ to the voice that is playing (a dull recording gets more lift than a
+   bright one), so load them while the song plays.
 3. Put one on the Stereo Out. It becomes the **Master** by itself.
 4. Play the loudest section. On the **Mix** tab press **Learn and balance** and keep it playing for 20 seconds.
    Every track's trim moves so the vocal leads and the mix lands at -18 LUFS with peaks under -6 dBTP. The trim is
    the track's fader: it comes after all the processing, so balancing never changes how hard a compressor is
    driven. A vocal whose loud words tower over the rest of it has its compressor switched on (the gentle two-stage
    Vocal style); if a track's peaks would still clip its channel, the whole song is turned down to make room
-   instead of that track being squeezed harder.
+   instead of that track being squeezed harder. A vocal whose EQ has not been touched has its EQ fitted to the
+   voice: presence and air sized to how far that recording is from a finished vocal, a low cut, and the de-esser
+   set to watch the S sounds. The message under the button says so, and it is all on that track's EQ tab.
 5. Work through **To fix** on the Mix tab: tracks hitting the top, then collisions.
 6. On the master's **Master** tab choose where the song is going (mix hand-off, streaming, loud), check the mix
    with **Listen as** Mono and Phone speaker, and run the **Bounce check** on the Mix tab before exporting.
@@ -190,13 +193,59 @@ Master tabs do not have per-tool presets of your own yet; a whole-chain preset c
   at its limit.
 - Delay: pattern timing, saturation by style and drive, top end by style, diffusion, and wobble in cents.
 - Tune: hard tune lands on the note, Flex leaves close notes alone, Keep slides leaves a sliding voice nearer to
-  what was sung, and the pulse-locked slicing is compared with the old slicing on a clean and on a rough voice.
+  what was sung and still tunes the note it lands on, the correction one note needed is not carried on to the
+  next, and the pulse-locked slicing is compared with the old slicing on a clean and on a rough voice.
+- Vocal compressor: a thump before a word (the size measured on real takes) does not push the word down.
+- Tone: a recording 11 dB dull from 2 kHz up gets a presence and air lift sized to the gap and inside its
+  ceiling; boom under a voice does not make the analysis brighten it; bass in a beat is not treated as covering
+  a voice; a suggestion applied twice adds to the band that is there and stops at its ceiling.
 
 Two lab tools run recordings through the plugin outside a host, for measuring (and listening): `MUVoiceLab` (one
 tool at a time) and `MUMixLab` (a voice and a backing track through real instances, then Learn and balance).
 
+### Checked on real recordings (build 13)
+
+Five sessions recorded at the studio (raw vocal and beat for each: four male rap and melodic takes on different
+mics and in different rooms, one female vocal) were run through build 12 and build 13 with `MUMixLab`: a vocal
+preset, Learn and balance, then Analyse with every suggestion applied. The recordings are not in this
+repository. What was measured on the busiest 40 seconds of each (the five takes are in the same order in every
+cell, and all three columns are measured against the build 13 curve):
+
+| | as recorded | build 12 | build 13 |
+|---|---|---|---|
+| Distance of the voice's tone from the finished-vocal curve, 125 Hz to 8 kHz (dB) | 4.7, 2.7, 6.3, 6.8, 3.8 | 3.5, 2.9, 4.0, 4.9, 2.5 | 1.9, 2.9, 2.5, 4.2, 1.6 |
+| Low-mid weight: 200 to 500 Hz against 1 to 4 kHz (dB) | +6.9, +2.9, +3.6, -0.3, +9.0 | +6.8, +2.4, +5.1, +2.6, +7.4 | +5.7, +2.5, +2.9, +0.8, +6.0 |
+| How uneven the words are: spread of syllable levels (dB) | 3.4, 4.0, 5.8, 5.2, 4.4 | 2.4, 3.1, 3.8, 2.7, 3.8 | 2.1, 2.9, 3.6, 2.8, 3.5 |
+
+Build 12 left two of the five voices heavier in the low mids, against their presence, than they were recorded
+(+1.5 and +2.9 dB), which is the muddy result that was reported. What was found and changed:
+
+- The raw voices sit about where the published long-term spectrum of speech sits or below it: 6 to 17 dB under
+  the old target at their dullest point between 2 and 8 kHz. Build 12 answered with 2 to 4 dB. The lift is now
+  sized to each recording.
+- The old target itself asked for more presence than a mix adds (about 10 dB over a natural voice at 2 to 3
+  kHz). It is now the speech spectrum plus a normal mixing lift of 5 to 7 dB.
+- The "thin" rule looked at 120 to 250 Hz, where a woman's voice or a high male voice has nothing, and asked
+  for 3 to 6 dB at 180 Hz. It now looks at 180 to 380 Hz, and the automatic fit never adds weight under 500 Hz.
+- Collisions were being reported at 50 and 130 Hz between the beat and the voice. A voice is now only defended
+  between 250 Hz and 6 kHz.
+- A suggestion could replace a band that was doing another job when no band was free. It now joins a band of
+  its own kind or is left out, and nothing automatic takes the EQ past about 10 dB in one place.
+- On two takes a plosive or knock was the loudest thing in the recording, and the Vocal compressor used without
+  its sidechain filter held the next words down (the words came out less even than they went in). The Vocal
+  style now never listens below 110 Hz, and its leveller lets go a little sooner.
+- Gentle tuning left most real notes where they were sung: the centre of a note was a slow average that started
+  from the scoop into it, the correction for one note carried into the next, and Keep slides held the correction
+  off for a fifth of a second after the voice had landed. Held notes whose centre ends within 15 cents of the
+  key, natural settings, three sung takes: as sung 33 / 32 / 95 %, build 12 46 / 30 / 56 % (it made the third
+  take worse), build 13 55 / 42 / 90 %. Hard tune: 99 / 100 / 100 %.
+
+The finished-vocal curve is reasoned from published speech spectra and normal mixing practice. It was not
+measured from finished vocal stems, and it is the thing most worth checking by ear.
+
 What has not been done: none of this has been compared by ear, in a blind test, against the commercial plugins
-that were given as references, and no claim is made that it matches them.
+that were given as references, and no claim is made that it matches them. The measurements above say the voice
+is brighter, lighter in the low mids and more even than in build 12; they do not say it sounds good.
 
 ## What it does not do (yet)
 

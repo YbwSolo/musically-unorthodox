@@ -125,10 +125,22 @@ void Tuner::control (double seconds) noexcept
     {
         // The slow version of the pitch is the centre of the note; the difference from it is vibrato and slides.
         // A real move to another note (well away from the current one for 40 ms) starts a new centre straight away.
-        if (starting) { slowNote = note; sliding = 0.0f; farFrames = 0; recentCount = 0; }
-        if (target >= 0 && std::abs (note - (float) target) > 0.8f) { if (++farFrames >= 4) { slowNote = note; farFrames = 0; } }
+        // The centre of the note is the middle value (the median) of what has been sung since the note began, over
+        // at most the last 160 ms: about one cycle of vibrato. A median, because a note usually begins with a scoop
+        // up to it, and an average of the scoop and the note sits flat of the note for as long as the note lasts.
+        // (It used to be a slow average that started from the first moment of the note. On real singing most
+        // notes were over before it had caught up, so gentle tuning left them where they were sung.)
+        if (starting) { sliding = 0.0f; farFrames = 0; recentCount = 0; centreFrames = 0; }
+        if (target >= 0 && std::abs (note - (float) target) > 0.8f) { if (++farFrames >= 4) { centreFrames = 0; farFrames = 0; } }
         else farFrames = 0;
-        slowNote += (note - slowNote) * 0.08f;                                  // about 120 ms
+        centreHist[(size_t) (centreFrames % (int) centreHist.size())] = note;
+        ++centreFrames;
+        {
+            const int count = juce::jmin (centreFrames, (int) centreHist.size());
+            auto sorted = centreHist;
+            std::sort (sorted.begin(), sorted.begin() + count);
+            slowNote = (count & 1) ? sorted[(size_t) (count / 2)] : 0.5f * (sorted[(size_t) (count / 2 - 1)] + sorted[(size_t) (count / 2)]);
+        }
         // How fast the voice is travelling: how far it has moved in the last 180 ms. That is about one cycle of
         // vibrato, which ends where it began and so counts for little; a slide between notes, or the rise and
         // fall of a spoken line, ends somewhere else.
@@ -154,6 +166,7 @@ void Tuner::control (double seconds) noexcept
         }
         else switchFrames = 0;
         framesOnNote = candidate == target ? framesOnNote + 1 : 0;
+        if (candidate != target) centreFrames = 0;
         target = candidate;
 
         float off = (float) target - reference;
@@ -170,15 +183,27 @@ void Tuner::control (double seconds) noexcept
         // (Keep slides and Humanise belong to gentle tuning. Under 20 ms of speed they fade out, and at zero they
         // do nothing, so turning Speed all the way down always gives the full hard-tune effect.)
         const float gentle = juce::jlimit (0.0f, 1.0f, settings.speedMs / 20.0f);
-        const float moving = juce::jlimit (0.0f, 1.0f, (sliding - 3.0f) / 4.0f);
+        // The travelling speed looks back 180 ms, so it still reads "moving" for a fifth of a second after the voice
+        // has landed. On real singing that was most of the note, and the note stayed where it was sung. So a voice
+        // that is close to its note and has all but stopped (over the last 50 ms) counts as arrived.
+        const int size = (int) recent.size();
+        const float lately = recentCount > 5 ? std::abs (note - recent[(size_t) ((recentAt - 6 + size * 2) % size)]) / 0.05f : 0.0f;
+        const float near = 1.0f - juce::jlimit (0.0f, 1.0f, (std::abs (note - (float) target) - 0.3f) / 0.4f);
+        const float still = 1.0f - juce::jlimit (0.0f, 1.0f, (lately - 2.0f) / 4.0f);
+        const float moving = juce::jlimit (0.0f, 1.0f, (sliding - 3.0f) / 4.0f) * (1.0f - near * still);
         off *= 1.0f - settings.keepSlides * gentle * moving * moving * (3.0f - 2.0f * moving);
         const float wanted = juce::jlimit (-7.0f, 7.0f, off * settings.amount);
         // Humanise: once a note has been held for a fifth of a second it is corrected more slowly, so a long note
         // keeps its natural drift while short notes are still caught quickly
         const float held = juce::jlimit (0.0f, 1.0f, ((float) framesOnNote - 12.0f) / 25.0f);
         const float speed = settings.speedMs + settings.humanise * gentle * 160.0f * held;
+        // The correction a note needed says nothing about the next one. For the first 80 ms of a new note, whatever
+        // is left of the old correction is let go quickly (it happens while the voice is on the move, where it
+        // cannot be heard as a step); the new note's own correction then comes in at the speed asked for.
+        const bool lettingGo = framesOnNote < 8 && (wanted * shift < 0.0f || std::abs (wanted) < std::abs (shift));
+        const float pace = lettingGo ? juce::jmin (speed, 25.0f) : speed;
         if (starting || speed < 1.0f) shift = wanted;
-        else if (sure) shift += (wanted - shift) * (1.0f - std::exp (-10.0f / speed));
+        else if (sure) shift += (wanted - shift) * (1.0f - std::exp (-10.0f / pace));
         // an answer that cannot be trusted changes nothing: the correction in force carries on
     }
 

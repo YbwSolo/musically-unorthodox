@@ -37,6 +37,9 @@ public:
     virtual juce::String tamePeaks() = 0;           // bring the loud moments down; returns what was done
     virtual void turnOutputDown (float db) = 0;     // lower what leaves the track, after all its processing
     virtual float getStereoCorrelation() const = 0;
+    // Voices only, and only if nobody has set this track's EQ yet: shape the tone to what was measured (low cut,
+    // low-mid build-up, presence, air). Returns what was done, or nothing if it did not apply.
+    virtual juce::String fitToneIfUntouched() = 0;
 };
 
 // The key of the song as far as the session can tell, and where that came from.
