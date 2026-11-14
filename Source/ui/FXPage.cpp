@@ -37,12 +37,18 @@ FXPage::FXPage (MUProcessor& p, std::function<void (const juce::String&)> status
       hmVoicing (p, ids::hmVoicing, { "Third up", "Fifth up", "Third + fifth", "Octave up", "Octave down", "Third below", "Choir" }, ids::hmVoicing),
       hmMix (p, ids::hmMix, "Level", ids::hmMix), hmWidth (p, ids::hmWidth, "Width", ids::hmWidth), hmHumanise (p, ids::hmHumanise, "Humanise", ids::hmHumanise),
       psSemis (p, ids::psSemis, "Pitch", ids::psSemis), psCharacter (p, ids::psCharacter, "Voice size", ids::psCharacter), psMix (p, ids::psMix, "Mix", ids::psMix),
-      phAmount (p, ids::phAmount, "Amount", ids::phAmount), phTone (p, ids::phTone, "Width", ids::phTone), phDrive (p, ids::phDrive, "Drive", ids::phDrive),
+      phMode (p, ids::phMode, Phone::modeNames(), ids::phMode),
+      phAmount (p, ids::phAmount, "Amount", ids::phAmount), phTone (p, ids::phTone, "Width", ids::phTone), phDrive (p, ids::phDrive, "Drive", ids::phDrive), phNoise (p, ids::phNoise, "Noise", ids::phNoise),
+      lfNoiseType (p, ids::lfNoiseType, LoFi::noiseNames(), ids::lfNoiseType),
       lfCrush (p, ids::lfCrush, "Crush", ids::lfCrush), lfWobble (p, ids::lfWobble, "Wobble", ids::lfWobble), lfMix (p, ids::lfMix, "Mix", ids::lfMix),
-      mdType (p, ids::mdType, { "Chorus", "Flanger", "Phaser" }, ids::mdType),
-      mdRate (p, ids::mdRate, "Rate", ids::mdRate), mdDepth (p, ids::mdDepth, "Depth", ids::mdDepth), mdMix (p, ids::mdMix, "Mix", ids::mdMix),
+      lfDrive (p, ids::lfDrive, "Drive", ids::lfDrive), lfWear (p, ids::lfWear, "Wear", ids::lfWear), lfTone (p, ids::lfTone, "Tone", ids::lfTone), lfNoise (p, ids::lfNoise, "Noise", ids::lfNoise),
+      mdType (p, ids::mdType, Motion::typeNames(), ids::mdType), mdShape (p, ids::mdShape, Motion::shapeNames(), ids::mdShape),
+      mdSync (p, ids::mdSync, "Timed to tempo", "switch", ids::mdSync), mdNote (p, ids::mdNote, Motion::noteNames(), ids::mdNote),
+      mdRate (p, ids::mdRate, "Rate", ids::mdRate), mdDepth (p, ids::mdDepth, "Depth", ids::mdDepth), mdMix (p, ids::mdMix, "Mix", ids::mdMix), mdSmooth (p, ids::mdSmooth, "Smooth", ids::mdSmooth),
+      chMode (p, ids::chMode, Chop::modeNames(), ids::chMode),
       chRate (p, ids::chRate, { "1/4", "1/8", "1/8 triplet", "1/16", "1/32" }, ids::chRate),
-      chDepth (p, ids::chDepth, "Depth", ids::chDepth), chShape (p, ids::chShape, "Hardness", ids::chShape)
+      chDepth (p, ids::chDepth, "Depth", ids::chDepth), chShape (p, ids::chShape, "Hardness", ids::chShape),
+      chGate (p, ids::chGate, "Gate", ids::chGate), chSwing (p, ids::chSwing, "Swing", ids::chSwing), chLength (p, ids::chLength, "Steps", ids::chLength)
 {
     for (auto& m : fxModules())
     {
@@ -60,10 +66,10 @@ FXPage::FXPage (MUProcessor& p, std::function<void (const juce::String&)> status
           { &rvSize, &rvDiffusion, &rvEarly, &rvLowDecay, &rvModDepth, &rvModRate, &rvShimmer } },
         { { &hmVoicing }, { 760 }, { &hmMix, &hmWidth, &hmHumanise }, {} },
         { {}, {}, { &psSemis, &psCharacter, &psMix }, {} },
-        { {}, {}, { &phAmount, &phTone, &phDrive }, {} },
-        { {}, {}, { &lfCrush, &lfWobble, &lfMix }, {} },
-        { { &mdType }, { 260 }, { &mdRate, &mdDepth, &mdMix }, {} },
-        { { &chRate }, { 420 }, { &chDepth, &chShape }, {} } };
+        { { &phMode }, { 640 }, { &phAmount, &phTone, &phDrive, &phNoise }, {} },
+        { { &lfNoiseType }, { 190 }, { &lfDrive, &lfWobble, &lfCrush, &lfWear, &lfTone, &lfNoise, &lfMix }, {} },
+        { { &mdType, &mdSync, &mdNote, &mdShape }, { 520, 158, 110, 560 }, { &mdRate, &mdDepth, &mdMix, &mdSmooth }, {} },
+        { { &chMode, &chRate }, { 190, 420 }, { &chDepth, &chShape, &chGate, &chSwing, &chLength }, {} } };
     for (auto& m : ui)
     {
         for (auto* c : m.top) addChildComponent (c);
@@ -171,6 +177,12 @@ void FXPage::tick (float dt)
     dlNote.setAlpha (synced ? 1.0f : 0.35f);
     const int echoStyle = (int) proc.getParam (ids::dlStyle), echoPattern = (int) proc.getParam (ids::dlPattern);
     dlDrive.setDimmed (echoStyle != 1 && echoStyle != 2);          // only Tape and Analog saturate
+    {
+        const bool timedMotion = proc.getParam (ids::mdSync) > 0.5f, drawn = (int) proc.getParam (ids::mdShape) == 5, pattern = (int) proc.getParam (ids::chMode) == 1;
+        mdRate.setDimmed (timedMotion); mdNote.setAlpha (timedMotion ? 1.0f : 0.35f); mdSmooth.setDimmed (! drawn);
+        chGate.setDimmed (! pattern); chSwing.setDimmed (! pattern); chLength.setDimmed (! pattern);
+        lfNoiseType.setAlpha (proc.getParam (ids::lfNoise) > 0.5f ? 1.0f : 0.35f);
+    }
     dlWidth.setDimmed (echoPattern != 0);                          // only Ping-pong bounces
     const int space = (int) proc.getParam (ids::rvType);
     rvShimmer.setDimmed (space != Reverb::Shimmer);
@@ -552,16 +564,19 @@ void FXPage::drawPhone (juce::Graphics& g, juce::Rectangle<float> r)
     const auto plot = r.reduced (1.0f);
     drawFreqGrid (g, plot);
     const float tone = proc.getParam (ids::phTone) * 0.01f;
+    const int mode = (int) proc.getParam (ids::phMode);
     // the same filters the sound goes through, drawn from 20 Hz to 20 kHz
-    ColourBiquad hp1, hp2, lp1, lp2, nose;
     const double fs = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 48000.0;
-    const float lo = Phone::lowEdgeHz (tone), hi = Phone::highEdgeHz (tone);
-    hp1.highPass (lo, 0.5412f, fs); hp2.highPass (lo, 1.3066f, fs); lp1.lowPass (hi, 0.5412f, fs); lp2.lowPass (hi, 1.3066f, fs); nose.peak (std::sqrt (lo * hi) * 1.25f, 1.1f, 5.0f, fs);
+    const float lo = Phone::lowEdgeHz (tone, mode), hi = Phone::highEdgeHz (tone, mode);
+    Phone device;
+    PhoneSettings shown; shown.tone = tone; shown.mode = mode;
+    device.setSettings (shown);
+    device.prepare (fs, 1);
     juce::Path curve;
     for (int i = 0; i <= 200; ++i)
     {
         const float hz = 20.0f * std::pow (1000.0f, (float) i / 200.0f);
-        const float db = hp1.magnitudeDb (hz, fs) + hp2.magnitudeDb (hz, fs) + lp1.magnitudeDb (hz, fs) + lp2.magnitudeDb (hz, fs) + nose.magnitudeDb (hz, fs);
+        const float db = device.responseDb (hz);
         const float x = freqToX (hz, plot.getX(), plot.getWidth()), y = plot.getY() + plot.getHeight() * juce::jlimit (0.0f, 1.0f, (12.0f - db) / 60.0f);
         if (i == 0) curve.startNewSubPath (x, y); else curve.lineTo (x, y);
     }
@@ -572,7 +587,17 @@ void FXPage::drawPhone (juce::Graphics& g, juce::Rectangle<float> r)
     g.setColour (on ? yellow : textMute); g.strokePath (curve, juce::PathStrokeType (2.0f));
     g.restoreState();
     g.setFont (body (11.5f)); g.setColour (textDim);
-    g.drawText ("What gets through: " + hzString (lo) + " to " + hzString (hi) + ". Everything outside that is what a small speaker cannot play.", r.reduced (16.0f, 8.0f).removeFromTop (16.0f), juce::Justification::centredLeft, true);
+    static const char* const device_[] = { "Everything outside that is what a small speaker cannot play.", "That is what a phone line carries; the bump is the earpiece.",
+                                           "The two peaks are the horn ringing; pushed, its driver clips hard.", "A radio levels the voice so it breathes; the noise is static between stations.",
+                                           "A narrow band clipped hard, with a burst of noise as each phrase ends." };
+    g.drawText ("What gets through: " + hzString (lo) + " to " + hzString (hi) + ". " + device_[juce::jlimit (0, 4, mode)], r.reduced (16.0f, 8.0f).removeFromTop (16.0f), juce::Justification::centredLeft, true);
+    if (const float noise = proc.getParam (ids::phNoise); noise > 0.5f)
+    {
+        // the noise floor, at the level it sits against a voice peaking at the top of the plot
+        const float y = plot.getY() + plot.getHeight() * juce::jlimit (0.0f, 1.0f, (12.0f - (-70.0f + 40.0f * std::log10 (juce::jmax (1.0f, noise)))) / 60.0f);
+        g.setColour (textMute); g.drawHorizontalLine (juce::roundToInt (y), freqToX (lo, plot.getX(), plot.getWidth()), freqToX (hi, plot.getX(), plot.getWidth()));
+        g.setFont (body (10.5f)); g.drawText ("noise", juce::Rectangle<float> (freqToX (hi, plot.getX(), plot.getWidth()) + 6.0f, y - 7.0f, 60.0f, 14.0f), juce::Justification::centredLeft);
+    }
 }
 
 void FXPage::drawLoFi (juce::Graphics& g, juce::Rectangle<float> r)
@@ -612,41 +637,85 @@ void FXPage::drawLoFi (juce::Graphics& g, juce::Rectangle<float> r)
                 r.reduced (16.0f, 8.0f).removeFromTop (16.0f), juce::Justification::centredLeft, true);
     g.setColour (textMute);
     g.drawText ("grey: the sound going in    yellow: as the machine stores it", r.reduced (16.0f, 8.0f).removeFromBottom (14.0f), juce::Justification::centredRight);
+    {
+        // the chain, in the order the sound goes through it; a module is lit when it is doing something
+        struct Module { const char* name; bool used; };
+        const Module chain[] = { { "Drive", proc.getParam (ids::lfDrive) > 0.5f }, { "Wobble", wobble > 0.005f }, { "Crush", crush > 0.005f }, { "Wear", proc.getParam (ids::lfWear) > 0.5f },
+                                 { "Tone", proc.getParam (ids::lfTone) < 99.5f }, { "Noise", proc.getParam (ids::lfNoise) > 0.5f } };
+        auto row = r.reduced (16.0f, 8.0f).removeFromBottom (18.0f);
+        g.setFont (body (10.5f));
+        for (auto& m : chain)
+        {
+            const auto chip = row.removeFromLeft (58.0f); row.removeFromLeft (6.0f);
+            g.setColour (m.used && on ? yellow.withAlpha (0.16f) : control); g.fillRoundedRectangle (chip, 4.0f);
+            g.setColour (m.used ? (on ? yellow : textDim) : textMute); g.drawText (m.name, chip, juce::Justification::centred);
+        }
+    }
 }
+
+juce::Rectangle<float> FXPage::motionPlot() const { return well.toFloat().reduced (28.0f, 14.0f).withTrimmedTop (22.0f).withTrimmedBottom (20.0f); }
+juce::Rectangle<float> FXPage::chopPlot() const   { return well.toFloat().reduced (24.0f, 12.0f).withTrimmedTop (22.0f).withTrimmedBottom (16.0f); }
 
 void FXPage::drawMotion (juce::Graphics& g, juce::Rectangle<float> r)
 {
     drawWell (g, r);
     const bool on = proc.getParam (ids::mdOn) > 0.5f;
-    const int type = (int) proc.getParam (ids::mdType);
+    const int type = juce::jlimit (0, 5, (int) proc.getParam (ids::mdType));
     const float depth = proc.getParam (ids::mdDepth) * 0.01f;
-    const float phase = proc.getMotion().getPhase() * juce::MathConstants<float>::twoPi;
-    const auto plot = r.reduced (40.0f, 34.0f);
-    static const char* const what[] = { "Chorus: two copies of the sound whose timing drifts, one a little ahead on the left, one on the right.",
-                                        "Flanger: a very short echo that sweeps from nothing to a few milliseconds and back, with some of it fed round again.",
-                                        "Phaser: notches that sweep up and down through the tone. No echo, just a moving colour." };
+    MotionSettings shape;
+    shape.shape = (int) proc.getParam (ids::mdShape); shape.smooth = proc.getParam (ids::mdSmooth) * 0.01f;
+    for (int i = 0; i < MotionSettings::kPoints; ++i) shape.curve[(size_t) i] = proc.getParam (ids::mdPoint (i)) * 0.01f;
+    const bool drawn = shape.shape == 5, timed = proc.getParam (ids::mdSync) > 0.5f;
+    const auto plot = motionPlot();
+    static const char* const what[] = { "Chorus: copies of the sound whose timing drifts. The line is how far the drift has gone.",
+                                        "Flanger: a very short echo swept between nothing and a few milliseconds. The line is its length.",
+                                        "Phaser: notches swept up and down through the tone. The line is where they are.",
+                                        "Filter: the top end closing and opening. Top of the plot is fully open.",
+                                        "Pan: the sound moving between the sides. Top of the plot is right, bottom is left.",
+                                        "Volume: the level pushed down and let back up. Top of the plot is full level." };
     g.setFont (body (11.5f)); g.setColour (textDim);
-    g.drawText (what[juce::jlimit (0, 2, type)], r.reduced (16.0f, 8.0f).removeFromTop (16.0f), juce::Justification::centredLeft, true);
+    g.drawText (what[type], r.reduced (16.0f, 8.0f).removeFromTop (16.0f), juce::Justification::centredLeft, true);
 
-    // two lanes, left and right; the marker on each shows where its sweep is right now
-    static const char* const loLabel[] = { "10 ms", "0.3 ms", "300 Hz" }, * const hiLabel[] = { "22 ms", "5 ms", "3 kHz" };
-    for (int c = 0; c < 2; ++c)
+    // one cycle of the movement, left to right
+    g.setColour (line);
+    for (int q = 0; q <= 4; ++q) g.fillRect (plot.getX() + plot.getWidth() * (float) q / 4.0f, plot.getY(), 1.0f, plot.getHeight());
+    g.fillRect (plot.getX(), plot.getCentreY(), plot.getWidth(), 1.0f);
+    // how far the movement reaches: all of the plot at full Depth, a band round the middle at less
+    auto yFor = [&] (float value) { return plot.getBottom() - plot.getHeight() * (0.5f + (value - 0.5f) * (0.12f + 0.88f * depth)); };
+    juce::Path curve;
+    for (int i = 0; i <= 480; ++i)
     {
-        const float y = plot.getY() + plot.getHeight() * (c == 0 ? 0.33f : 0.67f);
-        g.setColour (control); g.fillRoundedRectangle (plot.getX(), y - 3.0f, plot.getWidth(), 6.0f, 3.0f);
-        const float angle = phase + (c == 1 ? juce::MathConstants<float>::halfPi : 0.0f);
-        const float pos = 0.5f + 0.5f * std::sin (angle) * (0.15f + 0.85f * depth);
-        const float lo = 0.5f - 0.5f * (0.15f + 0.85f * depth), hi = 0.5f + 0.5f * (0.15f + 0.85f * depth);
-        g.setColour (yellow.withAlpha (on ? 0.22f : 0.08f));
-        g.fillRoundedRectangle (plot.getX() + plot.getWidth() * lo, y - 3.0f, plot.getWidth() * (hi - lo), 6.0f, 3.0f);
-        g.setColour (on ? yellow : textMute);
-        g.fillEllipse (juce::Rectangle<float> (18.0f, 18.0f).withCentre ({ plot.getX() + plot.getWidth() * (on ? pos : 0.5f), y }));
-        g.setFont (body (11.0f)); g.setColour (textMute);
-        g.drawText (c == 0 ? "left" : "right", juce::Rectangle<float> (plot.getX() - 34.0f, y - 8.0f, 30.0f, 16.0f), juce::Justification::centredLeft);
+        const float f = (float) i / 480.0f;
+        const float x = plot.getX() + plot.getWidth() * f, y = yFor (Motion::valueAt (shape, juce::jmin (f, 0.9999f)));
+        if (i == 0) curve.startNewSubPath (x, y); else curve.lineTo (x, y);
+    }
+    auto fill = curve;
+    fill.lineTo (plot.getRight(), plot.getBottom()); fill.lineTo (plot.getX(), plot.getBottom()); fill.closeSubPath();
+    g.setColour (yellow.withAlpha (on ? 0.12f : 0.04f)); g.fillPath (fill);
+    g.setColour (on ? yellow : textMute); g.strokePath (curve, juce::PathStrokeType (2.0f));
+    if (drawn)
+    {
+        // the sixteen points that can be dragged
+        for (int i = 0; i < MotionSettings::kPoints; ++i)
+        {
+            const float x = plot.getX() + plot.getWidth() * (float) i / (float) MotionSettings::kPoints, y = yFor (shape.curve[(size_t) i]);
+            g.setColour (black); g.fillEllipse (juce::Rectangle<float> (11.0f, 11.0f).withCentre ({ x, y }));
+            g.setColour (on ? yellow : textDim); g.drawEllipse (juce::Rectangle<float> (11.0f, 11.0f).withCentre ({ x, y }), 2.0f);
+        }
+    }
+    if (on)
+    {
+        // where the movement is now
+        const float phase = proc.getMotion().getPhase();
+        const float x = plot.getX() + plot.getWidth() * phase;
+        g.setColour (text.withAlpha (0.5f)); g.fillRect (x, plot.getY(), 1.0f, plot.getHeight());
+        g.setColour (text); g.fillEllipse (juce::Rectangle<float> (9.0f, 9.0f).withCentre ({ x, yFor (Motion::valueAt (shape, phase)) }));
     }
     g.setFont (body (10.5f)); g.setColour (textMute);
-    g.drawText (loLabel[juce::jlimit (0, 2, type)], plot.withTop (plot.getBottom() - 12.0f), juce::Justification::centredLeft);
-    g.drawText (hiLabel[juce::jlimit (0, 2, type)], plot.withTop (plot.getBottom() - 12.0f), juce::Justification::centredRight);
+    const juce::String length = timed ? "One cycle: " + Motion::noteNames()[juce::jlimit (0, 6, (int) proc.getParam (ids::mdNote))] + ", locked to the song"
+                                      : "One cycle: " + juce::String (1.0f / juce::jmax (0.02f, proc.getParam (ids::mdRate)), 2) + " s";
+    g.drawText (length, plot.withY (plot.getBottom() + 4.0f).withHeight (14.0f), juce::Justification::centredLeft);
+    if (drawn) g.drawText ("Drag across the plot to draw the curve", plot.withY (plot.getBottom() + 4.0f).withHeight (14.0f), juce::Justification::centredRight);
 }
 
 void FXPage::drawChop (juce::Graphics& g, juce::Rectangle<float> r)
@@ -655,8 +724,42 @@ void FXPage::drawChop (juce::Graphics& g, juce::Rectangle<float> r)
     const bool on = proc.getParam (ids::chOn) > 0.5f;
     const int rate = (int) proc.getParam (ids::chRate);
     const float depth = proc.getParam (ids::chDepth) * 0.01f, shape = proc.getParam (ids::chShape) * 0.01f;
-    const auto plot = r.reduced (24.0f, 12.0f).withTrimmedTop (22.0f).withTrimmedBottom (16.0f);
+    const auto plot = chopPlot();
     const float beats = Chop::rateBeats (rate);
+    const float stepMs = Reverb::beatMs (proc.getHostBpm()) * beats;
+    g.setFont (body (11.5f)); g.setColour (textDim);
+    if ((int) proc.getParam (ids::chMode) == 1)
+    {
+        // the pattern: sixteen steps, the ones past the chosen length greyed out
+        ChopSettings pattern;
+        pattern.length = juce::roundToInt (proc.getParam (ids::chLength)); pattern.gate = proc.getParam (ids::chGate) * 0.01f; pattern.swing = proc.getParam (ids::chSwing) * 0.01f;
+        for (int i = 0; i < ChopSettings::kSteps; ++i) pattern.steps[(size_t) i] = proc.getParam (ids::chStep (i)) * 0.01f;
+        g.drawText ("Sixteen steps, each a " + Chop::rateNames()[rate] + " note (" + juce::String (juce::roundToInt (stepMs)) + " ms at " + juce::String (juce::roundToInt (proc.getHostBpm()))
+                    + " BPM). Click a step to switch it, drag up or down for its level.", r.reduced (16.0f, 8.0f).removeFromTop (16.0f), juce::Justification::centredLeft, true);
+        const float w = plot.getWidth() / (float) ChopSettings::kSteps;
+        const float now = proc.getChop().getPhase() * (float) pattern.length;
+        for (int i = 0; i < ChopSettings::kSteps; ++i)
+        {
+            const auto cell = juce::Rectangle<float> (plot.getX() + w * (float) i, plot.getY(), w, plot.getHeight()).reduced (2.0f, 0.0f);
+            const bool used = i < pattern.length, playing = on && used && (int) now == i;
+            g.setColour (control.withAlpha (used ? 1.0f : 0.4f)); g.fillRoundedRectangle (cell, 3.0f);
+            const float level = pattern.steps[(size_t) i];
+            if (level > 0.005f)
+            {
+                // the lit part is as wide as the gate leaves the step open
+                auto lit = cell.withTop (cell.getBottom() - cell.getHeight() * level).withWidth (cell.getWidth() * juce::jlimit (0.1f, 1.0f, pattern.gate));
+                g.setColour (! used ? textMute.withAlpha (0.35f) : playing ? yellow : on ? yellow.withAlpha (0.55f) : textMute);
+                g.fillRoundedRectangle (lit, 3.0f);
+            }
+            if (playing) { g.setColour (text); g.fillRect (cell.getX(), cell.getBottom() + 3.0f, cell.getWidth(), 2.0f); }
+            if (i % 4 == 0)
+            {
+                g.setColour (textMute); g.setFont (body (10.0f));
+                g.drawText (juce::String (i + 1), juce::Rectangle<float> (cell.getX(), plot.getBottom() + 6.0f, 30.0f, 12.0f), juce::Justification::centredLeft);
+            }
+        }
+        return;
+    }
     const float steps = 4.0f / beats;                          // one bar of four beats
     // beat lines, then the level across one bar
     g.setFont (body (10.0f));
@@ -681,14 +784,63 @@ void FXPage::drawChop (juce::Graphics& g, juce::Rectangle<float> r)
     g.setColour (yellow.withAlpha (on ? 0.22f : 0.06f)); g.fillPath (level);
     g.setColour (on ? yellow : textMute); g.strokePath (level, juce::PathStrokeType (1.5f));
     g.setFont (body (11.5f)); g.setColour (textDim);
-    const float stepMs = Reverb::beatMs (proc.getHostBpm()) * beats;
-    g.drawText ("One bar. Each step is a " + Chop::rateNames()[rate] + " note, " + juce::String (juce::roundToInt (stepMs)) + " ms at " + juce::String (juce::roundToInt (proc.getHostBpm())) + " BPM: on for the first half, down for the second.",
-                r.reduced (16.0f, 8.0f).removeFromTop (16.0f), juce::Justification::centredLeft, true);
+    g.drawText ("One bar. Each step is a " + Chop::rateNames()[rate] + " note, " + juce::String (juce::roundToInt (stepMs)) + " ms at " + juce::String (juce::roundToInt (proc.getHostBpm()))
+                + " BPM: on for half of it, off for the other half. Pattern gives every step its own level.", r.reduced (16.0f, 8.0f).removeFromTop (16.0f), juce::Justification::centredLeft, true);
+}
+
+// Drawing in the display. Returns true if the pointer was used.
+bool FXPage::drawAt (juce::Point<int> where, bool firstTouch)
+{
+    const auto p = where.toFloat();
+    if (firstTouch)
+    {
+        drawKind = 0;
+        if (selected == 7 && (int) proc.getParam (ids::mdShape) == 5 && motionPlot().expanded (8.0f).contains (p)) drawKind = 1;
+        else if (selected == 8 && (int) proc.getParam (ids::chMode) == 1 && chopPlot().expanded (2.0f, 8.0f).contains (p)) drawKind = 2;
+        if (drawKind == 0) return false;
+    }
+    if (drawKind == 1)
+    {
+        const auto plot = motionPlot();
+        const float depth = 0.12f + 0.88f * proc.getParam (ids::mdDepth) * 0.01f;
+        const int point = juce::jlimit (0, MotionSettings::kPoints - 1, juce::roundToInt ((p.x - plot.getX()) / plot.getWidth() * (float) MotionSettings::kPoints));
+        const float value = 100.0f * juce::jlimit (0.0f, 1.0f, 0.5f + ((plot.getBottom() - p.y) / plot.getHeight() - 0.5f) / depth);
+        if (firstTouch || drawLast < 0) { drawLast = point; drawLastValue = value; }
+        // every point between the last one touched and this one, on a line between the two
+        const int stepBy = point >= drawLast ? 1 : -1, count = std::abs (point - drawLast);
+        for (int k = 0; k <= count; ++k)
+            proc.setParam (ids::mdPoint (drawLast + stepBy * k), count == 0 ? value : drawLastValue + (value - drawLastValue) * (float) k / (float) count);
+        drawLast = point; drawLastValue = value;
+        repaint (well);
+        return true;
+    }
+    if (drawKind == 2)
+    {
+        const auto plot = chopPlot();
+        const int step = juce::jlimit (0, ChopSettings::kSteps - 1, (int) ((p.x - plot.getX()) / plot.getWidth() * (float) ChopSettings::kSteps));
+        const float height = 100.0f * juce::jlimit (0.0f, 1.0f, (plot.getBottom() - p.y) / plot.getHeight());
+        if (firstTouch)
+        {
+            // a click on the lit part of a step clears it and goes on clearing; anywhere else sets the level to where the pointer is
+            const float have = proc.getParam (ids::chStep (step));
+            drawClearing = have > 0.5f && height < have + 6.0f;
+            dragFrom = where;
+        }
+        if (drawClearing && std::abs (where.y - dragFrom.y) > 5) drawClearing = false;      // dragging up or down sets a level after all
+        const float level = drawClearing ? 0.0f : juce::jmax (8.0f, height > 92.0f ? 100.0f : height);
+        if (firstTouch || drawLast < 0) drawLast = step;
+        for (int k = juce::jmin (drawLast, step); k <= juce::jmax (drawLast, step); ++k) proc.setParam (ids::chStep (k), level);
+        drawLast = step;
+        repaint (well);
+        return true;
+    }
+    return false;
 }
 
 //==================================================================== interaction and layout
 void FXPage::mouseDown (const juce::MouseEvent& e)
 {
+    if (drawAt (e.getPosition(), true)) { dragTool = -1; return; }
     for (int i = 0; i < (int) fxModules().size(); ++i)
         if (rowBounds (i).contains (e.getPosition()))
         {
@@ -702,6 +854,7 @@ void FXPage::mouseDown (const juce::MouseEvent& e)
 
 void FXPage::mouseDrag (const juce::MouseEvent& e)
 {
+    if (drawKind != 0) { drawAt (e.getPosition(), false); return; }
     if (dragTool < 0) return;
     if (! dragging && std::abs (e.getPosition().y - dragFrom.y) < 6) return;
     dragging = true;
@@ -717,6 +870,7 @@ void FXPage::mouseDrag (const juce::MouseEvent& e)
 
 void FXPage::mouseUp (const juce::MouseEvent&)
 {
+    drawKind = 0; drawLast = -1;
     if (dragging)
     {
         juce::StringArray names;

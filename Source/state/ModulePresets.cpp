@@ -44,22 +44,39 @@ ModulePreset shift (const juce::String& name, const juce::String& blurb, float s
 {
     return { "shift", name, blurb, { { ids::psOn, 1 }, { ids::psSemis, semis }, { ids::psCharacter, character }, { ids::psMix, mix } } };
 }
-ModulePreset phone (const juce::String& name, const juce::String& blurb, float width, float drive, float amount = 100)
+// mode: 0 small speaker, 1 telephone, 2 megaphone, 3 radio, 4 walkie-talkie
+ModulePreset phone (const juce::String& name, const juce::String& blurb, float width, float drive, float amount = 100, int mode = 0, float noise = 0)
 {
-    return { "phone", name, blurb, { { ids::phOn, 1 }, { ids::phTone, width }, { ids::phDrive, drive }, { ids::phAmount, amount } } };
+    return { "phone", name, blurb, { { ids::phOn, 1 }, { ids::phTone, width }, { ids::phDrive, drive }, { ids::phAmount, amount }, { ids::phMode, (float) mode }, { ids::phNoise, noise } } };
 }
-ModulePreset lofi (const juce::String& name, const juce::String& blurb, float crush, float wobble, float mix = 100)
+// noiseType: 0 vinyl, 1 tape
+ModulePreset lofi (const juce::String& name, const juce::String& blurb, float crush, float wobble, float mix = 100,
+                   float drive = 0, float noise = 0, int noiseType = 0, float wear = 0, float tone = 100)
 {
-    return { "lofi", name, blurb, { { ids::lfOn, 1 }, { ids::lfCrush, crush }, { ids::lfWobble, wobble }, { ids::lfMix, mix } } };
+    return { "lofi", name, blurb, { { ids::lfOn, 1 }, { ids::lfCrush, crush }, { ids::lfWobble, wobble }, { ids::lfMix, mix }, { ids::lfDrive, drive },
+                                    { ids::lfNoise, noise }, { ids::lfNoiseType, (float) noiseType }, { ids::lfWear, wear }, { ids::lfTone, tone } } };
 }
-ModulePreset motion (const juce::String& name, const juce::String& blurb, int type, float rate, float depth, float mix)
+// type: 0 chorus, 1 flanger, 2 phaser, 3 filter, 4 pan, 5 volume.  shape: 0 sine, 1 triangle, 2 ramp up, 3 ramp down, 4 square, 5 drawn.
+// note (when timed to the tempo): 0 = 4 bars, 1 = 2 bars, 2 = 1 bar, 3 = 1/2, 4 = 1/4, 5 = 1/8, 6 = 1/16.
+ModulePreset motion (const juce::String& name, const juce::String& blurb, int type, float rate, float depth, float mix,
+                     int shape = 0, int note = -1, float smooth = 100, std::vector<float> curve = {})
 {
-    return { "motion", name, blurb, { { ids::mdOn, 1 }, { ids::mdType, (float) type }, { ids::mdRate, rate }, { ids::mdDepth, depth }, { ids::mdMix, mix } } };
+    ModulePreset p { "motion", name, blurb, { { ids::mdOn, 1 }, { ids::mdType, (float) type }, { ids::mdRate, rate }, { ids::mdDepth, depth }, { ids::mdMix, mix },
+                                              { ids::mdShape, (float) shape }, { ids::mdSync, note >= 0 ? 1.0f : 0.0f }, { ids::mdNote, (float) (note >= 0 ? note : 2) }, { ids::mdSmooth, smooth } } };
+    for (int i = 0; i < 16; ++i)       // every preset sets the whole curve, so nothing is left over from the one before
+        p.values.push_back ({ ids::mdPoint (i), i < (int) curve.size() ? curve[(size_t) i] : std::round (1000.0f * std::pow ((float) i / 15.0f, 0.6f)) / 10.0f });
+    return p;
 }
-// rate: 0 = 1/4, 1 = 1/8, 2 = 1/8 triplet, 3 = 1/16, 4 = 1/32
-ModulePreset chop (const juce::String& name, const juce::String& blurb, int rate, float depth, float hardness)
+// rate: 0 = 1/4, 1 = 1/8, 2 = 1/8 triplet, 3 = 1/16, 4 = 1/32.  With steps given it is a pattern; without, the plain pulse.
+ModulePreset chop (const juce::String& name, const juce::String& blurb, int rate, float depth, float hardness,
+                   std::vector<float> steps = {}, float gate = 100, float swing = 0)
 {
-    return { "chop", name, blurb, { { ids::chOn, 1 }, { ids::chRate, (float) rate }, { ids::chDepth, depth }, { ids::chShape, hardness } } };
+    static const float standard[16] = { 100, 100, 0, 100, 100, 0, 100, 0, 100, 100, 0, 100, 100, 0, 100, 60 };
+    ModulePreset p { "chop", name, blurb, { { ids::chOn, 1 }, { ids::chRate, (float) rate }, { ids::chDepth, depth }, { ids::chShape, hardness },
+                                            { ids::chMode, steps.empty() ? 0.0f : 1.0f }, { ids::chLength, (float) (steps.empty() ? 16 : (int) steps.size()) },
+                                            { ids::chGate, gate }, { ids::chSwing, swing } } };
+    for (int i = 0; i < 16; ++i) p.values.push_back ({ ids::chStep (i), steps.empty() ? standard[i] : steps[(size_t) (i % (int) steps.size())] });
+    return p;
 }
 
 V join (std::initializer_list<V> parts)
@@ -84,10 +101,10 @@ const std::vector<FxModule>& fxModules()
         { "reverb",  "Reverb",  ids::rvOn,  "Nine spaces from five different engines." },
         { "harmony", "Harmony", ids::hmOn,  "Extra voices singing along on other notes of the key." },
         { "shift",   "Shift",   ids::psOn,  "The whole voice moved up or down, as a layer or on its own." },
-        { "phone",   "Phone",   ids::phOn,  "The voice through a small speaker: telephone, megaphone, radio." },
-        { "lofi",    "Lo-fi",   ids::lfOn,  "Grit and wobble from old samplers and worn tape." },
-        { "motion",  "Motion",  ids::mdOn,  "Chorus, flanger and phaser: width, whoosh and swirl." },
-        { "chop",    "Chop",    ids::chOn,  "Cuts the sound in and out in time with the song." } };
+        { "phone",   "Phone",   ids::phOn,  "The voice through a telephone, a megaphone, a radio or a walkie-talkie, with its noise." },
+        { "lofi",    "Lo-fi",   ids::lfOn,  "Old machines: drive, wobble, crush, wear, a dull top and noise." },
+        { "motion",  "Motion",  ids::mdOn,  "Chorus, flanger, phaser, filter, pan or volume, moved by a wave or a curve you draw." },
+        { "chop",    "Chop",    ids::chOn,  "Cuts the sound in time with the song: an even pulse or a sixteen-step pattern." } };
     return m;
 }
 
@@ -182,22 +199,29 @@ const std::vector<ModulePreset>& modulePresets()
         shift ("Fifth layer", "A copy a fifth higher under the lead, a hollow, eerie double.", 7, 0, 30),
 
         // ---- Phone
-        phone ("Telephone", "Narrow and boxy with a little crunch, like a call.", 25, 30),
-        phone ("Half phone", "The phone sound mixed half and half with the clean voice.", 35, 30, 55),
-        phone ("Megaphone", "Wider and pushed hard, like shouting through a megaphone.", 55, 75),
-        phone ("Old radio", "A small radio speaker: thin, a bit distorted.", 40, 50),
-        phone ("Walkie-talkie", "As narrow as it goes and heavily overdriven.", 10, 90),
+        phone ("Telephone", "A call on a land line: 300 to 3400 Hz, a little crunch, and the hiss of the line.", 40, 30, 100, 1, 25),
+        phone ("Half phone", "The telephone mixed half and half with the clean voice.", 40, 30, 55, 1, 0),
+        phone ("Bad line", "A poor connection: narrower, pushed harder, noisy.", 20, 55, 100, 1, 60),
+        phone ("Megaphone", "Two horn resonances and a driver that clips, like shouting through a megaphone.", 50, 70, 100, 2, 10),
+        phone ("Megaphone, flat out", "The megaphone with everything pushed: harsh and loud.", 30, 95, 100, 2, 20),
+        phone ("Old radio", "A small radio: levelled so it breathes, with static crackling behind it.", 40, 45, 100, 3, 45),
+        phone ("Radio, far away", "A weak station: thin, fading in and out, half lost in the static.", 20, 55, 100, 3, 80),
+        phone ("Walkie-talkie", "Narrow and clipped hard, with a burst of noise as each phrase ends.", 40, 80, 100, 4, 50),
+        phone ("Small speaker", "The plain small-speaker sound: a band-pass and soft overdrive, no noise.", 40, 35),
         phone ("Laptop speaker", "Just the bass and the top missing, hardly any distortion.", 85, 10),
 
-        // ---- Lo-fi
-        lofi ("Worn tape", "Pitch that drifts and a soft top, like a tape played too many times.", 15, 55),
-        lofi ("Dusty", "A little grit and a little drift.", 30, 30),
-        lofi ("Old sampler", "The crunch of an early sampler, steady in pitch.", 55, 0),
+        // ---- Lo-fi                                                                  crush wobble mix drive noise type wear tone
+        lofi ("Worn tape", "A tape played too many times: the pitch drifts, the level sags and drops out, the top is gone.", 10, 55, 100, 30, 30, 1, 45, 60),
+        lofi ("Cassette", "Warm saturation, a little wow, a soft top and tape hiss.", 5, 35, 100, 40, 35, 1, 25, 55),
+        lofi ("Dusty record", "Crackle and rumble under a slightly dulled sound.", 15, 20, 100, 15, 55, 0, 10, 70),
+        lofi ("Old sampler", "The crunch of an early sampler, steady in pitch.", 55, 0, 100, 20, 0, 0, 0, 80),
         lofi ("Crushed", "Heavy digital grit.", 85, 0),
         lofi ("Seasick", "As much pitch drift as it will give, with the tone left alone.", 10, 100),
+        lofi ("Dropouts", "The sound keeps falling away for a moment, like a damaged tape.", 0, 25, 100, 10, 15, 1, 90, 75),
+        lofi ("Warm drive", "Only the saturation: thicker and a touch darker, steady and clean of noise.", 0, 0, 100, 55, 0, 0, 0, 85),
         lofi ("Subtle grit", "A little crunch blended under the clean sound.", 35, 10, 40),
 
-        // ---- Motion
+        // ---- Motion                                                                  type rate depth mix shape note smooth curve
         motion ("Soft chorus", "Gentle width and shimmer.", 0, 0.5f, 40, 40),
         motion ("Wide chorus", "A deeper, more obvious chorus.", 0, 0.8f, 70, 60),
         motion ("Vibrato shimmer", "Fast, shallow movement: a nervous shimmer.", 0, 5.0f, 20, 100),
@@ -205,6 +229,15 @@ const std::vector<ModulePreset>& modulePresets()
         motion ("Jet", "The full jet-plane whoosh.", 1, 0.1f, 100, 80),
         motion ("Swirl", "A slow phaser swirl.", 2, 0.4f, 60, 60),
         motion ("Fast phaser", "A quick, watery phaser.", 2, 2.5f, 40, 50),
+        // movement timed to the song, and movement you draw
+        motion ("Sidechain pump", "The level ducks on every beat and swells back, like a kick pumping a compressor.", 5, 0.6f, 70, 100, 2, 4),
+        motion ("Drawn pump", "The same idea with the curve drawn by hand: change the points to change the groove.", 5, 0.6f, 85, 100, 5, 3, 100),
+        motion ("Tremolo", "A steady, fairly fast rise and fall in level.", 5, 5.5f, 50, 100),
+        motion ("Slow filter sweep", "The top end closes and opens over two bars.", 3, 0.6f, 70, 100, 1, 1),
+        motion ("Filter steps", "The filter jumps between sixteen settings in a bar: a sample-and-hold wah.", 3, 0.6f, 85, 100, 5, 2, 0,
+                { 90, 30, 60, 10, 75, 45, 100, 20, 55, 85, 15, 70, 35, 95, 5, 65 }),
+        motion ("Auto-pan", "The sound drifts from side to side once a bar.", 4, 0.6f, 80, 100, 0, 2),
+        motion ("Ping-pong pan", "Hard left, hard right, changing every beat.", 4, 0.6f, 100, 100, 4, 3),
 
         // ---- Chop
         chop ("Sixteenth gate", "Hard chops four to the beat: the trance-gate sound.", 3, 100, 80),
@@ -213,6 +246,13 @@ const std::vector<ModulePreset>& modulePresets()
         chop ("Stutter", "Very fast chops: a machine-gun stutter.", 4, 100, 90),
         chop ("Soft tremolo", "A gentle rise and fall instead of a hard cut.", 3, 50, 0),
         chop ("Quarter pump", "The level dips between beats, like a pumping sidechain.", 0, 70, 15),
+        // patterns: sixteen steps, each with its own level
+        chop ("Trance gate", "A sixteen-step pattern, the rhythm trance pads are chopped into.", 3, 100, 85, { 100, 100, 0, 100, 100, 0, 100, 0, 100, 100, 0, 100, 100, 0, 100, 60 }),
+        chop ("Offbeat", "Silent on the beat, open between: the sound jumps to the offbeats.", 1, 100, 80, { 0, 100, 0, 100, 0, 100, 0, 100 }),
+        chop ("Dotted rhythm", "Three, three, two: a syncopated push.", 3, 100, 85, { 100, 0, 0, 100, 0, 0, 100, 0 }, 80),
+        chop ("Stutter build", "One hit, then two, then a run: a bar that builds.", 3, 100, 90, { 100, 0, 0, 0, 100, 0, 100, 0, 100, 100, 0, 100, 100, 100, 100, 100 }, 60),
+        chop ("Swung gate", "Loud and soft steps with every second one late: a shuffle.", 3, 100, 70, { 100, 50, 100, 50, 100, 50, 100, 50 }, 70, 55),
+        chop ("Rising steps", "Each step louder than the last over two beats, then again.", 3, 100, 60, { 10, 25, 40, 55, 70, 80, 90, 100 }),
     };
     return p;
 }

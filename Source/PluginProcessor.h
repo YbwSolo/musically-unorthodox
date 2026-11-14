@@ -393,6 +393,9 @@ private:
     AF pLfOn = nullptr, pLfCrush = nullptr, pLfWobble = nullptr, pLfMix = nullptr;
     AF pMdOn = nullptr, pMdType = nullptr, pMdRate = nullptr, pMdDepth = nullptr, pMdMix = nullptr;
     AF pChOn = nullptr, pChRate = nullptr, pChDepth = nullptr, pChShape = nullptr;
+    AF pPhMode = nullptr, pPhNoise = nullptr, pLfDrive = nullptr, pLfNoise = nullptr, pLfNoiseType = nullptr, pLfWear = nullptr, pLfTone = nullptr;
+    AF pMdShape = nullptr, pMdSmooth = nullptr, pMdSync = nullptr, pMdNote = nullptr, pChMode = nullptr, pChLength = nullptr, pChGate = nullptr, pChSwing = nullptr;
+    std::array<AF, 16> pMdPoint {}, pChStep {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MUProcessor)
 };

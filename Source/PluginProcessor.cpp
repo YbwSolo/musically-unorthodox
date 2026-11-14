@@ -45,6 +45,11 @@ MUProcessor::MUProcessor()
     pLfOn = p (ids::lfOn); pLfCrush = p (ids::lfCrush); pLfWobble = p (ids::lfWobble); pLfMix = p (ids::lfMix);
     pMdOn = p (ids::mdOn); pMdType = p (ids::mdType); pMdRate = p (ids::mdRate); pMdDepth = p (ids::mdDepth); pMdMix = p (ids::mdMix);
     pChOn = p (ids::chOn); pChRate = p (ids::chRate); pChDepth = p (ids::chDepth); pChShape = p (ids::chShape);
+    pPhMode = p (ids::phMode); pPhNoise = p (ids::phNoise);
+    pLfDrive = p (ids::lfDrive); pLfNoise = p (ids::lfNoise); pLfNoiseType = p (ids::lfNoiseType); pLfWear = p (ids::lfWear); pLfTone = p (ids::lfTone);
+    pMdShape = p (ids::mdShape); pMdSmooth = p (ids::mdSmooth); pMdSync = p (ids::mdSync); pMdNote = p (ids::mdNote);
+    pChMode = p (ids::chMode); pChLength = p (ids::chLength); pChGate = p (ids::chGate); pChSwing = p (ids::chSwing);
+    for (int i = 0; i < 16; ++i) { pMdPoint[(size_t) i] = p (ids::mdPoint (i)); pChStep[(size_t) i] = p (ids::chStep (i)); }
     tuner.setGraph (&graph);
 
     // A/B covers everything that shapes the sound; routing and session balance stay put.
@@ -220,15 +225,21 @@ void MUProcessor::pullParameters()
 
     PhoneSettings ph;
     ph.enabled = pPhOn->load() > 0.5f; ph.amount = pPhAmount->load() * 0.01f; ph.tone = pPhTone->load() * 0.01f; ph.drive = pPhDrive->load() * 0.01f;
+    ph.mode = (int) pPhMode->load(); ph.noise = pPhNoise->load() * 0.01f;
     phone.setSettings (ph);
     LoFiSettings lf;
     lf.enabled = pLfOn->load() > 0.5f; lf.crush = pLfCrush->load() * 0.01f; lf.wobble = pLfWobble->load() * 0.01f; lf.mix = pLfMix->load() * 0.01f;
+    lf.drive = pLfDrive->load() * 0.01f; lf.noise = pLfNoise->load() * 0.01f; lf.noiseType = (int) pLfNoiseType->load(); lf.wear = pLfWear->load() * 0.01f; lf.tone = pLfTone->load() * 0.01f;
     lofi.setSettings (lf);
     MotionSettings md;
     md.enabled = pMdOn->load() > 0.5f; md.type = (int) pMdType->load(); md.rateHz = pMdRate->load(); md.depth = pMdDepth->load() * 0.01f; md.mix = pMdMix->load() * 0.01f;
+    md.shape = (int) pMdShape->load(); md.smooth = pMdSmooth->load() * 0.01f; md.sync = pMdSync->load() > 0.5f; md.note = (int) pMdNote->load(); md.bpm = rv.bpm;
+    for (int i = 0; i < 16; ++i) md.curve[(size_t) i] = pMdPoint[(size_t) i]->load() * 0.01f;
     motion.setSettings (md);
     ChopSettings cs;
     cs.enabled = pChOn->load() > 0.5f; cs.rate = (int) pChRate->load(); cs.depth = pChDepth->load() * 0.01f; cs.shape = pChShape->load() * 0.01f; cs.bpm = rv.bpm;
+    cs.mode = (int) pChMode->load(); cs.length = juce::roundToInt (pChLength->load()); cs.gate = pChGate->load() * 0.01f; cs.swing = pChSwing->load() * 0.01f;
+    for (int i = 0; i < 16; ++i) cs.steps[(size_t) i] = pChStep[(size_t) i]->load() * 0.01f;
     chop.setSettings (cs);
 
     guard.setEnabled (role != Role::Master && pTrackGuard->load() > 0.5f);
@@ -268,6 +279,7 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     if (haveTime) hostSeconds.store (seconds, std::memory_order_relaxed);
     tuner.setTimeline (playing && haveTime, seconds);
     chop.setTimeline (playing && haveBeats, quarterNotes);
+    motion.setTimeline (playing && haveBeats, quarterNotes);
 
     pullParameters();
     const bool bypassed = pBypass->load() > 0.5f;

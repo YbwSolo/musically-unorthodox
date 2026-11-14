@@ -149,6 +149,24 @@ namespace ids
     // Doubler
     inline const juce::String dblOn     { "dblOn" };
     inline const juce::String dblMix    { "dblMix" };
+    // added in build 17: Phone modes and noise, the Lo-fi modules, Motion's shapes and drawn curve, Chop's pattern
+    inline const juce::String phMode      { "phMode" };
+    inline const juce::String phNoise     { "phNoise" };
+    inline const juce::String lfDrive     { "lfDrive" };
+    inline const juce::String lfNoise     { "lfNoise" };
+    inline const juce::String lfNoiseType { "lfNoiseType" };
+    inline const juce::String lfWear      { "lfWear" };
+    inline const juce::String lfTone      { "lfTone" };
+    inline const juce::String mdShape     { "mdShape" };
+    inline const juce::String mdSmooth    { "mdSmooth" };
+    inline const juce::String mdSync      { "mdSync" };
+    inline const juce::String mdNote      { "mdNote" };
+    inline juce::String mdPoint (int i)   { return "mdP" + juce::String (i); }       // the drawn curve: sixteen points
+    inline const juce::String chMode      { "chMode" };
+    inline const juce::String chLength    { "chLength" };
+    inline const juce::String chGate      { "chGate" };
+    inline const juce::String chSwing     { "chSwing" };
+    inline juce::String chStep (int i)    { return "chS" + juce::String (i); }       // the pattern: sixteen step levels
     inline const juce::String fxOrder   { "fxOrder" };      // which order the in-line FX tools run in (see FxOrder.h)
     inline const juce::String dblDetune { "dblDetune" };
     inline const juce::String dblTiming { "dblTiming" };

@@ -233,26 +233,49 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     p.push_back (std::make_unique<APF> (id (ids::phAmount), "Phone amount", range (0.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
     p.push_back (std::make_unique<APF> (id (ids::phTone), "Phone width", range (0.0f, 100.0f, 0.1f), 40.0f, pctAttr()));
     p.push_back (std::make_unique<APF> (id (ids::phDrive), "Phone drive", range (0.0f, 100.0f, 0.1f), 35.0f, pctAttr()));
+    p.push_back (std::make_unique<APC> (id (ids::phMode), "Phone device", juce::StringArray { "Small speaker", "Telephone", "Megaphone", "Radio", "Walkie-talkie" }, 0));
+    p.push_back (std::make_unique<APF> (id (ids::phNoise), "Phone noise", range (0.0f, 100.0f, 0.1f), 0.0f, pctAttr()));
 
     // ---- lo-fi
     p.push_back (std::make_unique<APB> (id (ids::lfOn), "Lo-fi", false));
     p.push_back (std::make_unique<APF> (id (ids::lfCrush), "Lo-fi crush", range (0.0f, 100.0f, 0.1f), 40.0f, pctAttr()));
     p.push_back (std::make_unique<APF> (id (ids::lfWobble), "Lo-fi wobble", range (0.0f, 100.0f, 0.1f), 30.0f, pctAttr()));
     p.push_back (std::make_unique<APF> (id (ids::lfMix), "Lo-fi mix", range (0.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::lfDrive), "Lo-fi drive", range (0.0f, 100.0f, 0.1f), 0.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::lfNoise), "Lo-fi noise", range (0.0f, 100.0f, 0.1f), 0.0f, pctAttr()));
+    p.push_back (std::make_unique<APC> (id (ids::lfNoiseType), "Lo-fi noise type", juce::StringArray { "Vinyl", "Tape" }, 0));
+    p.push_back (std::make_unique<APF> (id (ids::lfWear), "Lo-fi wear", range (0.0f, 100.0f, 0.1f), 0.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::lfTone), "Lo-fi tone", range (0.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
 
     // ---- motion
     p.push_back (std::make_unique<APB> (id (ids::mdOn), "Motion", false));
-    p.push_back (std::make_unique<APC> (id (ids::mdType), "Motion type", juce::StringArray { "Chorus", "Flanger", "Phaser" }, 0));
+    p.push_back (std::make_unique<APC> (id (ids::mdType), "Motion type", juce::StringArray { "Chorus", "Flanger", "Phaser", "Filter", "Pan", "Volume" }, 0));
     p.push_back (std::make_unique<APF> (id (ids::mdRate), "Motion rate", skewed (0.05f, 8.0f, 0.8f, 0.01f), 0.6f,
         juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return juce::String (v, 2) + " Hz"; })));
     p.push_back (std::make_unique<APF> (id (ids::mdDepth), "Motion depth", range (0.0f, 100.0f, 0.1f), 50.0f, pctAttr()));
     p.push_back (std::make_unique<APF> (id (ids::mdMix), "Motion mix", range (0.0f, 100.0f, 0.1f), 50.0f, pctAttr()));
+    p.push_back (std::make_unique<APC> (id (ids::mdShape), "Motion shape", juce::StringArray { "Sine", "Triangle", "Ramp up", "Ramp down", "Square", "Drawn" }, 0));
+    p.push_back (std::make_unique<APF> (id (ids::mdSmooth), "Motion curve smoothness", range (0.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
+    p.push_back (std::make_unique<APB> (id (ids::mdSync), "Motion timed to tempo", false));
+    p.push_back (std::make_unique<APC> (id (ids::mdNote), "Motion cycle length", juce::StringArray { "4 bars", "2 bars", "1 bar", "1/2", "1/4", "1/8", "1/16" }, 2));
+    for (int i = 0; i < 16; ++i)       // the drawn curve starts as a pump: down at the start of the cycle, back up by the end
+        p.push_back (std::make_unique<APF> (id (ids::mdPoint (i)), "Motion curve point " + juce::String (i + 1), range (0.0f, 100.0f, 0.1f),
+                                            std::round (1000.0f * std::pow ((float) i / 15.0f, 0.6f)) / 10.0f, pctAttr()));
 
     // ---- chop
     p.push_back (std::make_unique<APB> (id (ids::chOn), "Chop", false));
     p.push_back (std::make_unique<APC> (id (ids::chRate), "Chop rate", juce::StringArray { "1/4", "1/8", "1/8 triplet", "1/16", "1/32" }, 3));
     p.push_back (std::make_unique<APF> (id (ids::chDepth), "Chop depth", range (0.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
     p.push_back (std::make_unique<APF> (id (ids::chShape), "Chop hardness", range (0.0f, 100.0f, 0.1f), 70.0f, pctAttr()));
+    p.push_back (std::make_unique<APC> (id (ids::chMode), "Chop mode", juce::StringArray { "Pulse", "Pattern" }, 0));
+    p.push_back (std::make_unique<juce::AudioParameterInt> (id (ids::chLength), "Chop pattern length", 2, 16, 16));
+    p.push_back (std::make_unique<APF> (id (ids::chGate), "Chop gate length", range (10.0f, 100.0f, 0.1f), 100.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::chSwing), "Chop swing", range (0.0f, 100.0f, 0.1f), 0.0f, pctAttr()));
+    {
+        static const float pattern[16] = { 100, 100, 0, 100, 100, 0, 100, 0, 100, 100, 0, 100, 100, 0, 100, 60 };
+        for (int i = 0; i < 16; ++i)
+            p.push_back (std::make_unique<APF> (id (ids::chStep (i)), "Chop step " + juce::String (i + 1), range (0.0f, 100.0f, 0.1f), pattern[i], pctAttr()));
+    }
 
     return { p.begin(), p.end() };
 }

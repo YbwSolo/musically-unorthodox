@@ -1347,6 +1347,194 @@ int main()
                "Chop opens on each sixteenth and closes halfway to the next", "open " + juce::String (on, 3) + ", closed " + juce::String (offLevel, 4));
     }
     {
+        // --- build 17: the Phone devices and their noise
+        auto band = [&] (const juce::AudioBuffer<float>& b, int from, int len) { return juce::Decibels::gainToDecibels (b.getRMSLevel (0, from, len), -140.0f); };
+        {
+            Phone tel; PhoneSettings ts; ts.enabled = true; ts.mode = 1; ts.tone = 0.4f; ts.drive = 0.0f; tel.setSettings (ts); tel.prepare (fs, 2);
+            Phone horn; PhoneSettings hs = ts; hs.mode = 2; horn.setSettings (hs); horn.prepare (fs, 2);
+            check (tel.responseDb (100.0f) < -25.0f && tel.responseDb (8000.0f) < -25.0f && tel.responseDb (1000.0f) > -3.0f
+                   && Phone::lowEdgeHz (0.4f, 1) > 280.0f && Phone::highEdgeHz (0.4f, 1) < 3700.0f
+                   && horn.responseDb (1100.0f) > horn.responseDb (1800.0f) + 3.0f && horn.responseDb (2800.0f) > horn.responseDb (1800.0f) + 2.0f,
+                   "Telephone passes what a phone line carries and Megaphone rings at its two horn resonances",
+                   "telephone " + juce::String (tel.responseDb (100.0f), 0) + " / " + juce::String (tel.responseDb (1000.0f), 0) + " / " + juce::String (tel.responseDb (8000.0f), 0)
+                   + " dB at 100 Hz / 1 kHz / 8 kHz; megaphone " + juce::String (horn.responseDb (1100.0f), 1) + " / " + juce::String (horn.responseDb (1800.0f), 1) + " / " + juce::String (horn.responseDb (2800.0f), 1) + " dB at 1.1 / 1.8 / 2.8 kHz");
+
+            // noise is there while the track sounds and gone in the gaps; with Noise at zero silence stays silence
+            auto phrase = [&] (int mode, float noise)
+            {
+                Phone ph; ph.prepare (fs, 2);
+                PhoneSettings st; st.enabled = true; st.mode = mode; st.noise = noise; st.drive = 0.3f; ph.setSettings (st);
+                juce::AudioBuffer<float> b (2, (int) (fs * 4.0)); b.clear();
+                for (int i = 0; i < (int) fs; ++i) { const float v = 0.2f * (float) std::sin (juce::MathConstants<double>::twoPi * 700.0 * i / fs); b.setSample (0, i, v); b.setSample (1, i, v); }
+                inBlocks (b, 256, [&ph] (juce::AudioBuffer<float>& x) { ph.process (x); });
+                return b;
+            };
+            const auto quiet = phrase (1, 0.0f), hissy = phrase (1, 0.6f), walkie = phrase (4, 0.6f);
+            const int sec = (int) fs;
+            double hiss = 0.0;
+            for (int i = sec / 2; i < sec; ++i) hiss += std::pow ((double) hissy.getSample (0, i) - quiet.getSample (0, i), 2.0);
+            const float hissDb = 10.0f * (float) std::log10 (hiss / (sec / 2) + 1.0e-14);
+            check (quiet.getMagnitude (0, sec * 3, sec / 2) < 1.0e-6f && hissDb > -60.0f && hissDb < -30.0f && band (hissy, sec * 3, sec / 2) < -90.0f,
+                   "Phone noise is there while the track is sounding, gone two seconds after it stops, and not there at all with Noise at zero",
+                   juce::String (hissDb, 0) + " dB of hiss under a voice at -17 dB; " + juce::String (band (hissy, sec * 3, sec / 2), 0) + " dB two seconds after the voice stops");
+            const float burstDb = band (walkie, sec + (int) (fs * 0.045), (int) (fs * 0.05)), afterDb = band (walkie, sec + (int) (fs * 1.5), (int) (fs * 0.05));
+            check (burstDb > afterDb + 12.0f && burstDb > -45.0f, "Walkie-talkie ends each phrase with a burst of noise",
+                   juce::String (burstDb, 0) + " dB as the phrase ends, " + juce::String (afterDb, 0) + " dB a second and a half later");
+
+            // the radio levels the voice: 20 dB between a quiet word and a loud one becomes much less
+            auto radioOut = [&] (float amp)
+            {
+                Phone ph; ph.prepare (fs, 2);
+                PhoneSettings st; st.enabled = true; st.mode = 3; st.drive = 0.2f; ph.setSettings (st);
+                auto t = sine (fs, 900.0f, amp, (int) (fs * 2.0));
+                inBlocks (t, 256, [&ph] (juce::AudioBuffer<float>& x) { ph.process (x); });
+                return juce::Decibels::gainToDecibels (t.getRMSLevel (0, (int) fs, (int) fs));
+            };
+            const float spread = radioOut (0.3f) - radioOut (0.03f);
+            check (spread < 12.0f, "Radio's automatic gain brings a quiet voice up towards a loud one", "20 dB apart going in, " + juce::String (spread, 1) + " dB apart coming out");
+        }
+
+        // --- build 17: the Lo-fi modules, one at a time
+        {
+            auto run = [&] (LoFiSettings st, juce::AudioBuffer<float> in)
+            {
+                LoFi lf; lf.prepare (fs, 2); st.enabled = true; st.mix = 1.0f; lf.setSettings (st);
+                inBlocks (in, 256, [&lf] (juce::AudioBuffer<float>& x) { lf.process (x); });
+                return in;
+            };
+            LoFiSettings plain; plain.crush = 0.0f; plain.wobble = 0.0f;
+            // Tone
+            auto dark = plain; dark.tone = 0.3f;
+            const float open8k = band (run (plain, sine (fs, 8000.0f, 0.2f, (int) fs)), (int) fs / 2, (int) fs / 2), dull8k = band (run (dark, sine (fs, 8000.0f, 0.2f, (int) fs)), (int) fs / 2, (int) fs / 2);
+            const float dull300 = band (run (dark, sine (fs, 300.0f, 0.2f, (int) fs)), (int) fs / 2, (int) fs / 2), open300 = band (run (plain, sine (fs, 300.0f, 0.2f, (int) fs)), (int) fs / 2, (int) fs / 2);
+            check (dull8k < open8k - 12.0f && std::abs (dull300 - open300) < 1.0f, "Lo-fi Tone rolls the top away and leaves the body alone",
+                   "8 kHz " + juce::String (dull8k - open8k, 1) + " dB, 300 Hz " + juce::String (dull300 - open300, 1) + " dB at Tone 30 %");
+            // Drive: third harmonic of a 200 Hz tone
+            auto third = [&] (const juce::AudioBuffer<float>& b)
+            {
+                double re1 = 0, im1 = 0, re3 = 0, im3 = 0;
+                for (int i = (int) fs / 2; i < (int) fs; ++i)
+                {
+                    const double t = (double) i / fs, x = b.getSample (0, i);
+                    re1 += x * std::cos (juce::MathConstants<double>::twoPi * 200.0 * t); im1 += x * std::sin (juce::MathConstants<double>::twoPi * 200.0 * t);
+                    re3 += x * std::cos (juce::MathConstants<double>::twoPi * 600.0 * t); im3 += x * std::sin (juce::MathConstants<double>::twoPi * 600.0 * t);
+                }
+                return (float) (10.0 * std::log10 ((re3 * re3 + im3 * im3) / (re1 * re1 + im1 * im1 + 1.0e-20) + 1.0e-20));
+            };
+            auto hot = plain; hot.drive = 0.7f;
+            const float cleanH3 = third (run (plain, sine (fs, 200.0f, 0.5f, (int) fs))), drivenH3 = third (run (hot, sine (fs, 200.0f, 0.5f, (int) fs)));
+            check (cleanH3 < -60.0f && drivenH3 > -30.0f, "Lo-fi Drive saturates, and at zero adds nothing", "third harmonic " + juce::String (cleanH3, 0) + " dB clean, " + juce::String (drivenH3, 0) + " dB at Drive 70 %");
+            // Wear: the level moves about
+            auto swing = [&] (const juce::AudioBuffer<float>& b)
+            {
+                float lo = 1.0e9f, hi = -1.0e9f; const int win = (int) (fs * 0.05);
+                for (int at = (int) fs; at + win < b.getNumSamples(); at += win) { const float l = juce::Decibels::gainToDecibels (b.getRMSLevel (0, at, win)); lo = std::min (lo, l); hi = std::max (hi, l); }
+                return hi - lo;
+            };
+            auto worn = plain; worn.wear = 1.0f;
+            const float steady = swing (run (plain, sine (fs, 500.0f, 0.3f, (int) (fs * 12.0)))), moving = swing (run (worn, sine (fs, 500.0f, 0.3f, (int) (fs * 12.0))));
+            check (steady < 0.2f && moving > 3.0f, "Lo-fi Wear makes the level sag and drop out, and at zero leaves it steady", juce::String (steady, 2) + " dB of movement at zero, " + juce::String (moving, 1) + " dB at full");
+            // Noise: under the sound while it plays, gone when it stops
+            auto noisy = plain; noisy.noise = 0.6f; noisy.noiseType = 1;
+            juce::AudioBuffer<float> phrase (2, (int) (fs * 6.0)); phrase.clear();
+            for (int i = 0; i < (int) fs; ++i) { const float v = 0.2f * (float) std::sin (juce::MathConstants<double>::twoPi * 400.0 * i / fs); phrase.setSample (0, i, v); phrase.setSample (1, i, v); }
+            const auto withNoise = run (noisy, phrase), without = run (plain, phrase);
+            double diff = 0.0, sideDiff = 0.0;
+            for (int i = (int) fs / 2; i < (int) fs; ++i) { diff += std::pow ((double) withNoise.getSample (0, i) - without.getSample (0, i), 2.0); sideDiff += std::pow ((double) withNoise.getSample (0, i) - withNoise.getSample (1, i), 2.0); }
+            const float added = 10.0f * (float) std::log10 (diff / (fs / 2) + 1.0e-14);
+            check (added > -70.0f && added < -30.0f && sideDiff > diff * 0.5 && band (withNoise, (int) (fs * 5.5), (int) (fs * 0.4)) < -90.0f,
+                   "Lo-fi Noise sits under the sound, is different on each side, and fades away once the track stops",
+                   juce::String (added, 0) + " dB of hiss under a voice at -17 dB; " + juce::String (band (withNoise, (int) (fs * 5.5), (int) (fs * 0.4)), 0) + " dB four and a half seconds after it stops");
+        }
+
+        // --- build 17: Motion's shapes, the drawn curve, and the three new things it can move
+        {
+            MotionSettings ms;
+            bool shapes = near (Motion::valueAt (ms, 0.0f), 0.5f, 1.0e-4f) && near (Motion::valueAt (ms, 0.25f), 1.0f, 1.0e-4f);
+            ms.shape = 1; shapes = shapes && near (Motion::valueAt (ms, 0.25f), 0.5f, 1.0e-4f) && near (Motion::valueAt (ms, 0.5f), 1.0f, 1.0e-4f);
+            ms.shape = 2; shapes = shapes && near (Motion::valueAt (ms, 0.3f), 0.3f, 1.0e-4f);
+            ms.shape = 3; shapes = shapes && near (Motion::valueAt (ms, 0.3f), 0.7f, 1.0e-4f);
+            ms.shape = 4; shapes = shapes && near (Motion::valueAt (ms, 0.2f), 1.0f, 1.0e-4f) && near (Motion::valueAt (ms, 0.7f), 0.0f, 1.0e-4f);
+            ms.shape = 5; for (int i = 0; i < 16; ++i) ms.curve[(size_t) i] = (i % 2 == 0) ? 0.2f : 0.8f;
+            ms.smooth = 0.0f; const bool steps = near (Motion::valueAt (ms, 0.5f / 16.0f), 0.2f, 1.0e-4f) && near (Motion::valueAt (ms, 1.9f / 16.0f), 0.8f, 1.0e-4f);
+            ms.smooth = 1.0f; const bool glides = near (Motion::valueAt (ms, 0.5f / 16.0f), 0.5f, 1.0e-3f) && near (Motion::valueAt (ms, 15.5f / 16.0f), 0.5f, 1.0e-3f);
+            check (shapes && steps && glides, "Motion's shapes are what their names say, and a drawn curve is sixteen steps at Smooth 0 and a line through its points at Smooth 100");
+
+            auto move = [&] (MotionSettings st, juce::AudioBuffer<float> in, bool timeline)
+            {
+                Motion m; m.prepare (fs, 2); st.enabled = true; m.setSettings (st);
+                int at = 0;
+                inBlocks (in, 256, [&] (juce::AudioBuffer<float>& x) { m.setTimeline (timeline, (double) at / fs * 2.0); m.process (x); at += x.getNumSamples(); });       // 120 BPM: two beats a second
+                return in;
+            };
+            // Chorus on a plain wave: the copy that moves at half speed has a clock of its own and never jumps. (It
+            // used to be worked out from the main one, and jumped by milliseconds once a cycle.)
+            MotionSettings chorus; chorus.type = 0; chorus.rateHz = 2.0f; chorus.depth = 1.0f; chorus.mix = 1.0f;
+            const auto swirled = move (chorus, sine (fs, 300.0f, 0.3f, (int) (fs * 4.0)), false);
+            float worst = 0.0f;
+            for (int i = (int) fs; i < swirled.getNumSamples(); ++i) worst = std::max (worst, std::abs (swirled.getSample (0, i) - 2.0f * swirled.getSample (0, i - 1) + swirled.getSample (0, i - 2)));
+            const float toneCurve = 0.3f * (float) std::pow (juce::MathConstants<double>::twoPi * 300.0 / fs, 2.0);
+            check (worst < toneCurve * 4.0f, "Chorus has no jump in it as its second copy goes round", "largest step " + juce::String (worst / toneCurve, 1) + " times the tone's own curve");
+
+            // Volume, ramp up, one cycle a beat, locked to the song: low at the start of every beat, back up by the end
+            MotionSettings pump; pump.type = 5; pump.shape = 2; pump.sync = true; pump.note = 4; pump.bpm = 120.0; pump.depth = 0.8f; pump.mix = 1.0f;
+            const auto pumped = move (pump, sine (fs, 500.0f, 0.4f, (int) (fs * 3.0)), true);
+            const int beat = (int) (fs * 0.5);
+            const float early = pumped.getRMSLevel (0, beat * 4 + beat / 20, beat / 10), late = pumped.getRMSLevel (0, beat * 4 + beat * 17 / 20, beat / 10);
+            check (juce::Decibels::gainToDecibels (late / early) > 9.0f && late > 0.22f, "Motion on Volume with a ramp, timed to a beat, ducks at the start of each beat and swells back",
+                   juce::String (juce::Decibels::gainToDecibels (early / 0.2828f), 1) + " dB at the start of a beat, " + juce::String (juce::Decibels::gainToDecibels (late / 0.2828f), 1) + " dB at the end");
+
+            // Pan: square, a beat each side; the loudness stays put while the sound changes sides
+            MotionSettings pan; pan.type = 4; pan.shape = 4; pan.sync = true; pan.note = 3; pan.bpm = 120.0; pan.depth = 1.0f; pan.mix = 1.0f;
+            const auto panned = move (pan, sine (fs, 500.0f, 0.4f, (int) (fs * 3.0)), true);
+            const float l1 = panned.getRMSLevel (0, beat * 4 + beat / 2, beat / 4), r1 = panned.getRMSLevel (1, beat * 4 + beat / 2, beat / 4);
+            const float l2 = panned.getRMSLevel (0, beat * 5 + beat / 2, beat / 4), r2 = panned.getRMSLevel (1, beat * 5 + beat / 2, beat / 4);
+            const float power1 = 10.0f * std::log10 (l1 * l1 + r1 * r1), power2 = 10.0f * std::log10 (l2 * l2 + r2 * r2), centre = 10.0f * std::log10 (2.0f * 0.2828f * 0.2828f);
+            check (r1 > l1 * 10.0f && l2 > r2 * 10.0f && std::abs (power1 - centre) < 0.5f && std::abs (power2 - centre) < 0.5f, "Motion on Pan moves the sound from one side to the other at the same loudness",
+                   "right then left, " + juce::String (power1 - centre, 2) + " and " + juce::String (power2 - centre, 2) + " dB against the middle");
+
+            // Filter: shut at the bottom of the movement, open at the top
+            MotionSettings filter; filter.type = 3; filter.shape = 4; filter.sync = true; filter.note = 3; filter.bpm = 120.0; filter.depth = 1.0f; filter.mix = 1.0f;
+            const auto swept = move (filter, sine (fs, 6000.0f, 0.3f, (int) (fs * 3.0)), true);
+            const float openDb = juce::Decibels::gainToDecibels (swept.getRMSLevel (0, beat * 4 + beat / 2, beat / 4) / 0.2121f), shutDb = juce::Decibels::gainToDecibels (swept.getRMSLevel (0, beat * 5 + beat / 2, beat / 4) / 0.2121f);
+            check (openDb > -1.5f && shutDb < -30.0f, "Motion on Filter lets 6 kHz through at the top of the movement and shuts it out at the bottom", juce::String (openDb, 1) + " dB open, " + juce::String (shutDb, 0) + " dB shut");
+
+            // a curve with a cliff in it must not click on Volume
+            MotionSettings cliff; cliff.type = 5; cliff.shape = 5; cliff.smooth = 0.0f; cliff.rateHz = 4.0f; cliff.depth = 1.0f; cliff.mix = 1.0f;
+            for (int i = 0; i < 16; ++i) cliff.curve[(size_t) i] = i < 8 ? 1.0f : 0.0f;
+            const auto gated = move (cliff, sine (fs, 200.0f, 0.4f, (int) (fs * 2.0)), false);
+            float jump = 0.0f; for (int i = (int) fs / 2; i < gated.getNumSamples(); ++i) jump = std::max (jump, std::abs (gated.getSample (0, i) - gated.getSample (0, i - 1)));
+            check (jump < 0.02f, "A drawn curve that jumps does not click", "largest step between samples " + juce::String (jump, 4) + " on a tone of 0.4");
+        }
+
+        // --- build 17: Chop's pattern
+        {
+            ChopSettings ps; ps.mode = 1; ps.length = 8; ps.gate = 1.0f;
+            for (int i = 0; i < 16; ++i) ps.steps[(size_t) i] = 0.0f;
+            ps.steps[0] = 1.0f; ps.steps[1] = 0.5f; ps.steps[3] = 1.0f;
+            bool grid = near (Chop::patternAt (ps, 0.5), 1.0f, 1.0e-5f) && near (Chop::patternAt (ps, 1.5), 0.5f, 1.0e-5f) && near (Chop::patternAt (ps, 2.5), 0.0f, 1.0e-5f)
+                        && near (Chop::patternAt (ps, 8.5), 1.0f, 1.0e-5f) && near (Chop::patternAt (ps, 11.2), 1.0f, 1.0e-5f);            // wraps after eight steps
+            ps.gate = 0.5f; grid = grid && near (Chop::patternAt (ps, 0.3), 1.0f, 1.0e-5f) && near (Chop::patternAt (ps, 0.7), 0.0f, 1.0e-5f);
+            ps.gate = 1.0f; ps.swing = 1.0f;       // every second step half a step late: step 2 (index 1) starts at 1.5, and step 1 runs on until then
+            grid = grid && near (Chop::patternAt (ps, 1.3), 1.0f, 1.0e-5f) && near (Chop::patternAt (ps, 1.7), 0.5f, 1.0e-5f);
+            check (grid, "Chop's pattern plays each step at its level, starts again after the chosen number of steps, and Gate and Swing do what they say");
+
+            Chop c; c.prepare (fs);
+            ChopSettings cs; cs.enabled = true; cs.mode = 1; cs.rate = 3; cs.depth = 1.0f; cs.shape = 1.0f; cs.bpm = 120.0; cs.length = 4;
+            for (int i = 0; i < 16; ++i) cs.steps[(size_t) i] = 0.0f;
+            cs.steps[0] = 1.0f; cs.steps[2] = 0.5f;
+            c.setSettings (cs);
+            auto tone = sine (fs, 500.0f, 0.5f, (int) fs);
+            int pos = 0;
+            inBlocks (tone, 256, [&] (juce::AudioBuffer<float>& b) { c.setTimeline (true, 16.0 + (double) pos / fs * 2.0); c.process (b); pos += b.getNumSamples(); });
+            const int step = (int) (fs * 0.125);
+            auto level = [&] (int index) { return tone.getRMSLevel (0, step * (4 + index) + step / 4, step / 2) / 0.3536f; };
+            check (near (level (0), 1.0f, 0.03f) && level (1) < 0.01f && near (level (2), 0.5f, 0.03f) && level (3) < 0.01f && near (level (4), 1.0f, 0.03f),
+                   "Chop's pattern is locked to the song: full, gap, half, gap, and round again",
+                   juce::String (level (0), 2) + " " + juce::String (level (1), 3) + " " + juce::String (level (2), 2) + " " + juce::String (level (3), 3) + " " + juce::String (level (4), 2));
+        }
+    }
+    {
         // --- peak guard: nothing leaves above -1 dB, and anything under it is not touched at all
         PeakGuard g; g.prepare (fs); g.setEnabled (true);
         auto hot = voiceTone (220.0f, 1.0f, 2);

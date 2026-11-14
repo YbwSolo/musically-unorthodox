@@ -35,6 +35,12 @@ private:
     int slotOf (int module) const;                 // which row of the rail a tool is on
     int chainTool (int module) const;              // its place in fxorder::Tool, or -1 for the voice tools
     int dragTool = -1, shownOrder = -1;
+    // drawing in the display: Motion's curve (sixteen points) and Chop's pattern (sixteen steps)
+    juce::Rectangle<float> motionPlot() const, chopPlot() const;
+    bool drawAt (juce::Point<int> where, bool firstTouch);
+    int drawKind = 0;              // 0 nothing, 1 motion curve, 2 chop pattern
+    int drawLast = -1; float drawLastValue = 0.0f;       // so a fast drag fills in the points it skipped
+    bool drawClearing = false;     // chop: a click on a lit step clears it, and a drag from there clears more
     bool dragging = false;
     juce::Point<int> dragFrom;
     juce::Rectangle<int> orderNote;
@@ -67,13 +73,13 @@ private:
     // shift
     Knob psSemis, psCharacter, psMix;
     // phone
-    Knob phAmount, phTone, phDrive;
+    Segmented phMode; Knob phAmount, phTone, phDrive, phNoise;
     // lo-fi
-    Knob lfCrush, lfWobble, lfMix;
+    Segmented lfNoiseType; Knob lfCrush, lfWobble, lfMix, lfDrive, lfWear, lfTone, lfNoise;
     // motion
-    Segmented mdType; Knob mdRate, mdDepth, mdMix;
+    Segmented mdType, mdShape; ParamToggle mdSync; Choice mdNote; Knob mdRate, mdDepth, mdMix, mdSmooth;
     // chop
-    Segmented chRate; Knob chDepth, chShape;
+    Segmented chMode, chRate; Knob chDepth, chShape, chGate, chSwing, chLength;
 
     juce::TextButton moreButton;
     bool showMore = false;
