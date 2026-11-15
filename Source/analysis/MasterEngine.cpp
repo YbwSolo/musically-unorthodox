@@ -217,9 +217,12 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
     // ---- low end that jumps about: its own band of compression
     plan.multiband.enabled = false;
     for (auto& b : plan.multiband.band) b.on = false;
-    const bool lowUnsteady = p.lowSwingDb > 7.0f && p.lowSwingDb > p.levelSwingDb + 3.0f && p.lowTypicalDb > -80.0f;
-    if (lowUnsteady) plan.detected.add ("The low end is uneven: 40 to 120 Hz moves over " + d1 (p.lowSwingDb) + " dB while the mix as a whole moves over " + d1 (p.levelSwingDb) + " dB.");
-    if (lowUnsteady && ! dense && (spec.multiband || p.lowSwingDb > 10.0f))
+    // Loud notes are what a compressor can hold back: how far the loud bass notes stand above the usual bass level.
+    // (A low end that moves a lot because the bass stops playing in places is not something compression changes.)
+    const float lowJump = p.lowTypicalDb > -80.0f ? p.lowLoudDb - p.lowTypicalDb : 0.0f;
+    const bool lowUnsteady = lowJump >= 3.0f;
+    if (lowUnsteady) plan.detected.add ("Uneven bass: the loud bass notes are " + d1 (lowJump) + " dB above the usual level of the low end (40 to 120 Hz).");
+    if (lowUnsteady && ! dense && (spec.multiband || lowJump >= 5.0f))
     {
         // the low band ends where this song's bass ends: the first place above 90 Hz that is 9 dB under the strongest low band
         float top = -200.0f, cross = 160.0f;
@@ -230,14 +233,15 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
         plan.multiband.crossHighHz = 3500.0f;
         auto& low = plan.multiband.band[0];
         low.on = true; low.ratio = 1.5f + 1.0f * k; low.attackMs = 30.0f; low.releaseMs = 200.0f;
-        // the level of the low range as the compressor sees it is its peaks: about 3 dB above the average for a bass note
-        low.thresholdDb = juce::jlimit (-60.0f, -3.0f, p.lowTypicalDb + 4.0f);
-        const float expected = juce::jmax (0.0f, p.lowLoudDb - p.lowTypicalDb - 1.0f) * (1.0f - 1.0f / low.ratio);
+        // the compressor reads the average level of the band, as the probe does; it starts working 1 dB above
+        // the usual level, so ordinary notes pass and the loud ones are held
+        low.thresholdDb = juce::jlimit (-60.0f, -3.0f, p.lowTypicalDb + 1.0f);
+        const float expected = juce::jmax (0.0f, lowJump - 1.0f) * (1.0f - 1.0f / low.ratio);
         plan.processing.add ("Multiband compression, low band only (up to " + hzText (plan.multiband.crossLowHz) + ", where this song's bass ends): " + d1 (low.ratio) + ":1 from " + d1 (low.thresholdDb)
                              + " dB, about " + d1 (expected) + " dB off the loudest bass notes.");
     }
-    else if (lowUnsteady) plan.leftAlone.add (juce::String ("Multiband compression: the low end is uneven, but ") + (dense ? "the mix is already dense." : "this style keeps dynamics; it is used from 10 dB of movement."));
-    else plan.leftAlone.add ("Multiband compression: the low end is as steady as the rest of the mix.");
+    else if (lowUnsteady) plan.leftAlone.add (juce::String ("Multiband compression: the bass is uneven, but ") + (dense ? "the mix is already dense." : "this style keeps dynamics; it is used from 5 dB."));
+    else plan.leftAlone.add ("Multiband compression: the bass notes are even (the loud ones are " + d1 (lowJump) + " dB above the usual level).");
 
     // ---- glue
     const bool wide = p.loudnessRangeLu > 9.0f || p.levelSwingDb > 9.0f;
@@ -301,7 +305,7 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
     plan.targetLufs = juce::jlimit (-24.0f, -7.0f, target);
     const float gain = plan.targetLufs - mix.integratedLufs;
     plan.detected.add ("Loudness " + d1 (mix.integratedLufs) + " LUFS, true peak " + d1 (mix.truePeakDb) + " dBTP: " + (gain > 0.5f ? "needs " + d1 (gain) + " dB to reach the target." : gain < -0.5f ? "already " + d1 (-gain) + " dB over the target." : "already at the target."));
-    if (plan.clip) plan.processing.add ("Soft clipper: rounds the tallest hits from " + d1 (plan.ceilingDb + 6.0f * (1.0f - plan.clipAmount)) + " dB, so the limiter has less to do.");
+    if (plan.clip) plan.processing.add ("Soft clipper: rounds off the hits that reach " + d1 (6.0f * (1.0f - plan.clipAmount)) + " dB above the ceiling, so the limiter has less to do.");
     else plan.leftAlone.add (spec.clip <= 0.0f ? "Soft clipper: not part of this style." : "Soft clipper: the hits are not tall enough to be worth rounding, or the mix is already dense.");
     plan.processing.add ("True peak limiter: ceiling " + d1 (plan.ceilingDb) + " dBTP, level set to " + d1 (plan.targetLufs) + " LUFS" + (useReference ? " (the reference is at " + d1 (reference->integratedLufs) + ")." : "."));
     return plan;
@@ -315,13 +319,16 @@ juce::StringArray masterReport (const MasterFacts& mix, const MasterFacts& maste
     line ("Integrated loudness", mix.integratedLufs, master.integratedLufs, "LUFS", std::abs (master.integratedLufs - plan.targetLufs) <= 1.0f ? "On target" : "Target " + juce::String (plan.targetLufs, 1));
     line ("True peak", mix.truePeakDb, master.truePeakDb, "dBTP", master.truePeakDb <= plan.ceilingDb + 0.2f ? "Under the ceiling" : "Over the ceiling of " + juce::String (plan.ceilingDb, 1));
     const float toneBefore = toneDistanceDb (mix.bandsDb, plan.targetCurve), toneAfter = toneDistanceDb (master.bandsDb, plan.targetCurve);
-    line ("Tonal balance, distance from the target", toneBefore, toneAfter, "dB", toneAfter < toneBefore - 0.3f ? "Improved" : toneAfter > toneBefore + 0.3f ? "Further away" : "Unchanged");
-    line ("Low-end movement (40 to 120 Hz)", mix.probe.lowSwingDb, master.probe.lowSwingDb, "dB", master.probe.lowSwingDb < mix.probe.lowSwingDb - 0.7f ? "Steadier" : "Unchanged");
+    // a verdict is only given where a processor was used: without one, a difference between the two passes is the song
+    line ("Tonal balance, distance from the target", toneBefore, toneAfter, "dB", plan.eq.empty() ? juce::String ("No EQ was used")
+                                                                                 : toneAfter < toneBefore - 0.3f ? "Improved" : toneAfter > toneBefore + 0.3f ? "Further away" : "Unchanged");
+    const float jumpBefore = mix.probe.lowLoudDb - mix.probe.lowTypicalDb, jumpAfter = master.probe.lowLoudDb - master.probe.lowTypicalDb;
+    line ("Loud bass notes above the usual bass level", jumpBefore, jumpAfter, "dB", ! plan.multiband.enabled ? juce::String ("No low-end compression was used") : jumpAfter < jumpBefore - 0.5f ? "Steadier" : "Unchanged");
     line ("Peaks above loudness", mix.peakToLoudness(), master.peakToLoudness(), "dB", master.peakToLoudness() >= 8.0f ? "Punch kept" : "Dense: less would be flat");
     line ("Loudness range", mix.probe.loudnessRangeLu, master.probe.loudnessRangeLu, "LU", {});
     out.add ("Stereo: correlation " + juce::String (mix.probe.correlation, 2) + " to " + juce::String (master.probe.correlation, 2) + ", " + juce::String (-master.probe.monoLossDb, 1) + " dB lost in mono. "
              + (master.probe.correlation > 0.3f && master.probe.monoLossDb > -3.0f ? "Mono safe." : "Check it in mono."));
-    out.add ("These are measurements of the mix and of the master over the passes that were played. Whether it sounds better is for your ears: use the level-matched comparison.");
+    out.add ("These are measurements of the mix and of the master over the two passes that were played. If the passes covered different parts of the song, small differences are the song. Whether it sounds better is for your ears: use the level-matched comparison.");
     return out;
 }
 

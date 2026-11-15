@@ -1252,6 +1252,55 @@ int main()
         vocal->setParam (ids::role, (float) Role::Auto);
     }
 
+    // ---- the mastering assistant, on the master of this session
+    {
+        using Stage = MUProcessor::MasterStage;
+        auto closeTo = [] (float a, float b, float tol) { return std::abs (a - b) <= tol; };
+        check (vocal->startMastering().containsIgnoreCase ("Stereo Out") && vocal->getMasterStage() == Stage::Idle, "Analyse and master only runs on the master instance");
+        master->setParam (ids::mstStyle, (float) (int) MasterStyle::Loud);
+        master->setParam (ids::mstIntensity, 50.0f);
+        const float clipBefore = master->getParam (ids::clipOn), trimParamBefore = master->getParam (ids::targetLufs);
+        master->startMastering();
+        runSeconds (6.0);
+        const auto early = master->finishMastering();
+        check (early.containsIgnoreCase ("Keep the song playing") && master->getMasterStage() == Stage::Listening, "A decision is not made from a few seconds of sound", early);
+        runSeconds (18.0);
+        const auto said = master->finishMastering();
+        std::printf ("   mastering: %s\n", said.toRawUTF8());
+        for (auto& l : master->masterText ("detected")) std::printf ("      found: %s\n", l.toRawUTF8());
+        for (auto& l : master->masterText ("processing")) std::printf ("      doing: %s\n", l.toRawUTF8());
+        check (master->getMasterStage() == Stage::Settling && ! master->masterText ("processing").isEmpty() && ! master->masterText ("detected").isEmpty() && master->canUndoMaster()
+               && master->getParam (ids::peakGuard) > 0.5f && master->getParam (ids::masterAutoTrim) > 0.5f, "After the pass the plan is in place: what was found, what is being done, limiter and auto level on");
+        for (int i = 0; i < 16 && master->getMasterStage() != Stage::Done; ++i) runSeconds (5.0);
+        const auto report = master->masterText ("report");
+        for (auto& l : report) std::printf ("      result: %s\n", l.toRawUTF8());
+        const float target = master->getParam (ids::targetLufs);
+        check (master->getMasterStage() == Stage::Done && report.size() >= 6 && report.joinIntoString (" ").contains ("LUFS"), "With the song still playing the master is measured and the report is written");
+        check (std::abs (master->getLoudness().getIntegrated() - target) < 1.5f && master->getLoudness().getTruePeakHold() <= master->getParam (ids::targetTruePeak) + 0.3f,
+               "The master sits at its loudness target, under its ceiling", juce::String (master->getLoudness().getIntegrated(), 1) + " LUFS for a target of " + juce::String (target, 1) + ", peak " + juce::String (master->getLoudness().getTruePeakHold(), 1) + " dBTP");
+        // the words travel with the project
+        juce::MemoryBlock saved; master->getStateInformation (saved);
+        auto copy = std::make_unique<MUProcessor>();
+        copy->setPlayConfigDetails (2, 2, 48000.0, 512); copy->prepareToPlay (48000.0, 512);
+        copy->setStateInformation (saved.getData(), (int) saved.getSize());
+        check (copy->masterText ("processing") == master->masterText ("processing") && copy->masterText ("report") == report && closeTo (copy->getParam (ids::targetLufs), target, 0.01f),
+               "A saved project opens with the mastering settings and the report as they were");
+        copy.reset();
+        // the comparison: Mix is the sound that came in, delayed by the plugin's own latency; it never changes what is measured
+        master->setMasterCompare (2);
+        runSeconds (1.0);
+        check (master->getMasterCompare() == 2, "The level-matched comparison can be switched to the mix");
+        master->setMasterCompare (0);
+        // deciding again from the same measurements, and undoing all of it
+        master->setParam (ids::mstStyle, (float) (int) MasterStyle::Dynamic);
+        const auto again = master->restyleMaster();
+        check (again.contains ("Dynamic") && master->getParam (ids::targetLufs) < target - 2.0f && master->getMasterStage() == Stage::Settling, "Decide again uses the same measurements with the new style: Dynamic is quieter than Loud", again);
+        const auto undone = master->undoMaster();
+        check (closeTo (master->getParam (ids::clipOn), clipBefore, 0.01f) && closeTo (master->getParam (ids::targetLufs), trimParamBefore, 0.01f) && master->masterText ("processing").isEmpty() && ! master->canUndoMaster()
+               && master->getMasterStage() == Stage::Idle, "Undo puts every control back to how it was before Analyse and master", undone);
+        runSeconds (6.0);
+    }
+
     // ---- tear down in a mixed order to exercise slot reuse
     beat.reset();
     check (master->getBus().getNumInstances() == 3, "Instance unregistered");

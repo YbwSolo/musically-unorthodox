@@ -1,4 +1,5 @@
 #include "MasterPage.h"
+#include "MasterAssistant.h"
 #include "../PluginProcessor.h"
 
 namespace mu
@@ -22,6 +23,11 @@ MasterPage::MasterPage (MUProcessor& p, std::function<void (const juce::String&)
 {
     useTabPresets (presets, proc, "master", setStatus);
     addAndMakeVisible (presets);
+    assistant = std::make_unique<MasterAssistant> (proc, setStatus);
+    addChildComponent (*assistant);
+    addChildComponent (view);
+    setHelp (view, "mst.view");
+    view.onChange = [this] (int i) { viewIndex = i; resized(); repaint(); };
     limiter.setPower (p, ids::peakGuard);
     for (auto* c : std::initializer_list<juce::Component*> { &loudness, &limiter, &checks, &drive, &ceiling, &target, &autoLevel, &resetMeasure, &makeMaster }) addAndMakeVisible (c);
     styleButton (resetMeasure, "Measure again", false, "master.history");
@@ -44,6 +50,8 @@ MasterPage::MasterPage (MUProcessor& p, std::function<void (const juce::String&)
     for (auto* k : { &ceiling, &target })
         k->slider.onDragStart = [this] { proc.setParam (ids::masterMode, 3.0f); };
 }
+
+MasterPage::~MasterPage() = default;
 
 int MasterPage::cardAt (juce::Point<int> p) const
 {
@@ -113,6 +121,7 @@ void MasterPage::updateChecks()
 void MasterPage::tick (float dt)
 {
     presets.refresh();
+    if (assistant != nullptr && assistant->isVisible()) assistant->tick (dt);
     if (listenAs.getIndex() != (int) proc.getListenCheck()) listenAs.setIndex ((int) proc.getListenCheck());
     const int mode = (int) proc.getParam (ids::masterMode);
     for (int i = 0; i < 4; ++i)
@@ -120,7 +129,7 @@ void MasterPage::tick (float dt)
         const float goal = (isMaster && i == mode) ? 1.0f : (i == hoverCard ? 0.25f : 0.0f);
         if (std::abs (cardGlow[(size_t) i] - goal) > 0.004f) { cardGlow[(size_t) i] = approach (cardGlow[(size_t) i], goal, dt, 0.06f); repaint (cards[(size_t) i]); }
     }
-    repaint (historyWell); repaint (grWell); repaint (readoutArea);
+    if (assistant == nullptr || ! assistant->isVisible()) { repaint (historyWell); repaint (grWell); repaint (readoutArea); }
 
     slow -= dt;
     if (slow <= 0.0f)
@@ -139,6 +148,7 @@ void MasterPage::tick (float dt)
 
 void MasterPage::paint (juce::Graphics& g)
 {
+    if (assistant != nullptr && assistant->isVisible()) { if (true) g.fillAll (black); return; }
     g.fillAll (black);
     for (int i = 0; i < 4; ++i)
     {
@@ -164,6 +174,7 @@ void MasterPage::paint (juce::Graphics& g)
 
 void MasterPage::paintOverChildren (juce::Graphics& g)
 {
+    if (assistant != nullptr && assistant->isVisible()) { if (false) g.fillAll (black); return; }
     const float tgt = proc.getParam (ids::targetLufs);
     if (isMaster)
     {
@@ -307,8 +318,17 @@ void MasterPage::paintOverChildren (juce::Graphics& g)
 void MasterPage::resized()
 {
     auto r = getLocalBounds().reduced (12);
-    presets.setBounds (r.removeFromTop (26).removeFromRight (270));
+    {
+        auto top = r.removeFromTop (26);
+        presets.setBounds (top.removeFromRight (270));
+        view.setBounds (top.removeFromLeft (330));
+    }
     r.removeFromTop (8);
+    // the assistant covers everything under the top row while it is the view (master instance only)
+    view.setVisible (isMaster);
+    assistant->setVisible (isMaster && viewIndex == 0);
+    assistant->setBounds (r);
+    assistant->toFront (false);
     if (! isMaster) { bannerArea = r.removeFromTop (52); r.removeFromTop (10); makeMaster.setBounds (bannerArea.withTrimmedLeft (bannerArea.getWidth() - 186).reduced (0, 12).withTrimmedRight (14)); }
     makeMaster.setVisible (! isMaster);
 

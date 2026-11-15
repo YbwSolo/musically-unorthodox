@@ -17,7 +17,7 @@ void MultibandComp::reset()
     for (auto& s : splitLow) s.reset();
     for (auto& s : splitHigh) s.reset();
     for (auto& s : alignLow) s.reset();
-    envDb.fill (-120.0f); gainDb.fill (0.0f);
+    envDb.fill (-120.0f); gainDb.fill (0.0f); power.fill (0.0f);
     for (auto& m : grMeter) m.store (0.0f);
     wet = settings.enabled ? 1.0f : 0.0f;
 }
@@ -55,7 +55,7 @@ void MultibandComp::process (juce::AudioBuffer<float>& buffer) noexcept
     const int ch = juce::jmin (channels, buffer.getNumChannels());
     if (n == 0 || ch == 0) return;
     if (! settings.enabled && wet <= 0.0f) { for (auto& m : grMeter) m.store (0.0f, std::memory_order_relaxed); return; }
-    if (settings.enabled && wet <= 0.0f) { for (auto& s : splitLow) s.reset(); for (auto& s : splitHigh) s.reset(); for (auto& s : alignLow) s.reset(); envDb.fill (-120.0f); gainDb.fill (0.0f); }
+    if (settings.enabled && wet <= 0.0f) { for (auto& s : splitLow) s.reset(); for (auto& s : splitHigh) s.reset(); for (auto& s : alignLow) s.reset(); envDb.fill (-120.0f); gainDb.fill (0.0f); power.fill (0.0f); }
     design();
 
     const float wetStep = 1.0f / (float) (fs * 0.010), wetGoal = settings.enabled ? 1.0f : 0.0f;
@@ -84,14 +84,16 @@ void MultibandComp::process (juce::AudioBuffer<float>& buffer) noexcept
             // the low band through the same phase turn the other two got at the upper crossover
             const float lowAligned = al.lp[1].process (al.lp[0].process (low, lpHigh), lpHigh) + al.hp[1].process (al.hp[0].process (low, hpHigh), hpHigh);
             bands[c][0] = lowAligned; bands[c][1] = mid; bands[c][2] = high;
-            for (int b = 0; b < 3; ++b) peak[(size_t) b] = juce::jmax (peak[(size_t) b], std::abs (bands[c][b]));
+            for (int b = 0; b < 3; ++b) peak[(size_t) b] = juce::jmax (peak[(size_t) b], bands[c][b] * bands[c][b]);
         }
         float g[3];
         for (int b = 0; b < 3; ++b)
         {
-            // level of the band: fast up, slower down; both channels move together so the picture does not shift
-            const float levelDb = 20.0f * std::log10 (peak[(size_t) b] + 1.0e-9f);
-            envDb[(size_t) b] += (levelDb - envDb[(size_t) b]) * (levelDb > envDb[(size_t) b] ? att[(size_t) b] : rel[(size_t) b]);
+            // The level of the band is its average power (what a level meter shows for a steady note: 3 dB under the
+            // peaks of a sine), rising at the attack time and falling at the release time. Both channels move
+            // together, on whichever is louder, so the stereo picture does not shift.
+            power[(size_t) b] += (peak[(size_t) b] - power[(size_t) b]) * (peak[(size_t) b] > power[(size_t) b] ? att[(size_t) b] : rel[(size_t) b]);
+            envDb[(size_t) b] = 10.0f * std::log10 (power[(size_t) b] + 1.0e-12f);
             const auto& bs = settings.band[(size_t) b];
             const float want = bs.on ? gainFor (envDb[(size_t) b], bs.thresholdDb, bs.ratio, settings.kneeDb) : 0.0f;
             gainDb[(size_t) b] += (want - gainDb[(size_t) b]) * 0.02f;                 // takes the steps out of the gain itself

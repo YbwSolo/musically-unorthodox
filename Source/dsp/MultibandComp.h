@@ -47,7 +47,7 @@ private:
     float designedLow = -1.0f, designedHigh = -1.0f;
     BiquadCoeffs lpLow {}, hpLow {}, lpHigh {}, hpHigh {};
     std::array<Split, 2> splitLow, splitHigh, alignLow;            // per channel; alignLow = the low band through the upper crossover's all-pass
-    std::array<float, MultibandSettings::kBands> envDb { -120.0f, -120.0f, -120.0f }, gainDb {};
+    std::array<float, MultibandSettings::kBands> envDb { -120.0f, -120.0f, -120.0f }, gainDb {}, power {};
     std::array<std::atomic<float>, MultibandSettings::kBands> grMeter {};
     float wet = 0.0f;                                             // 0 = not in the path, 1 = fully in: moved over 10 ms so switching does not click
 };

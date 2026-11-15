@@ -20,6 +20,9 @@
 #include "dsp/SpectrumAnalyzer.h"
 #include "analysis/TonalAnalysis.h"
 #include "dsp/VocalSpace.h"
+#include "dsp/MultibandComp.h"
+#include "dsp/Clipper.h"
+#include "analysis/MasterEngine.h"
 #include "dsp/RoleDetector.h"
 #include "session/BalanceEngine.h"
 #include "dsp/Pitch.h"
@@ -863,6 +866,208 @@ int main()
                juce::String (dipAt (1000.0f, false, false), 2) + " dB at 1 kHz, " + juce::String (dipAt (7000.0f, false, false), 2) + " dB at 7 kHz");
         check (near (dipAt (1000.0f, true, false), -5.0f, 0.4f) && std::abs (dipAt (1000.0f, true, true)) < 0.05f, "Centre only dips the middle and leaves the sides exactly as they were",
                juce::String (dipAt (1000.0f, true, false), 2) + " dB in the middle, " + juce::String (dipAt (1000.0f, true, true), 3) + " dB at the sides");
+    }
+
+    // --- Mastering (build 20): the three-band compressor, the soft clipper, the mix probe and the decisions
+    {
+        auto eachBlock = [] (juce::AudioBuffer<float>& b, int size, const std::function<void (juce::AudioBuffer<float>&)>& fn)
+        {
+            for (int pos = 0; pos < b.getNumSamples(); pos += size)
+            {
+                juce::AudioBuffer<float> view (b.getArrayOfWritePointers(), b.getNumChannels(), pos, juce::jmin (size, b.getNumSamples() - pos));
+                fn (view);
+            }
+        };
+        // the level of one tone inside a signal, from its last half second
+        auto toneDb = [fs] (const juce::AudioBuffer<float>& b, float hz)
+        {
+            const int n = (int) (fs * 0.5), from = b.getNumSamples() - n;
+            double re = 0.0, im = 0.0;
+            for (int i = 0; i < n; ++i) { const double ph = juce::MathConstants<double>::twoPi * hz * (double) (from + i) / fs; const double x = b.getSample (0, from + i); re += x * std::cos (ph); im += x * std::sin (ph); }
+            return (float) (20.0 * std::log10 (2.0 * std::sqrt (re * re + im * im) / n + 1.0e-12));
+        };
+        auto tones = [fs] (std::initializer_list<std::pair<float, float>> list, double seconds)
+        {
+            juce::AudioBuffer<float> b (2, (int) (fs * seconds)); b.clear();
+            for (auto& t : list)
+                for (int i = 0; i < b.getNumSamples(); ++i) { const float v = t.second * (float) std::sin (juce::MathConstants<double>::twoPi * t.first * i / fs); b.addSample (0, i, v); b.addSample (1, i, v); }
+            return b;
+        };
+        auto throughBands = [&] (juce::AudioBuffer<float> b, const MultibandSettings& st)
+        {
+            MultibandComp mb; mb.setSettings (st); mb.prepare (fs, 512, 2);
+            eachBlock (b, 512, [&mb] (juce::AudioBuffer<float>& v) { mb.process (v); });
+            return b;
+        };
+        MultibandSettings off;
+        const auto probeTones = tones ({ { 60.0f, 0.1f }, { 140.0f, 0.1f }, { 1000.0f, 0.1f }, { 3500.0f, 0.1f }, { 10000.0f, 0.1f } }, 2.0);
+        const auto untouched = throughBands (probeTones, off);
+        bool same = true;
+        for (int i = 0; i < probeTones.getNumSamples(); ++i) same = same && juce::exactlyEqual (untouched.getSample (0, i), probeTones.getSample (0, i));
+        MultibandSettings flat; flat.enabled = true; for (auto& b : flat.band) b.on = false;
+        const auto split = throughBands (probeTones, flat);
+        float worstFlat = 0.0f;
+        for (float hz : { 60.0f, 140.0f, 1000.0f, 3500.0f, 10000.0f }) worstFlat = juce::jmax (worstFlat, std::abs (toneDb (split, hz) - toneDb (probeTones, hz)));
+        check (same && worstFlat < 0.1f, "The three-band compressor is out of the path when off, and its bands add back up to the sound when it is not compressing", juce::String (worstFlat, 3) + " dB worst, at the crossovers included");
+        MultibandSettings lowOnly = flat; lowOnly.band[0].on = true; lowOnly.band[0].thresholdDb = -18.0f; lowOnly.band[0].ratio = 2.0f; lowOnly.kneeDb = 0.0f;
+        const auto bassAndVoice = tones ({ { 60.0f, 0.5f }, { 1000.0f, 0.1f } }, 3.0);
+        const auto held = throughBands (bassAndVoice, lowOnly);
+        const float lowChange = toneDb (held, 60.0f) - toneDb (bassAndVoice, 60.0f), midChange = toneDb (held, 1000.0f) - toneDb (bassAndVoice, 1000.0f);
+        // a 60 Hz tone at -9 dB average (peaks at -6), threshold -18, 2:1: half of the 9 dB it is over
+        check (near (lowChange, -4.5f, 0.8f) && std::abs (midChange) < 0.2f, "Compressing the low band holds the bass and leaves the middle alone", juce::String (lowChange, 2) + " dB at 60 Hz, " + juce::String (midChange, 2) + " dB at 1 kHz");
+
+        // the soft clipper
+        {
+            auto run = [&] (juce::AudioBuffer<float> b, bool on, float thresholdDb, int& latency)
+            {
+                Clipper c; c.prepare (fs, 512, 2); c.setActive (true); c.setEnabled (on); c.setThresholdDb (thresholdDb); c.setSoftness (0.6f); c.reset();
+                latency = c.getLatencySamples();
+                eachBlock (b, 512, [&c] (juce::AudioBuffer<float>& v) { c.process (v); });
+                return b;
+            };
+            const auto quiet = tones ({ { 220.0f, 0.2f } }, 1.0);
+            int late = 0;
+            const auto passed = run (quiet, true, -6.0f, late);
+            float worst = 0.0f;
+            for (int i = 4000; i < quiet.getNumSamples(); ++i) worst = juce::jmax (worst, std::abs (passed.getSample (0, i) - quiet.getSample (0, i - late)));
+            const auto offCopy = run (quiet, false, -6.0f, late);
+            bool exact = true;
+            for (int i = late; i < quiet.getNumSamples(); ++i) exact = exact && juce::exactlyEqual (offCopy.getSample (0, i), quiet.getSample (0, i - late));
+            const auto loud = tones ({ { 220.0f, 1.0f } }, 1.0);
+            const auto clipped = run (loud, true, -6.0f, late);
+            const float top = juce::Decibels::gainToDecibels (clipped.getMagnitude (0, (int) fs / 2, (int) fs / 2));
+            check (late > 0 && worst < 2.0e-3f && exact && top < -5.7f && top > -8.5f, "The soft clipper changes nothing under its threshold, is an exact delay when off, and holds a loud peak at the threshold",
+                   juce::String (worst, 5) + " difference under the threshold, peak held at " + juce::String (top, 2) + " dB for a threshold of -6, " + juce::String (late) + " samples late");
+            bool monotonic = true;
+            for (float x = 0.0f; x < 3.0f; x += 0.01f) monotonic = monotonic && Clipper::shape (x + 0.01f, 0.5f, 0.6f) >= Clipper::shape (x, 0.5f, 0.6f) && Clipper::shape (x, 0.5f, 0.6f) <= 0.5f + 1.0e-6f;
+            check (monotonic, "The clipper's curve only ever rises and never passes its threshold");
+        }
+
+        // what the probe measures
+        {
+            juce::Random rng (21);
+            const int n = (int) (fs * 24.0);
+            juce::AudioBuffer<float> mono (2, n), inverted (2, n), bass (2, n), steps (2, n), clippedMix (2, n);
+            for (int i = 0; i < n; ++i)
+            {
+                const float hiss = 0.1f * (rng.nextFloat() * 2.0f - 1.0f);
+                mono.setSample (0, i, hiss); mono.setSample (1, i, hiss);
+                inverted.setSample (0, i, hiss); inverted.setSample (1, i, -hiss);
+                // a bass line: every fourth note twice as loud (6 dB)
+                const int note = (i / (int) (fs * 0.5));
+                const float b = (note % 4 == 0 ? 0.4f : 0.2f) * (float) std::sin (juce::MathConstants<double>::twoPi * 60.0 * i / fs);
+                bass.setSample (0, i, b + 0.2f * hiss); bass.setSample (1, i, b + 0.2f * hiss);
+                // eight seconds loud, eight seconds 10 dB down, eight loud
+                const float lvl = (i / (int) (fs * 8.0)) % 2 == 0 ? 0.3f : 0.095f;
+                steps.setSample (0, i, lvl * hiss * 10.0f); steps.setSample (1, i, lvl * hiss * 10.0f);
+                const float hot = juce::jlimit (-1.0f, 1.0f, 1.6f * (float) std::sin (juce::MathConstants<double>::twoPi * 110.0 * i / fs));
+                clippedMix.setSample (0, i, hot); clippedMix.setSample (1, i, hot);
+            }
+            const auto fMono = measureMix (mono, fs), fInv = measureMix (inverted, fs), fBass = measureMix (bass, fs), fSteps = measureMix (steps, fs), fClip = measureMix (clippedMix, fs);
+            check (fMono.probe.correlation > 0.99f && fMono.probe.widthDb < -40.0f && std::abs (fMono.probe.monoLossDb) < 0.1f && fInv.probe.correlation < -0.99f && fInv.probe.monoLossDb < -30.0f,
+                   "The probe reads a mono mix as mono and an out-of-phase one as cancelling in mono", juce::String (fMono.probe.correlation, 2) + " and " + juce::String (fInv.probe.correlation, 2) + ", " + juce::String (fInv.probe.monoLossDb, 0) + " dB lost");
+            check (near (fBass.probe.lowLoudDb - fBass.probe.lowTypicalDb, 6.0f, 1.2f), "The probe hears that some bass notes are 6 dB louder than the rest", juce::String (fBass.probe.lowLoudDb - fBass.probe.lowTypicalDb, 1) + " dB");
+            check (fSteps.probe.loudnessRangeLu > 7.0f && fSteps.probe.loudnessRangeLu < 11.5f && fMono.probe.loudnessRangeLu < 1.0f, "Loudness range: a song with a section 10 dB quieter reads about 10 LU, a steady one under 1",
+                   juce::String (fSteps.probe.loudnessRangeLu, 1) + " and " + juce::String (fMono.probe.loudnessRangeLu, 1) + " LU");
+            check (fClip.probe.flatTops > 500 && fMono.probe.flatTops == 0 && near (fClip.probe.samplePeakDb, 0.0f, 0.1f), "The probe counts flattened peaks in a clipped mix and none in a clean one", juce::String (fClip.probe.flatTops));
+            check (fMono.enough() && fMono.hasBands && fMono.integratedLufs > -40.0f && fMono.integratedLufs < -10.0f && near (fMono.probe.seconds, 24.0f, 1.0f), "A whole recording is measured in one go: loudness, tone and length",
+                   juce::String (fMono.integratedLufs, 1) + " LUFS over " + juce::String (fMono.probe.seconds, 1) + " s");
+        }
+
+        // the decisions, on measurements made up for the purpose
+        {
+            const auto centres = analysisBandCentres();
+            auto mixLike = [&] (MasterStyle style)
+            {
+                MasterFacts f; f.hasBands = true; f.bandsDb = masterTargetCurve (style); f.swingDb.fill (2.0f);
+                for (auto& v : f.bandsDb) v -= 30.0f;
+                f.integratedLufs = -18.0f; f.truePeakDb = -5.0f;
+                f.probe.seconds = 180.0f; f.probe.punchDb = 10.0f; f.probe.crestDb = 15.0f; f.probe.correlation = 0.8f; f.probe.lowestCorrelation = 0.4f; f.probe.widthDb = -10.0f;
+                f.probe.sideToMidDb = { -25.0f, -12.0f, -9.0f, -8.0f }; f.probe.monoLossDb = -0.4f; f.probe.loudnessRangeLu = 5.0f; f.probe.levelSwingDb = 5.0f; f.probe.lowSwingDb = 5.0f;
+                f.probe.lowTypicalDb = -28.0f; f.probe.lowLoudDb = -26.5f;
+                return f;
+            };
+            auto mentions = [] (const juce::StringArray& lines, const char* word) { for (auto& l : lines) if (l.containsIgnoreCase (word)) return true; return false; };
+            // a good mix that is only quiet: the limiter, and nothing else
+            const auto good = mixLike (MasterStyle::Transparent);
+            const auto plain = planMaster (good, MasterStyle::Transparent, 0.5f);
+            check (plain.eq.empty() && ! plain.glue && ! plain.multiband.enabled && ! plain.saturate && ! plain.clip && plain.processing.size() == 1 && mentions (plain.processing, "limiter") && near (plain.targetLufs, -14.0f, 0.1f),
+                   "A balanced mix that is only quiet gets a limiter and nothing else", plain.processing.joinIntoString (" | "));
+            // muddy and harsh: a cut and a dynamic band, and no boost anywhere
+            auto rough = good;
+            for (int b = 0; b < kAnalysisBands; ++b)
+            {
+                if (centres[(size_t) b] > 180.0f && centres[(size_t) b] < 400.0f) rough.bandsDb[(size_t) b] += 5.0f;
+                if (centres[(size_t) b] > 2500.0f && centres[(size_t) b] < 5000.0f) rough.bandsDb[(size_t) b] += 5.0f;
+            }
+            const auto fixed = planMaster (rough, MasterStyle::Transparent, 0.5f);
+            bool mudCut = false, harshDynamic = false, anyBoost = false;
+            for (auto& e : fixed.eq)
+            {
+                mudCut = mudCut || (! e.dynamic && e.gainDb < -0.5f && e.gainDb >= -2.5f && e.freqHz > 180.0f && e.freqHz < 400.0f);
+                harshDynamic = harshDynamic || (e.dynamic && e.rangeDb < -0.8f && e.rangeDb >= -3.0f && e.freqHz > 2500.0f && e.freqHz < 5000.0f);
+                anyBoost = anyBoost || e.gainDb > 0.0f;
+            }
+            check (mudCut && harshDynamic && ! anyBoost && mentions (fixed.detected, "Low-mid") && mentions (fixed.detected, "Harsh"), "A muddy, harsh mix gets a gentle cut and a dynamic band, each with its measurement, and no boosts",
+                   fixed.processing.joinIntoString (" | "));
+            // intensity scales the moves, not just the level
+            auto mudGain = [&] (float intensity) { float g = 0.0f; for (auto& e : planMaster (rough, MasterStyle::Transparent, intensity).eq) if (! e.dynamic && e.freqHz > 180.0f && e.freqHz < 400.0f) g = e.gainDb; return g; };
+            check (mudGain (1.0f) < mudGain (0.5f) - 0.2f && mudGain (0.5f) < mudGain (0.0f) - 0.2f && planMaster (good, MasterStyle::Transparent, 1.0f).targetLufs - planMaster (good, MasterStyle::Transparent, 0.0f).targetLufs <= 1.6f,
+                   "Intensity makes every move bigger or smaller; it is not a volume control", juce::String (mudGain (0.0f), 1) + " / " + juce::String (mudGain (0.5f), 1) + " / " + juce::String (mudGain (1.0f), 1) + " dB on the mud");
+            // an already bright mix is not made brighter, whatever the style
+            auto bright = mixLike (MasterStyle::Bright);
+            for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 7000.0f) bright.bandsDb[(size_t) b] += 3.0f;
+            bool lifted = false;
+            for (auto& e : planMaster (bright, MasterStyle::Bright, 1.0f).eq) lifted = lifted || (e.type == EQType::HighShelf && e.gainDb > 0.0f);
+            auto dull = mixLike (MasterStyle::Transparent);
+            for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 7000.0f) dull.bandsDb[(size_t) b] -= 5.0f;
+            bool air = false;
+            for (auto& e : planMaster (dull, MasterStyle::Bright, 0.5f).eq) air = air || (e.type == EQType::HighShelf && e.gainDb > 0.5f && e.gainDb <= 2.5f);
+            check (! lifted && air, "The Bright style lifts the top of a dull mix and leaves a mix that is already bright alone");
+            // a mix that is already squashed gets no more compression, saturation or clipping, even when the style wants them
+            auto dense = mixLike (MasterStyle::Aggressive); dense.integratedLufs = -10.0f; dense.truePeakDb = -3.0f; dense.probe.punchDb = 4.0f;
+            const auto careful = planMaster (dense, MasterStyle::Aggressive, 1.0f);
+            const auto hard = planMaster (mixLike (MasterStyle::Aggressive), MasterStyle::Aggressive, 0.7f);
+            check (! careful.glue && ! careful.saturate && ! careful.clip && ! careful.multiband.enabled && mentions (careful.detected, "dense") && hard.glue && hard.saturate && hard.clip,
+                   "Aggressive uses glue, saturation and the clipper on an open mix, and none of them on one that is already dense");
+            // loudness is held back when reaching it would crush the mix
+            auto peaky = mixLike (MasterStyle::Loud); peaky.integratedLufs = -24.0f; peaky.truePeakDb = -3.0f;
+            const auto capped = planMaster (peaky, MasterStyle::Loud, 0.5f);
+            check (capped.targetLufs < -11.0f && mentions (capped.notes, "held back"), "A very peaky mix is not pushed all the way to a loud target, and the reason is given", juce::String (capped.targetLufs, 1) + " LUFS instead of -9.5");
+            // uneven bass gets its own band; wide bass is made mono; a phase problem is narrowed and sent back to the mix
+            auto jumpy = mixLike (MasterStyle::Loud); jumpy.probe.lowLoudDb = jumpy.probe.lowTypicalDb + 6.0f;
+            const auto banded = planMaster (jumpy, MasterStyle::Loud, 0.5f);
+            auto wideLow = good; wideLow.probe.sideToMidDb[0] = -6.0f;
+            auto phasey = good; phasey.probe.correlation = 0.1f; phasey.probe.lowestCorrelation = -0.5f; phasey.probe.monoLossDb = -4.0f;
+            const auto narrowed = planMaster (phasey, MasterStyle::Transparent, 0.5f);
+            check (banded.multiband.enabled && banded.multiband.band[0].on && ! banded.multiband.band[1].on && banded.multiband.crossLowHz >= 90.0f && banded.multiband.crossLowHz <= 220.0f
+                   && near (banded.multiband.band[0].thresholdDb, jumpy.probe.lowTypicalDb + 1.0f, 0.1f) && planMaster (wideLow, MasterStyle::Transparent, 0.5f).monoBass
+                   && near (narrowed.width, 0.9f, 0.01f) && mentions (narrowed.notes, "phase") && near (plain.width, 1.0f, 0.001f),
+                   "Uneven bass gets the low band only, wide bass is made mono, a phase problem is narrowed and sent back to the mix, and a healthy mix keeps its width");
+            // a reference leans the loudness and the tone, inside limits
+            auto reference = mixLike (MasterStyle::Transparent); reference.integratedLufs = -9.0f; reference.truePeakDb = -1.0f;
+            for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 6000.0f) reference.bandsDb[(size_t) b] += 12.0f;
+            const auto leaned = planMaster (good, MasterStyle::Transparent, 0.5f, &reference);
+            float topShift = 0.0f;
+            for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 8000.0f && centres[(size_t) b] < 12000.0f) topShift = juce::jmax (topShift, leaned.targetCurve[(size_t) b] - plain.targetCurve[(size_t) b]);
+            bool refAir = false;
+            for (auto& e : leaned.eq) refAir = refAir || (e.type == EQType::HighShelf && e.gainDb > 0.0f && e.gainDb <= 2.5f);
+            check (leaned.targetLufs > plain.targetLufs + 0.5f && topShift > 1.0f && topShift <= 4.0f && refAir, "A brighter, louder reference leans the master brighter and louder, by no more than 4 dB of tone",
+                   juce::String (leaned.targetLufs, 1) + " LUFS, top of the target up " + juce::String (topShift, 1) + " dB");
+            // the report says improved only when the measurement moved
+            auto after = rough; after.integratedLufs = fixed.targetLufs; after.truePeakDb = -1.0f;
+            const auto unchangedReport = masterReport (rough, after, fixed).joinIntoString ("\n");
+            for (int b = 0; b < kAnalysisBands; ++b)
+            {
+                if (centres[(size_t) b] > 180.0f && centres[(size_t) b] < 400.0f) after.bandsDb[(size_t) b] -= 4.0f;
+                if (centres[(size_t) b] > 2500.0f && centres[(size_t) b] < 5000.0f) after.bandsDb[(size_t) b] -= 4.0f;
+            }
+            const auto betterReport = masterReport (rough, after, fixed).joinIntoString ("\n");
+            const auto noEqReport = masterReport (good, good, plain).joinIntoString ("\n");
+            check (unchangedReport.contains ("Unchanged") && betterReport.contains ("Improved") && betterReport.contains ("On target") && betterReport.contains ("Under the ceiling")
+                   && noEqReport.contains ("No EQ was used") && ! noEqReport.contains ("Improved") && ! noEqReport.contains ("Steadier"),
+                   "The report says the tone improved only when an EQ was used and it measures closer to the target");
+        }
     }
 
     // --- EQ match

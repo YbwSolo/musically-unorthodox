@@ -123,6 +123,7 @@ target_sources(MusicallyUnorthodox PRIVATE
     Source/ui/DynamicsPage.cpp
     Source/ui/TonePage.cpp
     Source/ui/MasterPage.cpp
+    Source/ui/MasterAssistant.cpp
     Source/ui/LearnPage.cpp
     Source/ui/SettingsPanel.cpp)
 
@@ -188,6 +189,10 @@ if(MU_BUILD_TESTS)
     target_include_directories(MUMixLab PRIVATE Source)
     target_link_libraries(MUMixLab PRIVATE MusicallyUnorthodox MUAssets juce::juce_audio_utils juce::juce_dsp)
     target_compile_definitions(MUMixLab PRIVATE JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1)
+    add_executable(MUMasterLab Source/tests/MasterLab.cpp)
+    target_include_directories(MUMasterLab PRIVATE Source)
+    target_link_libraries(MUMasterLab PRIVATE MusicallyUnorthodox MUAssets juce::juce_audio_utils juce::juce_dsp)
+    target_compile_definitions(MUMasterLab PRIVATE JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1)
 endif()
 
 if(MU_BUILD_TESTS)
