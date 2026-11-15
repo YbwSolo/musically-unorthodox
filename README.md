@@ -321,6 +321,64 @@ sides. On the five studio sessions, after Learn and balance, it found one place 
 offers the same thing as "Make room for the vocal". It follows the level of the vocal, not what the vocal is
 singing, and nobody has judged it by ear yet.
 
+### Mastering assistant (build 20)
+
+On the instance that sits on the Stereo Out, the Master tab opens on **Assistant**. Press **Analyse & master**,
+play the finished song from start to end, and press it again (it needs at least 20 seconds of sound). A second
+view, **Loudness and limiter**, is the tab as it was.
+
+**What it measures**, on the mix as it arrives: integrated, short-term and momentary loudness (ITU-R BS.1770),
+true peak, loudness range (EBU Tech 3342), crest, how far the hits stand above the level around them, the
+long-term spectrum in 32 bands and how each band comes and goes over the whole song, how much louder the loud
+bass notes are than the usual bass level (40 to 120 Hz), stereo correlation and its lowest value, width in four
+ranges, how much is lost in mono, and whether the mix arrives already clipped.
+
+**What it decides.** A set of rules worked from those measurements chooses which processors the song needs. It is
+not a trained model, nothing is random, and the same measurements always give the same answer.
+
+| Processor | Used when |
+|---|---|
+| Corrective EQ | a range is measured too strong: rumble under 30 Hz, low end, low mids, boxiness, top |
+| Tonal EQ | a range is measured short, after the corrective cuts: low end, presence, air. Never lifted when already there |
+| Dynamic EQ | harsh upper mids (always dynamic on a master), or a low-mid build-up that comes and goes |
+| Multiband compression | loud bass notes 3 dB or more above the usual bass level; low band only, ending where this song's bass ends |
+| Glue compression | the style asks for it or the song moves over more than 9 dB, and the mix is not already dense |
+| Saturation | the Warm, Loud and Aggressive styles, unless the mix is dense or clipped |
+| Mono bass, width | the low end is wide; a phase problem narrows the mix and is sent back to the mixer; a narrow, in-phase mix is widened a little in the loud styles |
+| Soft clipper | the loud styles, when the hits are tall enough to be worth rounding |
+| True peak limiter | always: ceiling -1 dBTP, level found by Auto level |
+
+Six **styles** (Transparent, Warm, Loud, Dynamic, Bright, Aggressive) lean the tone aimed for, the loudness and
+which of the optional processors are considered. **Intensity** scales every move (EQ gains, compression,
+saturation, clipping) from 0.4 to 1.3 times; the loudness target moves by under 1 dB over its range. Loudness is
+**held back** when reaching the style's target would take more off the peaks than the style allows (3 dB for
+Transparent, 7 for Aggressive), and the report says by how much. A **reference** (a file, or a track played
+through the plugin) replaces the style's tone and loudness, with no band of the target moved more than 4 dB.
+
+Two new processors were written for it: a three-band compressor (fourth-order Linkwitz-Riley crossovers; with no
+compression its bands add back up to the input within 0.1 dB at every frequency, crossovers included; out of the
+path entirely when off) and a soft clipper in front of the limiter (four times oversampled; an exact delay when
+off). The EQ, glue compressor, saturator, stereo tool and limiter are the ones already in the plugin.
+
+After it has set everything, it measures the master over 30 seconds and writes a **report**: each line is the
+figure before and after, and a verdict ("Improved", "Steadier") appears only where a processor was used and the
+measurement moved. **Listen to** switches between the master, the master turned down to the mix's loudness, and
+the mix as it arrived, for a fair comparison (never in a bounce). **Decide again** re-plans from the same
+measurements with a new style or intensity; **Undo** puts everything back.
+
+On the five studio sessions (the mixes made by the plugin's own Learn and balance, 30 seconds each), every
+master landed within 1 LU of its target and at -1.0 dBTP. The chains differed from song to song: Transparent gave
+one shelf and a limiter on one song, a low cut, a high-shelf cut and glue on another (9.4 LU of loudness
+range), and a cut, a presence lift and low-band compression on a third (bass notes 6.6 dB over the usual
+level, 3.8 dB after). Loud asked for -9.5 LUFS and was held back to between -9.7 and -10.6 on three of the five.
+
+What it does not do yet: linear-phase EQ, mid/side decisions (the EQ has mid/side bands, the assistant does not
+use them), mid and high band controls on screen (they are host parameters), before and after waveforms,
+multi-step undo, a frequency-dependent exciter, and reordering of the processors. It cannot repair one track
+inside a mix; when it measures a problem that belongs in the mix (clipping, phase, a mono mix, a thin low
+end) it says so. The targets are reasoned, not measured from released masters. Nobody has judged a master
+from it by ear yet, and no claim is made that it matches the products that were given as references.
+
 ### Checked on real recordings (build 18): Tune
 
 Tune was reported as glitchy on real vocals. Three sung takes from the same sessions (a woman, two men, one of

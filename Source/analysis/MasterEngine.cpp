@@ -279,6 +279,11 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
         plan.processing.add ("Stereo: width brought in to 90 %.");
         plan.notes.add ("Something in the mix is out of phase or over-widened. A master can only narrow everything; find the track and fix it there.");
     }
+    else if (p.widthDb < -30.0f)
+    {
+        plan.detected.add ("The mix is close to mono: the sides are " + d1 (-p.widthDb) + " dB below the middle.");
+        plan.notes.add ("Width cannot be added by a master when there is almost nothing at the sides to turn up. Pan and widen things in the mix.");
+    }
     else if (p.widthDb < -14.0f && p.correlation > 0.7f && (style == MasterStyle::Bright || style == MasterStyle::Loud || style == MasterStyle::Aggressive) && k > 0.3f)
     {
         plan.width = 1.0f + 0.12f * k;
