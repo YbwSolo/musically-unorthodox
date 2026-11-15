@@ -61,12 +61,15 @@ maths the plugin uses, and several end with a "your turn" exercise.
 
 ## Tune tab
 
-**Tune** is pitch correction for one voice. A YIN pitch detector hears the note every 10 ms (a leap of more than
-four semitones has to be heard twice before it is believed, which keeps consonants and breaths from being mistaken
-for notes). The voice is re-pitched by laying two-period slices of it closer together or further apart, which
-leaves the formants (the character of the voice) where they were. Each slice is centred on a pulse of the voice
-(found on a low-passed copy), the pitch handed to the engine glides between measurements instead of stepping every
-10 ms, and a measurement the detector is unsure of changes nothing. Adds 20 ms of reported latency while on.
+**Tune** is pitch correction for one voice. A YIN pitch detector hears the note every 10 ms. The tuner waits for
+the next two answers before it believes one, so it can tell a change of note from a blip (a consonant, a crack in
+the voice, a wrong octave) by what came after it, and so a note that ends is known to have ended. The voice is
+re-pitched by laying one-period slices of it closer together or further apart, which leaves the formants (the
+character of the voice) where they were. Each slice is centred on a pulse of the voice (found on a low-passed
+copy) and rises over exactly the stretch its neighbour falls over. Wherever nothing is being changed (between
+words, on consonants, on a note that is already in tune) the sound is copied sample for sample, and the join
+between copied and re-pitched sound is made by moving the slice, not the sound, so it leaves no dip in level.
+Adds 50 ms of reported latency while on (6 ms in low latency mode, which decides on the spot as before).
 
 **Simple** view corrects as the song plays. Key and scale choose which notes are allowed; the keyboard lets any
 single note be blocked or allowed. Speed 40 to 100 ms with Keep vibrato high corrects only the centre of each note;
@@ -286,6 +289,43 @@ measured from finished vocal stems, and it is the thing most worth checking by e
 What has not been done: none of this has been compared by ear, in a blind test, against the commercial plugins
 that were given as references, and no claim is made that it matches them. The measurements above say the voice
 is brighter, lighter in the low mids and more even than in build 12; they do not say it sounds good.
+
+### Checked on real recordings (build 18): Tune
+
+Tune was reported as glitchy on real vocals. Three sung takes from the same sessions (a woman, two men, one of
+them low and raspy) were tuned by build 17 and build 18 and compared with the recordings, 10 ms at a time. Two
+things were counted: moments where the recording is a clean note and the tuned voice is not ("rough"), and
+moments where the recording has a clear note and the tuned voice has none ("lost"). Per minute of singing, the
+three takes in the same order:
+
+| | build 17 | build 18 |
+|---|---|---|
+| Rough, speed 20 | 111, 71, 404 | 9, 2, 20 |
+| Rough, natural preset | 73, 41, 283 | 4, 0, 0 |
+| Rough, hard tune | 225, 90, 617 | 65, 14, 184 |
+| Lost, speed 20 | 51, 37, 174 | 2, 0, 5 |
+| Lost, hard tune | 92, 38, 283 | 13, 4, 65 |
+| Dips of 3 dB or more in level, hard tune | 0, 0, 20 | 0, 0, 0 |
+
+What is left in hard tune is the snap from one note to the next, which is the effect. Tuning accuracy on the
+same held notes is unchanged within one note either way (hard tune 99 / 97 / 96 % of held notes centred within
+15 cents, speed 20 98 / 100 / 93 %). What was found:
+
+- A voice with a strong second harmonic (the low, raspy take) was read an octave too high for 20 to 30 ms, 25
+  times a minute, and the tuner followed it there and back. The detector now checks the dip at twice the delay.
+- Every big interval began with 10 to 30 ms of the new note cut at the old note's size, because a leap was only
+  believed on its second hearing and the voice was not played late enough for that. The tuner now looks 20 ms
+  ahead and plays the voice 50 ms behind.
+- Going from untouched sound to re-pitched sound (every word, and in gentle settings many times a second) took
+  the sound from up to half a period away, which laid the same wave twice out of step for a few milliseconds.
+- Slices had one width for both sides, so a pitch that dropped left a gap between two slices and one that
+  jumped up piled them on top of each other.
+- After a change of note the slices could sit between two pulses of the new note until they happened to line up.
+
+These are measurements, made with a second pitch tracker that is not perfect either (on the raspy take it
+reads the recording and the tuned voice an octave apart 100 to 200 times a minute, in both builds). Nobody has compared build 18 by ear yet. Harmony and Shift use the same slices and measure a third to a
+half less rough than before, but they do not look ahead yet. The natural preset still centres only about half
+of the notes that were sung off (49 / 92 / 37 %): it is smooth, and it is gentle to a fault.
 
 ## What it does not do (yet)
 

@@ -40,7 +40,7 @@ void PitchDetector::reset()
 {
     std::fill (ring.begin(), ring.end(), 0.0f);
     lp1.z1 = lp1.z2 = lp2.z1 = lp2.z2 = 0.0f;
-    ringPos = 0; phase = 0; since = 0; freq = 0.0f; clear = 0.0f; lastGood = 0.0f; pending = 0.0f; heldFrames = 0;
+    ringPos = 0; phase = 0; since = 0; freq = 0.0f; clear = 0.0f; lastGood = 0.0f; pending = 0.0f; heldFrames = 0; rawFreq = 0.0f; rawClear = 0.0f;
 }
 
 bool PitchDetector::push (float x) noexcept
@@ -67,6 +67,7 @@ void PitchDetector::analyse() noexcept
     double energy = 0.0;
     for (int i = 0; i < total; ++i) frame[(size_t) i] -= (float) mean;
     for (int j = 0; j < window; ++j) energy += (double) x[a + j] * x[a + j];
+    rawFreq = 0.0f; rawClear = 0.0f;
     if (energy / (double) window < 1.0e-8) { freq = 0.0f; clear = 0.0f; lastGood = 0.0f; pending = 0.0f; heldFrames = 0; return; }       // below -80 dB: silence
 
     // how different the newest stretch is from the same stretch tau samples earlier
@@ -94,6 +95,29 @@ void PitchDetector::analyse() noexcept
             best = tau;
             break;
         }
+    // The first dip is the period of a clean voice. In a rough or creaky one every second pulse is weaker, so the
+    // wave really repeats every two pulses: the first dip is there but shallow, and the one at twice the delay is
+    // much deeper. Taking the first then reads the note an octave too high for a few hundredths of a second, in
+    // the middle of a word (on a real raspy rap vocal, 25 times a minute). So when the first dip is not a
+    // convincing one, the dips at two and three times its delay are looked at: one that is far deeper is the real
+    // period, and one that is somewhat deeper is taken if it is the note that was already being sung.
+    if (best > 0 && diff[(size_t) best] > 0.05f)
+    {
+        const float carried = lastGood > 0.0f ? rate / lastGood : 0.0f;
+        const int first = best;
+        for (int k = 2; k <= 3; ++k)
+        {
+            const int from = juce::jmax (tauMin, (int) ((float) (first * k) * 0.94f)), to = juce::jmin (tauMax - 1, (int) ((float) (first * k) * 1.06f) + 1);
+            if (from >= to) break;
+            int m = from;
+            for (int tau = from; tau <= to; ++tau) if (diff[(size_t) tau] < diff[(size_t) m]) m = tau;
+            if (m <= from || m >= to) continue;                                  // the bottom of a slope, not a dip
+            const bool farDeeper = diff[(size_t) m] < 0.5f * diff[(size_t) best];
+            const bool somewhatDeeper = diff[(size_t) m] < 0.8f * diff[(size_t) best];
+            const bool theNoteBefore = carried > 0.0f && std::abs ((float) m - carried) < carried * 0.06f;
+            if (farDeeper || (somewhatDeeper && theNoteBefore)) best = m;
+        }
+    }
     if (best < 0)
     {
         best = tauMin;
@@ -102,7 +126,7 @@ void PitchDetector::analyse() noexcept
         // same note that was just being sung, it is given more benefit of the doubt, so the note is not dropped.
         float limit = 0.30f;
         if (lastGood > 0.0f && std::abs ((float) best - rate / lastGood) < rate / lastGood * 0.06f) limit = 0.45f;
-        if (diff[(size_t) best] > limit) { freq = 0.0f; clear = juce::jmax (0.0f, 1.0f - diff[(size_t) best]); lastGood = 0.0f; pending = 0.0f; heldFrames = 0; return; }
+        if (diff[(size_t) best] > limit) { freq = 0.0f; clear = juce::jmax (0.0f, 1.0f - diff[(size_t) best]); rawClear = clear; lastGood = 0.0f; pending = 0.0f; heldFrames = 0; return; }
     }
     // a parabola through the dip and its neighbours finds the delay between two samples
     float tau = (float) best;
@@ -113,6 +137,7 @@ void PitchDetector::analyse() noexcept
         if (std::abs (denom) > 1.0e-9f) tau += juce::jlimit (-0.5f, 0.5f, 0.5f * (y0 - y2) / denom);
     }
     float f = rate / tau;
+    rawFreq = f; rawClear = juce::jlimit (0.0f, 1.0f, 1.0f - diff[(size_t) best]);
     // A leap of more than four semitones is far more often a mistake (a consonant, a breath, the wrong octave)
     // than a real jump. It is only believed once two answers in a row agree on it; until then the last good
     // note is held, and if no agreement comes within 40 ms the sound is treated as having no pitch.
@@ -172,8 +197,9 @@ void GrainEngine::advance() noexcept
 
 // The strongest pulse within "reach" samples of a position. preferNear (0..1) leans towards the position itself,
 // so that of two similar peaks the expected one wins and the choice does not hop between them.
-double GrainEngine::findPulse (double around, float reach, float preferNear) const noexcept
+double GrainEngine::findPulse (double around, float reach, float preferNear, bool* found) const noexcept
 {
+    if (found != nullptr) *found = false;
     const juce::int64 newest = now - 1, oldest = now - (mask + 1) + 8;
     const auto lo = juce::jlimit (oldest, newest, (juce::int64) std::floor (around - (double) reach));
     const auto hi = juce::jlimit (oldest, newest, (juce::int64) std::ceil (around + (double) reach));
@@ -185,8 +211,11 @@ double GrainEngine::findPulse (double around, float reach, float preferNear) con
         const float score = v > 0.0f ? v * (1.0f - preferNear * (float) std::abs ((double) i - around) / reach) : v;
         if (score > bestScore) { bestScore = score; best = i; }
     }
-    // the true peak lies between samples
-    if (best > lo && best < hi)
+    // A best score at the very edge of the search, or one that is not a peak at all, means there is no pulse here
+    // (the note has ended, or this is a consonant). Then the expected position is the answer: taking the edge
+    // would move the slice a third of a period for no reason, which is a small click at the end of every word.
+    if (best <= lo || best >= hi || polarity * pulse[(size_t) (best & mask)] <= 0.0f) return around;
+    if (found != nullptr) *found = true;
     {
         const float a = pulse[(size_t) ((best - 1) & mask)], b = pulse[(size_t) (best & mask)], c = pulse[(size_t) ((best + 1) & mask)];
         const float denom = a - 2.0f * b + c;
@@ -217,43 +246,98 @@ void GrainEngine::renderSync (Voice& v, float period, bool voiced, float ratio, 
     period = juce::jlimit (minPeriod, maxPeriod, period);
     ratio = juce::jlimit (0.25f, 4.0f, ratio);
     formant = voiced ? juce::jlimit (0.5f, 2.0f, formant) : 1.0f;
-    // with nothing to change there is nothing to gain from re-cutting: step on by whole periods, which is exact
-    const bool untouched = std::abs (ratio - 1.0f) < 0.0004f && formant == 1.0f;
+    // With nothing to change, and wherever there is no note to change, the sound is simply copied.
+    const bool copying = ! voiced || (std::abs (ratio - 1.0f) < 0.0004f && std::abs (formant - 1.0f) < 1.0e-6f);
+    // A moved note is laid as slices one period wide, whatever their spacing: that is what keeps the vowel the
+    // same, and the gain puts the level right. A copy is cut exactly as wide as the gap to its neighbours, so the
+    // slices add up to the sound itself.
+    const float ownWidth = juce::jmin (maxPeriod, period / formant);
 
-    while (t >= v.nextCentre - (double) v.nextHalf)
+    for (;;)
     {
-        Voice::Grain g;
-        g.centre = v.nextCentre; g.half = v.nextHalf; g.rate = formant;
-        const double ideal = g.centre - (double) delaySamples;
-        double src = ideal;
+        // Each slice rises over exactly the stretch the one before it falls over, so the two always add up to the
+        // whole, however suddenly the pitch changes. (With one width for both sides, a pitch that dropped left a
+        // gap between slices and one that jumped up piled them on top of each other: a dip or a bump of several
+        // dB for a few milliseconds.) A moved slice knows its own width when it is laid. A copied one does not:
+        // its falling side is left open, and is set by wherever the next slice turns out to go.
+        const bool fallKnown = v.syncFall > 0.0f;
+        double centre = v.syncCentre + (copying ? (double) (fallKnown ? v.syncFall : period) : (double) (period / ratio));
+        if (t < (fallKnown ? centre - (double) v.syncFall : v.syncCentre)) break;
+
+        // how far from the clock's own position the last slice took its sound: it is carried from slice to slice
+        const double carried = v.syncOffset;
+        double src = centre - (double) delaySamples + carried;
         bool locked = false;
-        if (voiced)
+        if (! voiced)
+        {
+            // Between notes the offset creeps back to nothing, a sample at a time, so it cannot build up.
+            const double less = carried - juce::jlimit (-1.0, 1.0, carried);
+            src = centre - (double) delaySamples + juce::jmin (less, (double) delaySamples - 2.0);
+        }
+        else if (! copying)
         {
             const double p = (double) period;
-            const double steps = std::round ((ideal - v.prevSrc) / p);
-            const bool lost = std::abs (v.prevSrc + steps * p - ideal) > p;
-            if (untouched && ! lost) src = v.prevSrc + steps * p;
+            checkPolarity (centre - (double) delaySamples, period);
+            if (! v.locked && ! fallKnown)
+            {
+                // The first moved slice after a stretch of copying. It has to sit on one of the voice's pulses, and
+                // the pulse nearest to where the copy was reading is up to half a period away. Taking the sound
+                // from there would lay the same wave twice, half a period apart, over the end of the copy: for a
+                // few milliseconds the two cancel or pile up (a dip or a bump in level, a hollow sound). So the
+                // slice is moved instead of the sound: it is laid a little early or late, exactly where that pulse
+                // falls in the copy, and the join cannot be heard because nothing has changed yet.
+                double pulseAt = findPulse (src, period * 0.5f, 0.15f);
+                if (centre + (pulseAt - src) - v.syncCentre < 0.4 * p) pulseAt = findPulse (pulseAt + p, period * 0.3f, 0.5f);
+                centre += pulseAt - src;
+                src = pulseAt;
+            }
+            else if (! v.locked) src = findPulse (centre - (double) delaySamples, period * 0.55f, 0.15f);
             else
             {
-                checkPolarity (ideal, period);
-                if (! v.locked || lost)   src = findPulse (ideal, period * 0.55f, 0.15f);              // first slice of a note: the nearest strong pulse
-                else if (steps <= 0.0)    src = v.prevSrc;                                             // the same pulse again (pitching up needs repeats)
-                else                      src = findPulse (v.prevSrc + steps * p, period * 0.3f, 0.5f); // the next pulse, about one period on
-                locked = true;
+                const double steps = std::round ((centre - (double) delaySamples - v.prevSrc) / p);
+                bool found = true;
+                src = steps <= 0.0 ? v.prevSrc                                                      // the same pulse again (pitching up needs repeats)
+                                   : findPulse (v.prevSrc + steps * p, period * 0.3f, 0.5f, &found);   // the next pulse, about one period on
+                // When the voice goes to another note its pulses are no longer where the old spacing says. Counting
+                // on from the last pulse then lands between two pulses of the new note, and stays between them:
+                // every slice cuts a pulse in half and the note sounds hoarse until the two happen to line up.
+                // So after a change of note, or when there is no pulse where one was expected, the nearest pulse
+                // to where the slice should be reading is looked for afresh.
+                const bool newNote = std::abs (period - v.syncPeriod) > 0.12f * period;
+                if (newNote || ! found)
+                {
+                    bool again = false;
+                    const double fresh = findPulse (centre - (double) delaySamples, period * 0.55f, 0.15f, &again);
+                    if (again) src = fresh;
+                }
             }
-            // a slice can only use sound that has already arrived; one read faster or slower reaches further
-            const double limit = g.centre - 2.0 - (double) g.half * std::abs ((double) formant - 1.0);
-            for (int guard = 0; src > limit && guard < 8; ++guard)
-                src = locked ? findPulse (src - p, period * 0.3f, 0.5f) : src - p;
+            locked = true;
         }
-        g.src = src;
-        g.gain = voiced ? juce::jmin (2.0f, formant / ratio) : 1.0f;
+        // (An open slice is laid the moment the one before reaches its middle, so the rise starts there, give or
+        // take a fraction of a sample; only a slice laid badly late is cut short so that it still starts from nothing.)
+        double rise = fallKnown ? (double) v.syncFall : juce::jmax (8.0, centre - v.syncCentre);
+        if (! fallKnown && centre - t < 0.5 * rise) rise = juce::jmax (8.0, centre - t);
+        if (voiced && ! copying)
+        {
+            // a slice can only use sound that has already arrived; one read faster or slower reaches further
+            const double limit = centre - 2.0 - rise * std::abs ((double) formant - 1.0);
+            for (int guard = 0; src > limit && guard < 8; ++guard) src = findPulse (src - (double) period, period * 0.3f, 0.5f);
+        }
+        if (! fallKnown && v.count > 0 && v.syncOpen) v.grains[(size_t) v.count - 1].halfOut = (float) rise;
+
+        Voice::Grain g;
+        g.centre = centre; g.src = src; g.half = (float) rise; g.rate = formant;
+        g.halfOut = copying ? 0.0f : ownWidth;
+        g.gain = copying ? 1.0f : juce::jmin (2.0f, formant / ratio);
         v.prevSrc = src;
+        v.syncOffset = src - (centre - (double) delaySamples);
+        v.syncCentre = centre;
+        v.syncFall = g.halfOut;
+        v.syncPeriod = period;
+        v.syncOpen = copying;
         v.locked = locked;
         if (v.count == kMaxGrains) { for (int i = 1; i < kMaxGrains; ++i) v.grains[(size_t) i - 1] = v.grains[(size_t) i]; --v.count; }
         v.grains[(size_t) v.count++] = g;
-        v.nextCentre += voiced ? (double) (period / ratio) : (double) period;
-        v.nextHalf = juce::jmin (maxPeriod, period / formant);
     }
 
     int kept = 0;
@@ -261,7 +345,7 @@ void GrainEngine::renderSync (Voice& v, float period, bool voiced, float ratio, 
     {
         const auto g = v.grains[(size_t) i];
         const double offset = t - g.centre;
-        const float x = (float) (offset / (double) g.half);
+        const float x = (float) (offset / (double) (offset > 0.0 && g.halfOut > 0.0f ? g.halfOut : g.half));
         if (x >= 1.0f) continue;
         v.grains[(size_t) kept++] = g;
         if (x <= -1.0f) continue;
@@ -278,6 +362,7 @@ void GrainEngine::resetVoice (Voice& v, float delaySamples) const noexcept
     v.nextHalf = juce::jlimit (minPeriod, maxPeriod, maxPeriod * 0.3f);
     v.nextCentre = (double) now + v.nextHalf;
     v.prevSrc = v.nextCentre - delaySamples;
+    v.syncCentre = (double) now; v.syncOffset = 0.0; v.syncFall = 0.0f; v.syncOpen = false;
 }
 
 float GrainEngine::read (int channel, double position) const noexcept

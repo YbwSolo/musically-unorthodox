@@ -887,7 +887,7 @@ int main()
                juce::String ((meanOf (notes) - 69.0f) * 100.0f, 1) + " cents off, wobble " + juce::String (spanOf (notes) * 100.0f, 1) + " cents");
         const float change = juce::Decibels::gainToDecibels (rmsOf (out, (int) fs / 2) / rmsOf (in, (int) fs / 2));
         check (std::abs (change) < 1.0f, "Tuning does not change the level", juce::String (change, 2) + " dB");
-        check (t.getLatencySamples() == (int) std::round (fs * 0.020) && t.getTargetNote() == 69, "Tune reports its 20 ms delay and the note it chose");
+        check (t.getLatencySamples() == (int) std::round (fs * 0.050) && t.getTargetNote() == 69, "Tune reports its 50 ms delay and the note it chose");
 
         // --- the scale decides where a note goes: C sharp is not in C major, so a slightly sharp C sharp goes up to D
         Tuner s; s.prepare (fs, 256, 1);
@@ -1811,6 +1811,162 @@ int main()
     }
 
     {
+        // --- the slice engine at its joins (build 18). Wherever nothing is being changed the sound is copied, and
+        // a copy is exact: with the pitch reading and the voiced flag changing at random, what comes out is what
+        // went in, 45 ms later.
+        const auto voice = vowel (3.0, [] (double t) { return 150.0 + 40.0 * std::sin (6.0 * t); });
+        const int D = (int) (fs * 0.045);
+        {
+            GrainEngine engine; engine.prepare (1, fs);
+            GrainEngine::Voice v; engine.resetVoice (v, (float) D);
+            juce::Random rng (11);
+            float worst = 0.0f, period = 300.0f; bool voiced = false;
+            for (int i = 0; i < voice.getNumSamples(); ++i)
+            {
+                engine.write (0, voice.getSample (0, i));
+                if (i % 700 == 0) { period = 60.0f + rng.nextFloat() * 700.0f; voiced = rng.nextBool(); }
+                float y = 0.0f;
+                engine.renderSync (v, period, voiced, 1.0f, (float) D, &y);
+                engine.advance();
+                if (i >= D + 4000) worst = juce::jmax (worst, std::abs (y - voice.getSample (0, i - D)));
+            }
+            check (worst < 2.0e-4f, "With nothing to change the slice engine returns the sound exactly, whatever the pitch reading does", juce::String (worst, 6) + " worst difference");
+        }
+        // Going from copying to moving the pitch and back (which gentle tuning does many times a second), and from
+        // a note to no note and back (every word), the level must not dip or jump at the join.
+        auto levelSwing = [&] (const juce::AudioBuffer<float>& in, const std::function<void (int, bool&, float&)>& script)
+        {
+            GrainEngine engine; engine.prepare (1, fs);
+            GrainEngine::Voice v; engine.resetVoice (v, (float) D);
+            PitchDetector d; d.prepare (fs);
+            juce::AudioBuffer<float> out (1, in.getNumSamples());
+            float period = (float) (fs / 150.0), now = period; bool heard = false;
+            for (int i = 0; i < in.getNumSamples(); ++i)
+            {
+                const float x = in.getSample (0, i);
+                engine.write (0, x);
+                if (d.push (x)) { heard = d.frequency() > 0.0f; if (heard) period = (float) (fs / d.frequency()); }
+                now += (period - now) * 0.007f;
+                bool voiced = heard; float ratio = 1.0f;
+                script (i, voiced, ratio);
+                float y = 0.0f;
+                engine.renderSync (v, now, voiced, ratio, (float) D, &y);
+                out.setSample (0, i, y);
+                engine.advance();
+            }
+            // level over 20 ms, every 5 ms, against the same stretch of the sound that went in (and 10 ms either side)
+            const int win = (int) (fs * 0.02), hop = (int) (fs * 0.005);
+            auto levelAt = [win] (const juce::AudioBuffer<float>& b, int from) { double e = 0.0; for (int k = 0; k < win; ++k) { const double s = b.getSample (0, from + k); e += s * s; } return 10.0 * std::log10 (e / win + 1.0e-12); };
+            double worst = 0.0;
+            for (int at = (int) fs; at + win + 3 * hop < in.getNumSamples(); at += hop)
+            {
+                const double o = levelAt (out, at);
+                double lo = 1.0e9, hi = -1.0e9;
+                for (int k = -2; k <= 2; ++k) { const double r = levelAt (in, at - D + k * hop); lo = juce::jmin (lo, r); hi = juce::jmax (hi, r); }
+                worst = juce::jmax (worst, juce::jmax (lo - o, o - hi));
+            }
+            return (float) worst;
+        };
+        const float steady = levelSwing (voice, [] (int, bool&, float& ratio) { ratio = 1.04f; });
+        const float copyAndMove = levelSwing (voice, [fs] (int i, bool&, float& ratio) { ratio = (i / (int) (fs * 0.07)) % 2 == 0 ? 1.0f : 1.04f; });
+        const float noteAndNone = levelSwing (voice, [fs] (int i, bool& voiced, float& ratio) { ratio = 1.04f; if ((i / (int) (fs * 0.09)) % 2 == 0) voiced = false; });
+        std::printf ("      level swing at the joins: moved all the time %.2f dB; copy <-> moved every 70 ms %.2f dB; note <-> no note every 90 ms %.2f dB\n", steady, copyAndMove, noteAndNone);
+        check (copyAndMove < steady + 0.5f && copyAndMove < 1.5f, "Switching between copying and re-pitching leaves no dip or bump in level", juce::String (copyAndMove, 2) + " dB against " + juce::String (steady, 2) + " dB when re-pitching all the time");
+        check (noteAndNone < steady + 0.5f && noteAndNone < 1.5f, "The start and end of a note leave no dip or bump in level", juce::String (noteAndNone, 2) + " dB");
+
+        // --- the detector and the octave. A voice whose second harmonic is far stronger than its fundamental (a
+        // low, pressed or raspy voice, close to the microphone) repeats almost perfectly after half a period. The
+        // first dip is then the half period, and the note was read an octave too high.
+        {
+            PitchDetector d; d.prepare (fs);
+            juce::Random rng (5);
+            int frames = 0, right = 0, octaveUp = 0; double phase = 0.0;
+            for (int i = 0; i < (int) (fs * 2.0); ++i)
+            {
+                const double hz = 130.0 * std::pow (2.0, 0.3 * std::sin (juce::MathConstants<double>::twoPi * 5.0 * i / fs) / 12.0);
+                phase += juce::MathConstants<double>::twoPi * hz / fs;
+                const float x = 0.2f * (0.2f * (float) std::sin (phase) + (float) std::sin (2.0 * phase) + 0.1f * (float) std::sin (3.0 * phase)) + 0.002f * (rng.nextFloat() * 2.0f - 1.0f);
+                if (! d.push (x) || i < (int) (fs * 0.2)) continue;
+                ++frames;
+                const float f = d.rawFrequency();
+                if (f > 0.0f && std::abs (12.0f * std::log2 (f / 130.0f)) < 1.0f) ++right;
+                if (f > 0.0f && std::abs (12.0f * std::log2 (f / 260.0f)) < 1.0f) ++octaveUp;
+            }
+            check (right >= frames * 98 / 100 && octaveUp == 0, "A voice with a strong second harmonic is heard at its real note, not an octave up",
+                   juce::String (right) + " of " + juce::String (frames) + " answers right, " + juce::String (octaveUp) + " an octave up");
+        }
+    }
+
+    {
+        // --- Tune looks ahead (build 18). A voice that leaps a fifth, back and forth, every 0.6 s, 30 cents flat.
+        // The tuner now waits 20 ms for the next answers before deciding what it heard and plays the voice 50 ms
+        // behind, so the new note is cut at its own period from its first moment and starts at its own pitch
+        // instead of gliding there. What is asserted: the note change is as clean as in the voice as sung.
+        const double lowHz = 220.0 * std::pow (2.0, -30.0 / 1200.0), highHz = 329.63 * std::pow (2.0, -30.0 / 1200.0);
+        const auto leaping = vowel (4.2, [=] (double t) { return ((int) (t / 0.6)) % 2 == 0 ? lowHz : highHz; });
+        auto tunedWith = [&] (const juce::AudioBuffer<float>& in, int look, float speed)
+        {
+            Tuner t; t.prepare (fs, 256, 1);
+            TunerSettings ts; ts.enabled = true; ts.key = 9; ts.scale = 1; ts.speedMs = speed; ts.keepVibrato = 0.0f; ts.lookahead = look;
+            t.setSettings (ts);
+            auto out = in;
+            inBlocks (out, 256, [&t] (juce::AudioBuffer<float>& v) { t.process (v); });
+            return std::make_pair (out, t.getLatencySamples());
+        };
+        // answers in the 90 ms after each leap that are neither the old note nor the new one (or no note at all)
+        auto lostAfterLeaps = [&] (const juce::AudioBuffer<float>& b, int delay)
+        {
+            PitchDetector d; d.prepare (fs);
+            int lost = 0;
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                if (! d.push (b.getSample (0, i))) continue;
+                const double t = (double) (i - delay) / fs, since = std::fmod (t, 0.6);
+                if (t < 0.6 || since > 0.09) continue;
+                const float f = d.rawFrequency();
+                const float note = f > 0.0f ? 69.0f + 12.0f * std::log2 (f / 440.0f) : 0.0f;
+                if (! (std::abs (note - 57.0f) < 1.0f || std::abs (note - 64.0f) < 1.0f)) ++lost;
+            }
+            return lost;
+        };
+        const auto before = tunedWith (leaping, 0, 20.0f), after = tunedWith (leaping, 2, 20.0f);
+        const int lostDry = lostAfterLeaps (leaping, 0), lostBefore = lostAfterLeaps (before.first, before.second), lostAfter = lostAfterLeaps (after.first, after.second);
+        std::printf ("      six leaps of a fifth: answers that are neither note in the 90 ms after each: as sung %d, without looking ahead %d, looking ahead %d\n", lostDry, lostBefore, lostAfter);
+        check (lostAfter <= lostDry + 1, "A leap to another note is tuned cleanly from its first moment", juce::String (lostAfter) + " lost answers against " + juce::String (lostDry) + " in the voice as sung (" + juce::String (lostBefore) + " without looking ahead)");
+
+        // Words: a quarter of a second of voice, then nothing, over and over, 30 cents flat, hard tuned. The level of
+        // what comes out has to follow the level of what went in through every start and end.
+        auto words = vowel (4.0, [=] (double) { return lowHz; });
+        for (int i = 0; i < words.getNumSamples(); ++i)
+        {
+            const double c = std::fmod ((double) i / fs, 0.37);
+            const double g = c < 0.25 ? juce::jmin (1.0, c / 0.008, (0.25 - c) / 0.012) : 0.0;
+            words.setSample (0, i, words.getSample (0, i) * (float) g);
+        }
+        auto levelError = [&] (const juce::AudioBuffer<float>& in, const juce::AudioBuffer<float>& out, int delay)
+        {
+            const int win = (int) (fs * 0.02), hop = (int) (fs * 0.005);
+            auto levelAt = [win] (const juce::AudioBuffer<float>& b, int from) { double e = 0.0; for (int k = 0; k < win; ++k) { const double sm = b.getSample (0, from + k); e += sm * sm; } return 10.0 * std::log10 (e / win + 1.0e-9); };
+            double worst = 0.0;
+            for (int at = (int) fs; at + win + 3 * hop < in.getNumSamples(); at += hop)
+            {
+                const double o = levelAt (out, at);
+                double lo = 1.0e9, hi = -1.0e9;
+                for (int k = -2; k <= 2; ++k) { const double r = levelAt (in, at - delay + k * hop); lo = juce::jmin (lo, r); hi = juce::jmax (hi, r); }
+                if (hi > -45.0) worst = juce::jmax (worst, juce::jmax (lo - o, o - hi));
+            }
+            return (float) worst;
+        };
+        const auto wordsTuned = tunedWith (words, 2, 0.0f);
+        const float edge = levelError (words, wordsTuned.first, wordsTuned.second);
+        juce::AudioBuffer<float> held (1, (int) (fs * 0.1));
+        held.copyFrom (0, 0, wordsTuned.first, 0, (int) (fs * (0.37 * 5 + 0.12)) + wordsTuned.second, held.getNumSamples());
+        const float landed = meanOf (trackNotes (held, 0.0f));
+        std::printf ("      hard-tuned words: level against the voice as sung, worst %.2f dB; note inside a word %.2f\n", edge, landed);
+        check (edge < 1.5f && std::abs (landed - 57.0f) < 0.05f, "Hard-tuned words keep their level through every start and end, and land on the note", juce::String (edge, 2) + " dB worst, note " + juce::String (landed, 2));
+    }
+
+    {
         // --- Tune: the new controls. A voice singing 35 cents flat of A3, hard tuned in A major.
         const float flatA = 220.0f * std::pow (2.0f, -35.0f / 1200.0f);
         auto tuned = [&] (float hz, const std::function<void (TunerSettings&)>& set, float seconds = 2.0f)
@@ -1894,13 +2050,13 @@ int main()
                 b.setSample (0, i, 0.2f * v);
             }
             inBlocks (b, 256, [&] (juce::AudioBuffer<float>& v) { t.process (v); });
-            // the pitch that comes out, moment by moment, against the pitch that went in 20 ms earlier (the tuner's delay)
+            // the pitch that comes out, moment by moment, against the pitch that went in 50 ms earlier (the tuner's delay)
             PitchDetector d; d.prepare (fs);
             SlideResult r; int slides = 0, holds = 0;
             for (int i = 0; i < n; ++i)
             {
                 if (! d.push (b.getSample (0, i)) || d.frequency() <= 0.0f) continue;
-                const double tt = (double) i / fs - 0.045;                                        // the tuner's delay and half the detector's window
+                const double tt = (double) i / fs - 0.075;                                        // the tuner's delay (50 ms) and half the detector's window
                 if (tt < 1.0) continue;
                 const float out = 69.0f + 12.0f * std::log2 (d.frequency() / 440.0f);
                 const double c = std::fmod (tt, 1.0);

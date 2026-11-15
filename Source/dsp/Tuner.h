@@ -23,6 +23,8 @@ struct TunerSettings
     float humanise = 0.0f;     // 0..1: held notes are corrected more gently than short ones, so long notes keep some life
     float keepSlides = 0.0f;   // 0..1: while the voice is sliding from note to note it is left alone, and only settled notes are tuned
     bool legacySlicing = false; // for comparison tests only: cut the slices the way builds 10 and 11 did
+    int lookahead = 2;          // for comparison tests only: how many 10 ms answers the tuner waits for before deciding what it heard (0 = builds up to 17)
+    float labDelayMs = 0.0f;    // for comparison tests only: how far behind the detector the voice is played (0 = the built-in figure)
 };
 
 // Pitch correction for a single voice. It hears which note is being sung, picks the nearest note of the chosen
@@ -39,7 +41,7 @@ public:
     void setGraph (TuneGraph* g) noexcept { graph = g; }
     // where in the song this block starts, so the graph knows which note it is on
     void setTimeline (bool hostPlaying, double seconds) noexcept { playing = hostPlaying; blockTime = seconds; }
-    int getLatencySamples() const noexcept { return settings.enabled && ! settings.lowLatency ? delay : 0; }
+    int getLatencySamples() const noexcept { return settings.enabled && ! settings.lowLatency ? delayNow() : 0; }
 
     // for the display (any thread)
     float getDetectedNote() const noexcept { return detectedNote.load (std::memory_order_relaxed); }    // MIDI note with fraction, 0 = no pitch
@@ -61,7 +63,17 @@ public:
     static int scaleMask (int key, int scale, int customMask = 0xFFF) noexcept;      // the allowed notes as twelve bits, bit 0 = C
 
 private:
-    void control (double seconds) noexcept;
+    // one answer from the detector: the note (0 = no pitch), how clear it was, and when
+    struct Heard { float note = 0.0f, hz = 0.0f, clarity = 0.0f; double seconds = 0.0; bool bridged = false; };
+    void control (const Heard& heard) noexcept;
+    Heard settle (Heard heard) noexcept;
+    int lookFrames() const noexcept { return settings.lowLatency ? 0 : juce::jlimit (0, kMaxAhead, settings.lookahead); }
+    int delayNow() const noexcept;
+    static constexpr int kMaxAhead = 4;
+    std::array<Heard, (size_t) kMaxAhead> ahead {};        // answers that have arrived but not been acted on yet
+    int aheadCount = 0, bridgedFrames = 0, wasLook = -1;
+    float lastNote = 0.0f, lastHz = 0.0f;                   // the last note that was believed
+    float appliedNote = 0.0f;                               // the note the engine was last given
 
     double fs = 48000.0;
     int channels = 2, delay = 960, delayLow = 288;
@@ -74,7 +86,7 @@ private:
     bool voiced = false;
     float period = 240.0f, ratio = 1.0f, shift = 0.0f, slowNote = 0.0f;
     float periodNow = 240.0f, outPeriodNow = 240.0f;      // what the engine is given: the same values, moved smoothly between measurements
-    int unsureFrames = 0, framesOnNote = 0, centreFrames = 0;
+    int unsureFrames = 0, framesOnNote = 0, centreFrames = 0, sinceStart = 100;
     std::array<float, 16> centreHist {};
     float sliding = 0.0f;                                 // how fast the voice is travelling, in semitones a second
     std::array<float, 18> recent {}; int recentCount = 0, recentAt = 0;      // the last 180 ms of pitch

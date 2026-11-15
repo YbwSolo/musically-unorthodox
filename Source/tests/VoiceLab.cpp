@@ -40,6 +40,7 @@ int main (int argc, char** argv)
     TunerSettings ts; ts.enabled = true; ts.key = (int) num ("key", 0); ts.scale = (int) num ("scale", 1);
     ts.speedMs = num ("speed", 0.0f); ts.keepVibrato = num ("vibrato", 0.0f); ts.hold = num ("hold", 0.3f); ts.amount = num ("amount", 1.0f);
     ts.flexCents = num ("flex", 0.0f); ts.humanise = num ("humanise", 0.0f); ts.keepSlides = num ("slides", 0.0f); ts.legacySlicing = num ("old", 0.0f) > 0.5f;
+    ts.lookahead = (int) num ("look", 2.0f); ts.labDelayMs = num ("delayms", 0.0f);
     tuner.setSettings (ts);
     PitchFXSettings ps; ps.key = 0; ps.scale = 1;
     if (tool == "harmony") { ps.harmonyOn = true; ps.voicing = (int) num ("voicing", 0); ps.harmonyMix = 1.0f; ps.humanise = num ("humanise", 0.0f); }
@@ -63,6 +64,9 @@ int main (int argc, char** argv)
     juce::AudioBuffer<float> dryCopy; dryCopy.makeCopyOf (b);
 
     int voicedBlocks = 0, slidingBlocks = 0; double slideSum = 0.0, shiftSum = 0.0;
+    // trace=<file>: what the tuner heard and did, block by block (time, note heard, note aimed at, correction in semitones)
+    std::unique_ptr<juce::FileOutputStream> trace;
+    if (opt.containsKey ("trace")) { juce::File f (opt["trace"]); f.deleteFile(); trace = std::make_unique<juce::FileOutputStream> (f); }
     for (int start = 0; start < n; start += block)
     {
         const int len = juce::jmin (block, n - start);
@@ -70,6 +74,7 @@ int main (int argc, char** argv)
         if (tool == "tune")
         {
             tuner.process (v);
+            if (trace != nullptr) *trace << juce::String ((double) start / fs, 4) << " " << juce::String (tuner.getDetectedNote(), 3) << " " << tuner.getTargetNote() << " " << juce::String (tuner.getShift(), 3) << "\n";
             if (tuner.getDetectedNote() > 0.0f) { ++voicedBlocks; slideSum += tuner.getSlideSpeed(); if (tuner.getSlideSpeed() > 5.5f) ++slidingBlocks; shiftSum += std::abs (tuner.getShift()); }
         }
         else if (tool == "harmony" || tool == "shift") fx.process (v);

@@ -18,6 +18,10 @@ public:
     bool push (float monoSample) noexcept;                    // true when a new estimate has just been made
     float frequency() const noexcept { return freq; }         // Hz; 0 when there is no clear pitch
     float clarity() const noexcept { return clear; }          // 0..1, how periodic the sound is
+    // The same answer before the rule about sudden leaps has been applied to it (see analyse): what this 10 ms
+    // looked like on its own. For a listener that can wait for the next answers before deciding what was a mistake.
+    float rawFrequency() const noexcept { return rawFreq; }
+    float rawClarity() const noexcept { return rawClear; }
 
 private:
     struct Biquad
@@ -33,7 +37,7 @@ private:
     Biquad lp1, lp2;
     std::vector<float> ring, frame, diff;
     int ringPos = 0, total = 0, window = 720, tauMin = 24, tauMax = 369, hop = 240, since = 0;
-    float freq = 0.0f, clear = 0.0f, lastGood = 0.0f, pending = 0.0f;
+    float freq = 0.0f, clear = 0.0f, lastGood = 0.0f, pending = 0.0f, rawFreq = 0.0f, rawClear = 0.0f;
     int heldFrames = 0;
 };
 
@@ -47,12 +51,16 @@ public:
     static constexpr int kMaxGrains = 24;
     struct Voice
     {
-        struct Grain { double centre = 0, src = 0; float half = 1, gain = 1, rate = 1; };
+        struct Grain { double centre = 0, src = 0; float half = 1, gain = 1, rate = 1; float halfOut = 0; };      // halfOut: renderSync, the width of the falling side (0 = same as the rising side)
         std::array<Grain, kMaxGrains> grains;
         int count = 0;
         double nextCentre = 0, prevSrc = 0;
         float nextHalf = 240.0f;
         bool locked = false;          // renderSync: the last slice was centred on one of the voice's own pulses
+        double syncCentre = 0, syncOffset = 0;      // renderSync: the middle of the last slice laid, and how far its sound was from the clock's own position
+        float syncPeriod = 240.0f;                  // renderSync: the period the last slice was cut at
+        float syncFall = 0.0f;                      // renderSync: how wide the last slice's falling side is (0 = not decided yet)
+        bool syncOpen = false;                      // renderSync: the last slice is a copy whose falling side the next slice will set
     };
 
     void prepare (int numChannels, double sampleRate);
@@ -75,7 +83,7 @@ public:
 
 private:
     float read (int channel, double position) const noexcept;
-    double findPulse (double around, float reach, float preferNear) const noexcept;
+    double findPulse (double around, float reach, float preferNear, bool* found = nullptr) const noexcept;
     void checkPolarity (double around, float period) noexcept;
     std::array<std::vector<float>, 2> ring;
     std::vector<float> pulse;              // the sound with everything above about 1 kHz removed: its peaks are the pulses
