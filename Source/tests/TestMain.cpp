@@ -823,6 +823,17 @@ int main()
         for (auto& x : analyseTone (voice, Role::Vocal, &moving, EqSource::LeadVocal)) dynamicMud = dynamicMud || (x.stage == EqStage::Dynamic && x.band.dynamic && x.band.rangeDb < 0.0f && x.band.freqHz < 400.0f);
         check (dynamicMud, "Mud that comes and goes is given to the dynamic job");
 
+        // Detailed lists smaller things: 2 dB of mud is left alone as a main thing and listed in detail
+        {
+            auto slight = roleTargetCurve (Role::Vocal);
+            for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 180.0f && centres[(size_t) b] < 350.0f) slight[(size_t) b] += 2.4f;
+            const auto main = analyseTone (slight, Role::Vocal, &steady, EqSource::LeadVocal, kAllEqPasses, 1.0f), detail = analyseTone (slight, Role::Vocal, &steady, EqSource::LeadVocal, kAllEqPasses, 0.6f);
+            bool small = false;
+            for (auto& x : detail) small = small || (x.title.startsWith ("Mud") && x.band.gainDb <= -1.0f && x.band.gainDb > -2.5f);
+            check (main.empty() && small && analyseTone (roleTargetCurve (Role::Vocal), Role::Vocal, nullptr, EqSource::LeadVocal, kAllEqPasses, 0.6f).empty(),
+                   "Detailed lists a small build-up that Main things leaves alone, with a cut sized to it, and still says nothing about a vocal with its usual tone");
+        }
+
         // one ringing note
         auto ringing = roleTargetCurve (Role::Vocal);
         const int rb = bandNear (600.0f);
@@ -993,6 +1004,27 @@ int main()
             const auto plain = planMaster (good, MasterStyle::Transparent, 0.5f);
             check (plain.eq.empty() && ! plain.glue && ! plain.multiband.enabled && ! plain.saturate && ! plain.clip && plain.processing.size() == 1 && mentions (plain.processing, "limiter") && near (plain.targetLufs, -14.0f, 0.1f),
                    "A balanced mix that is only quiet gets a limiter and nothing else", plain.processing.joinIntoString (" | "));
+            // a low end that is heavy at the bottom and short above it: one shelf at most, never shelves stacked against each other
+            {
+                auto lows = good;
+                for (int b = 0; b < kAnalysisBands; ++b)
+                {
+                    if (centres[(size_t) b] < 65.0f) lows.bandsDb[(size_t) b] += 7.0f;
+                    if (centres[(size_t) b] > 80.0f && centres[(size_t) b] < 140.0f) lows.bandsDb[(size_t) b] -= 6.0f;
+                    if (centres[(size_t) b] > 7000.0f) lows.bandsDb[(size_t) b] -= 4.0f;
+                }
+                const auto shaped = planMaster (lows, MasterStyle::Transparent, 0.5f);
+                int lowShelves = 0, highShelves = 0; float biggestLift = 0.0f, biggestCut = 0.0f;
+                for (auto& e : shaped.eq)
+                {
+                    if (e.type == EQType::LowShelf) ++lowShelves;
+                    if (e.type == EQType::HighShelf) ++highShelves;
+                    if (! e.dynamic && e.type != EQType::LowCut) { biggestLift = juce::jmax (biggestLift, e.gainDb); biggestCut = juce::jmin (biggestCut, e.gainDb); }
+                }
+                check (lowShelves <= 1 && highShelves <= 1 && biggestLift > 1.0f && biggestLift <= 2.55f && biggestCut < -1.5f && biggestCut >= -3.65f,
+                       "The master EQ uses one shelf per end at most, and at 50 % no lift is over 2.5 dB and no cut over 3.6 dB",
+                       juce::String (lowShelves) + " low, " + juce::String (highShelves) + " high shelves; " + juce::String (biggestLift, 1) + " / " + juce::String (biggestCut, 1) + " dB | " + shaped.processing.joinIntoString (" | "));
+            }
             // muddy and harsh: a cut and a dynamic band, and no boost anywhere
             auto rough = good;
             for (int b = 0; b < kAnalysisBands; ++b)
@@ -1004,14 +1036,14 @@ int main()
             bool mudCut = false, harshDynamic = false, anyBoost = false;
             for (auto& e : fixed.eq)
             {
-                mudCut = mudCut || (! e.dynamic && e.gainDb < -0.5f && e.gainDb >= -2.5f && e.freqHz > 180.0f && e.freqHz < 400.0f);
+                mudCut = mudCut || (! e.dynamic && e.gainDb < -1.5f && e.gainDb >= -3.6f && e.freqHz > 180.0f && e.freqHz < 400.0f);
                 harshDynamic = harshDynamic || (e.dynamic && e.rangeDb < -0.8f && e.rangeDb >= -3.0f && e.freqHz > 2500.0f && e.freqHz < 5000.0f);
                 anyBoost = anyBoost || e.gainDb > 0.0f;
             }
-            check (mudCut && harshDynamic && ! anyBoost && mentions (fixed.detected, "Low-mid") && mentions (fixed.detected, "Harsh"), "A muddy, harsh mix gets a gentle cut and a dynamic band, each with its measurement, and no boosts",
+            check (mudCut && harshDynamic && ! anyBoost && mentions (fixed.detected, "Low-mid") && mentions (fixed.detected, "Harsh"), "A muddy, harsh mix gets a cut sized to the mud and a dynamic band for the harshness, each with its measurement, and no boosts",
                    fixed.processing.joinIntoString (" | "));
             // intensity scales the moves, not just the level
-            auto mudGain = [&] (float intensity) { float g = 0.0f; for (auto& e : planMaster (rough, MasterStyle::Transparent, intensity).eq) if (! e.dynamic && e.freqHz > 180.0f && e.freqHz < 400.0f) g = e.gainDb; return g; };
+            auto mudGain = [&] (float intensity) { float g = 0.0f; for (auto& e : planMaster (rough, MasterStyle::Transparent, intensity).eq) if (! e.dynamic && e.freqHz > 180.0f && e.freqHz < 400.0f) g = juce::jmin (g, e.gainDb); return g; };
             check (mudGain (1.0f) < mudGain (0.5f) - 0.2f && mudGain (0.5f) < mudGain (0.0f) - 0.2f && planMaster (good, MasterStyle::Transparent, 1.0f).targetLufs - planMaster (good, MasterStyle::Transparent, 0.0f).targetLufs <= 1.6f,
                    "Intensity makes every move bigger or smaller; it is not a volume control", juce::String (mudGain (0.0f), 1) + " / " + juce::String (mudGain (0.5f), 1) + " / " + juce::String (mudGain (1.0f), 1) + " dB on the mud");
             // an already bright mix is not made brighter, whatever the style
@@ -1022,7 +1054,7 @@ int main()
             auto dull = mixLike (MasterStyle::Transparent);
             for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 7000.0f) dull.bandsDb[(size_t) b] -= 5.0f;
             bool air = false;
-            for (auto& e : planMaster (dull, MasterStyle::Bright, 0.5f).eq) air = air || (e.type == EQType::HighShelf && e.gainDb > 0.5f && e.gainDb <= 2.5f);
+            for (auto& e : planMaster (dull, MasterStyle::Bright, 0.5f).eq) air = air || (e.type == EQType::HighShelf && e.gainDb > 1.0f && e.gainDb <= 3.7f);
             check (! lifted && air, "The Bright style lifts the top of a dull mix and leaves a mix that is already bright alone");
             // a mix that is already squashed gets no more compression, saturation or clipping, even when the style wants them
             auto dense = mixLike (MasterStyle::Aggressive); dense.integratedLufs = -10.0f; dense.truePeakDb = -3.0f; dense.probe.punchDb = 4.0f;
@@ -1051,7 +1083,7 @@ int main()
             float topShift = 0.0f;
             for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 8000.0f && centres[(size_t) b] < 12000.0f) topShift = juce::jmax (topShift, leaned.targetCurve[(size_t) b] - plain.targetCurve[(size_t) b]);
             bool refAir = false;
-            for (auto& e : leaned.eq) refAir = refAir || (e.type == EQType::HighShelf && e.gainDb > 0.0f && e.gainDb <= 2.5f);
+            for (auto& e : leaned.eq) refAir = refAir || (e.type == EQType::HighShelf && e.gainDb > 0.0f && e.gainDb <= 3.6f);
             check (leaned.targetLufs > plain.targetLufs + 0.5f && topShift > 1.0f && topShift <= 4.0f && refAir, "A brighter, louder reference leans the master brighter and louder, by no more than 4 dB of tone",
                    juce::String (leaned.targetLufs, 1) + " LUFS, top of the target up " + juce::String (topShift, 1) + " dB");
             // the report says improved only when the measurement moved
@@ -1117,6 +1149,51 @@ int main()
         check (an.hasLongTerm(), "Analyser builds its long-term average");
         an.resetLongTerm();
         check (! an.hasLongTerm(), "Long-term average can be restarted");
+    }
+
+    // --- Notes are not resonances: a held note and its harmonics are found as the notes they are, and a
+    //     narrow peak is only called a possible resonance when it is not one of them.
+    {
+        auto feed = [fs] (SpectrumAnalyzer& an, juce::AudioBuffer<float>& s)
+        {
+            for (int pos = 0; pos < s.getNumSamples(); pos += 512)
+            {
+                juce::AudioBuffer<float> view (s.getArrayOfWritePointers(), 2, pos, juce::jmin (512, s.getNumSamples() - pos));
+                an.pushBlock (view); an.pump();
+            }
+            juce::ignoreUnused (fs);
+        };
+        // a sung note: 220 Hz with twelve harmonics falling away, a little noise under it
+        const int n = (int) fs * 4;
+        juce::AudioBuffer<float> voice (2, n);
+        juce::Random rng (11);
+        for (int i = 0; i < n; ++i)
+        {
+            double v = 0.0;
+            for (int k = 1; k <= 12; ++k) v += std::sin (juce::MathConstants<double>::twoPi * 220.0 * k * i / fs) / (double) k;
+            const float x = (float) (0.2 * v) + 0.002f * (rng.nextFloat() * 2.0f - 1.0f);
+            voice.setSample (0, i, x); voice.setSample (1, i, x);
+        }
+        SpectrumAnalyzer sung; sung.prepare (fs); feed (sung, voice);
+        const auto notes = sung.findNoteLines (70.0f, 1200.0f, 8.0f);
+        bool has220 = false; for (float f : notes) has220 = has220 || near (f, 220.0f, 3.0f);
+        const auto peaks = sung.findResonances (700.0f, 9000.0f, 6.0f);
+        int notNotes = 0; for (auto& pk : peaks) if (! SpectrumAnalyzer::isHarmonicOf (pk.freqHz, notes, sung.getBinHz())) ++notNotes;
+        check (has220 && ! peaks.empty() && notNotes == 0, "The harmonics of a held note are recognised as the note, and none of them is offered as a resonance",
+               juce::String ((int) notes.size()) + " note lines, " + juce::String ((int) peaks.size()) + " narrow peaks, " + juce::String (notNotes) + " not notes");
+        // a voice with no fixed pitch (noise) through a ringing resonance at 3 kHz: no notes, and the peak is found
+        juce::AudioBuffer<float> breath (2, n);
+        juce::Random rng2 (5);
+        for (int i = 0; i < n; ++i) { const float x = 0.1f * (rng2.nextFloat() * 2.0f - 1.0f); breath.setSample (0, i, x); breath.setSample (1, i, x); }
+        {
+            auto coeff = juce::dsp::IIR::Coefficients<float>::makePeakFilter (fs, 3000.0f, 12.0f, juce::Decibels::decibelsToGain (15.0f));
+            for (int ch = 0; ch < 2; ++ch) { juce::dsp::IIR::Filter<float> f; f.coefficients = coeff; for (int i = 0; i < n; ++i) breath.setSample (ch, i, f.processSample (breath.getSample (ch, i))); }
+        }
+        SpectrumAnalyzer room; room.prepare (fs); feed (room, breath);
+        const auto none = room.findNoteLines (70.0f, 1200.0f, 8.0f);
+        const auto ring = room.findResonances (700.0f, 9000.0f, 6.0f);
+        check (none.empty() && ! ring.empty() && near (ring[0].freqHz, 3000.0f, 120.0f) && ! SpectrumAnalyzer::isHarmonicOf (ring[0].freqHz, none, room.getBinHz()),
+               "A resonance in a sound with no held notes is found where it is", juce::String ((int) none.size()) + " note lines, peak at " + (ring.empty() ? juce::String ("none") : juce::String (ring[0].freqHz, 0) + " Hz"));
     }
 
     // ================================================================ pitch, tune, doubler, reverb

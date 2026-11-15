@@ -160,6 +160,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     // ---- EQ analysis
     p.push_back (std::make_unique<APC> (id (ids::eqSource), "EQ analysis source", eqSourceNames(), 0));
     p.push_back (std::make_unique<juce::AudioParameterInt> (id (ids::eqPasses), "EQ analysis jobs", 1, 7, 7));
+    p.push_back (std::make_unique<APC> (id (ids::eqDepth), "EQ analysis detail", juce::StringArray { "Main things", "Detailed" }, 1));
 
     // ---- mastering assistant
     p.push_back (std::make_unique<APC> (id (ids::mstStyle), "Mastering style", masterStyleNames(), 0));

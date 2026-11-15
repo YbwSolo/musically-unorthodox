@@ -258,6 +258,53 @@ std::vector<SpectrumAnalyzer::Resonance> SpectrumAnalyzer::findResonances (float
     return out;
 }
 
+std::vector<float> SpectrumAnalyzer::findNoteLines (float minHz, float maxHz, float minProminenceDb) const
+{
+    std::vector<float> out;
+    if (! hasLongTerm()) return out;
+    const int half = kFFTSize / 2;
+    const float binHz = (float) fs / (float) kFFTSize;
+    const int iMin = juce::jmax (3, (int) (minHz / binHz)), iMax = juce::jmin (half - 3, (int) (maxHz / binHz));
+    auto dbAt = [this] (int i) { return 10.0f * std::log10 (juce::jmax (1.0e-12f, longTermBinLinear[(size_t) i])); };
+    float top = -200.0f;
+    for (int i = iMin; i <= iMax; ++i) top = juce::jmax (top, dbAt (i));
+    struct Line { float hz, prom; };
+    std::vector<Line> lines;
+    std::vector<float> around;
+    for (int i = iMin; i <= iMax; ++i)
+    {
+        const float here = dbAt (i);
+        if (here < top - 40.0f || here < -80.0f || here < dbAt (i - 1) || here <= dbAt (i + 1)) continue;
+        // against the middle value of what lies a third of an octave either side, the line itself left out
+        around.clear();
+        const int a = juce::jmax (1, (int) ((float) i / 1.26f)), b = juce::jmin (half - 1, (int) ((float) i * 1.26f) + 1);
+        for (int k = a; k <= b; ++k) if (std::abs (k - i) > 2) around.push_back (dbAt (k));
+        if (around.size() < 3) continue;
+        std::nth_element (around.begin(), around.begin() + (long) around.size() / 2, around.end());
+        const float prom = here - around[around.size() / 2];
+        if (prom < minProminenceDb) continue;
+        const float l = dbAt (i - 1), r = dbAt (i + 1), den = l - 2.0f * here + r;
+        const float shift = std::abs (den) > 1.0e-6f ? juce::jlimit (-0.5f, 0.5f, 0.5f * (l - r) / den) : 0.0f;
+        lines.push_back ({ ((float) i + shift) * binHz, prom });
+    }
+    std::sort (lines.begin(), lines.end(), [] (const Line& x, const Line& y) { return x.prom > y.prom; });
+    if (lines.size() > 16) lines.resize (16);
+    for (auto& l : lines) out.push_back (l.hz);
+    return out;
+}
+
+bool SpectrumAnalyzer::isHarmonicOf (float f, const std::vector<float>& lines, float binHz, int maxHarmonic)
+{
+    for (float f0 : lines)
+    {
+        if (f0 < 20.0f) continue;
+        const int k = juce::roundToInt (f / f0);
+        if (k < 1 || k > maxHarmonic) continue;
+        if (std::abs (f - (float) k * f0) <= juce::jmax (1.5f * binHz, 0.015f * f)) return true;
+    }
+    return false;
+}
+
 float SpectrumAnalyzer::lowEnergyRatio() const
 {
     if (! hasLongTerm()) return 0.0f;

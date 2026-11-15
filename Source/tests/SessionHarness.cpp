@@ -1285,7 +1285,18 @@ int main()
         copy->setStateInformation (saved.getData(), (int) saved.getSize());
         check (copy->masterText ("processing") == master->masterText ("processing") && copy->masterText ("report") == report && closeTo (copy->getParam (ids::targetLufs), target, 0.01f),
                "A saved project opens with the mastering settings and the report as they were");
+        const float level = master->getMasterAutoTrimDb();
+        check (std::abs (level) > 0.5f && closeTo (copy->getMasterAutoTrimDb(), level, 0.01f), "A saved project opens at the level the master had arrived at, so a bounce starts at that level",
+               juce::String (copy->getMasterAutoTrimDb(), 2) + " dB for " + juce::String (level, 2) + " dB");
         copy.reset();
+        // the level came from the whole song: it is not moved by whatever passage plays next
+        runSeconds (12.0);
+        check (closeTo (master->getMasterAutoTrimDb(), level, 0.01f), "Once set from the whole song, the level stays put while the song plays on", juce::String (master->getMasterAutoTrimDb(), 2) + " dB");
+        // a loudness target changed by hand is followed again
+        master->setParam (ids::targetLufs, target - 4.0f);
+        runSeconds (12.0);
+        check (master->getMasterAutoTrimDb() < level - 2.0f, "A loudness target changed by hand is followed", juce::String (master->getMasterAutoTrimDb(), 2) + " dB after asking for 4 LU less");
+        master->setParam (ids::targetLufs, target);
         // the comparison: Mix is the sound that came in, delayed by the plugin's own latency; it never changes what is measured
         master->setMasterCompare (2);
         runSeconds (1.0);

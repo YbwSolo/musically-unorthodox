@@ -85,7 +85,7 @@ namespace
         s.title = title; s.why = why; s.freqHz = freq; s.amountDb = amountDev;
         // Sized to what was measured: about two thirds of the excess, up to 6 dB. (Recordings sent in from real
         // sessions were 2 to 6 dB heavy here; the old limit of 4.5 dB at 60 % left most of that in.)
-        const float g = -juce::jlimit (1.5f, 6.0f, amountDev * 0.7f);
+        const float g = -juce::jlimit (1.0f, 6.0f, amountDev * 0.7f);
         s.band.enabled = true; s.band.type = EQType::Bell; s.band.freqHz = freq; s.band.q = q;
         if (dynamic)
         {
@@ -316,7 +316,7 @@ namespace
 
 static void fitCutsToBehaviour (std::vector<Suggestion>& found, const BandArray& centres, const BandArray& swing);
 static void findResonances (std::vector<Suggestion>& out, const BandArray& m, const BandArray& target, float fromHz, float toHz, float clearBy);
-std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource source);
+std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource source, float depth);
 
 static EqStage stageOf (const Suggestion& s)
 {
@@ -327,11 +327,12 @@ static EqStage stageOf (const Suggestion& s)
     return s.band.gainDb < 0.0f ? EqStage::Surgical : EqStage::Tonal;
 }
 
-std::vector<Suggestion> analyseTone (const BandArray& m, Role role, const BandArray* swingDb, EqSource source, int passes)
+std::vector<Suggestion> analyseTone (const BandArray& m, Role role, const BandArray* swingDb, EqSource source, int passes, float depth)
 {
+    depth = juce::jlimit (0.4f, 1.0f, depth);
     const auto centres = analysisBandCentres();
     const Role family = eqSourceRole (source, role);
-    auto found = analyseToneOnce (m, family, source);
+    auto found = analyseToneOnce (m, family, source, depth);
     // single ringing notes, which the broad ranges above average away
     {
         const auto* profile = profileFor (source);
@@ -340,7 +341,7 @@ std::vector<Suggestion> analyseTone (const BandArray& m, Role role, const BandAr
         // Not on a bass or a kick (the note is meant to stand out), and not on a whole beat or a mix, where one
         // band standing clear of the rest is far more likely to be the tune than a fault.
         if (profile == nullptr) from = voice ? 350.0f : 0.0f;
-        const float clearBy = (voice || family == Role::Drums) ? 5.0f : 6.5f;      // anything that plays notes has to stand further out
+        const float clearBy = ((voice || family == Role::Drums) ? 5.0f : 6.5f) * juce::jmax (0.8f, depth);      // anything that plays notes has to stand further out
         if (from > 0.0f) findResonances (found, m, sourceTargetCurve (source, role), from, voice ? 5000.0f : 8000.0f, clearBy);
     }
     if (swingDb != nullptr) fitCutsToBehaviour (found, centres, *swingDb);
@@ -358,7 +359,7 @@ std::vector<Suggestion> analyseTone (const BandArray& m, Role role, const BandAr
         }
     if (anyCut)
     {
-        auto again = analyseToneOnce (after, family, source);
+        auto again = analyseToneOnce (after, family, source, depth);
         for (auto& s : again) s.stage = stageOf (s);
         found.erase (std::remove_if (found.begin(), found.end(), [] (const Suggestion& s) { return s.stage == EqStage::Tonal; }), found.end());
         for (auto& s : again) if (s.stage == EqStage::Tonal) found.push_back (s);
@@ -372,7 +373,7 @@ std::vector<Suggestion> analyseTone (const BandArray& m, Role role, const BandAr
         std::vector<Suggestion> part;
         for (auto& s : found) if ((int) s.stage == stage) part.push_back (s);
         std::stable_sort (part.begin(), part.end(), [] (const Suggestion& a, const Suggestion& b) { return std::abs (a.amountDb) > std::abs (b.amountDb); });
-        if (part.size() > 3) part.resize (3);
+        if (part.size() > (depth < 1.0f ? 4u : 3u)) part.resize (depth < 1.0f ? 4u : 3u);
         out.insert (out.end(), part.begin(), part.end());
     }
     return out;
@@ -449,7 +450,8 @@ static void fitCutsToBehaviour (std::vector<Suggestion>& found, const BandArray&
     }
 }
 
-std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource source)
+// depth: 1 lists what clearly stands out; lower values also list smaller differences (every limit is multiplied by it).
+std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource source, float depth)
 {
     std::vector<Suggestion> out;
     const auto centres = analysisBandCentres();
@@ -496,26 +498,26 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource
             out.push_back (lowCut ("Rumble under the voice",
                 "There is energy below 70 Hz that is not the singer: mic-stand knocks, plosives and room rumble. It eats headroom and makes the compressor react to things you cannot hear. A low cut removes it without touching the voice.",
                 shape.lowCutHz, 1));
-        if (auto r = excess (shape.mudLo, shape.mudHi); r.meanDev > 2.5f)
+        if (auto r = excess (shape.mudLo, shape.mudHi); r.meanDev > 2.5f * depth)
             out.push_back (cut ("Mud around " + hz (r.peakHz),
                 "The low mids are " + db (r.meanDev) + " heavier than a balanced vocal. This is the 'mud' zone: it makes a vocal sound boxed-in and fights the body of the beat. A dynamic cut only pulls it down when it builds up, so quiet lines keep their warmth.",
                 r.peakHz, r.meanDev, 1.4f, true, r.peakDb));
-        if (auto r = excess (350.0f, 700.0f); r.meanDev > 3.5f)
+        if (auto r = excess (350.0f, 700.0f); r.meanDev > 3.5f * depth)
             out.push_back (cut ("Boxy around " + hz (r.peakHz),
                 "There is " + db (r.meanDev) + " extra energy in the 'cardboard box' range, usually from the room or recording close to a wall. A medium-width cut opens the vocal up.",
                 r.peakHz, r.meanDev, 1.6f, false, r.peakDb));
         // A voice that is short of presence reads as forward around 1 kHz only because everything above it is
         // missing. Cutting there as well would take away the little intelligibility it has; the presence lift
         // puts the balance right instead.
-        if (auto r = excess (800.0f, 1600.0f); r.meanDev > 3.5f && lack (1600.0f, 4500.0f).meanDev > -3.0f)
+        if (auto r = excess (800.0f, 1600.0f); r.meanDev > 3.5f * depth && lack (1600.0f, 4500.0f).meanDev > -3.0f)
             out.push_back (cut ("Nasal around " + hz (r.peakHz),
                 "The vocal is " + db (r.meanDev) + " forward in the nasal / honky range. A narrow cut here makes it sound less like it is coming through a phone.",
                 r.peakHz, r.meanDev, 2.0f, false, r.peakDb));
-        if (auto r = excess (2500.0f, 5000.0f); r.meanDev > 3.0f)
+        if (auto r = excess (2500.0f, 5000.0f); r.meanDev > 3.0f * depth)
             out.push_back (cut ("Harsh around " + hz (r.peakHz),
                 "The upper mids are " + db (r.meanDev) + " hotter than usual. This is where vocals get piercing at loud moments. A dynamic cut tames only the harsh words and leaves the clarity alone the rest of the time.",
                 r.peakHz, r.meanDev, 2.0f, true, r.peakDb));
-        if (auto r = excess (5500.0f, 9000.0f); r.meanDev > 4.0f)
+        if (auto r = excess (5500.0f, 9000.0f); r.meanDev > 4.0f * depth)
         {
             Suggestion s; s.kind = Suggestion::Kind::DeEsser; s.freqHz = r.peakHz; s.amountDb = r.meanDev;
             s.title = "Sharp S sounds around " + hz (r.peakHz);
@@ -525,11 +527,11 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource
         }
         // Presence: the boost goes where the hole actually is (anywhere from 2 to 4 kHz) and is wide enough to
         // lift the whole range that carries the words.
-        if (auto r = lack (1600.0f, 4500.0f); r.meanDev < -3.0f)
+        if (auto r = lack (1600.0f, 4500.0f); r.meanDev < -3.0f * depth)
             out.push_back (boost ("Needs presence",
                 "The vocal is " + db (r.meanDev) + " short in the 2-4 kHz range where words become understandable. That is what makes a vocal sound dull and buried however loud it is. A wide boost brings it forward so you do not have to turn the whole vocal up.",
                 EQType::Bell, juce::jlimit (2200.0f, 3800.0f, r.peakHz), r.meanDev, 0.7f, 7.0f));
-        if (auto r = lack (6500.0f, 15000.0f); r.meanDev < -4.0f)
+        if (auto r = lack (6500.0f, 15000.0f); r.meanDev < -4.0f * depth)
         {
             // a recording that is already rolling off by 5 kHz (a dark microphone, or one sung into from the side)
             // needs the shelf to start lower than one that is only missing its very top
@@ -542,7 +544,7 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource
         // woman's voice, or a man in a high register, has nothing at 120 to 180 Hz and is not thin for it; the
         // old rule looked there, and on real sessions it asked for 3 to 6 dB at 180 Hz on voices that had no
         // business having it, which is low-mid weight a muddy mix does not need).
-        if (auto r = lack (shape.thinLo, shape.thinHi); r.meanDev < -5.0f && shape.wantsBody)
+        if (auto r = lack (shape.thinLo, shape.thinHi); r.meanDev < -5.0f * depth && shape.wantsBody)
             out.push_back (boost ("Thin: missing body",
                 "The chest range of the voice is " + db (r.meanDev) + " lighter than usual, often because the high-pass is set too high or the singer was far from the mic. A small boost puts the weight back.",
                 EQType::Bell, juce::jlimit (shape.thinLo + 20.0f, shape.thinHi - 80.0f, r.peakHz), r.meanDev, 1.0f));
@@ -560,7 +562,7 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource
             if (isCut)
             {
                 const auto r = excess (z.lo, z.hi);
-                if (r.meanDev > z.limitDb)
+                if (r.meanDev > z.limitDb * depth)
                     out.push_back (cut (juce::String (z.title) + " around " + hz (r.peakHz),
                                         "Between " + hz (z.lo) + " and " + hz (z.hi) + " there is " + db (r.meanDev) + " more than usual for " + name + ". " + z.why,
                                         r.peakHz, r.meanDev, z.q, z.kind == Zone::DynCut, r.peakDb));
@@ -568,7 +570,7 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource
             else
             {
                 const auto r = lack (z.lo, z.hi);
-                if (r.meanDev < z.limitDb)
+                if (r.meanDev < z.limitDb * depth)
                     out.push_back (boost (z.title, "Between " + hz (z.lo) + " and " + hz (z.hi) + " there is " + db (r.meanDev) + " less than usual for " + name + ". " + z.why,
                                           z.kind == Zone::Bell ? EQType::Bell : z.kind == Zone::HighShelf ? EQType::HighShelf : EQType::LowShelf, z.at, r.meanDev, z.q, z.most));
             }
@@ -576,19 +578,19 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource
     }
     else if (role == Role::Bass808)
     {
-        if (auto r = excess (90.0f, 200.0f); r.meanDev > 3.0f)
+        if (auto r = excess (90.0f, 200.0f); r.meanDev > 3.0f * depth)
             out.push_back (cut ("Boomy around " + hz (r.peakHz),
                 "The upper bass is " + db (r.meanDev) + " heavier than a tight 808. It sounds big solo but swamps the kick and the bottom of the vocal in the mix.",
                 r.peakHz, r.meanDev, 1.2f, true, r.peakDb));
-        if (auto r = excess (200.0f, 450.0f); r.meanDev > 3.5f)
+        if (auto r = excess (200.0f, 450.0f); r.meanDev > 3.5f * depth)
             out.push_back (cut ("Low-mid build-up around " + hz (r.peakHz),
                 "There is " + db (r.meanDev) + " of extra low-mid energy. It clouds the space the vocal's body needs.",
                 r.peakHz, r.meanDev, 1.2f, false, r.peakDb));
-        if (auto r = lack (35.0f, 60.0f); r.meanDev < -4.0f)
+        if (auto r = lack (35.0f, 60.0f); r.meanDev < -4.0f * depth)
             out.push_back (boost ("Light on sub",
                 "The sub range is " + db (r.meanDev) + " under a typical 808. Check the note is not too high before boosting; if it is right, a small lift at 50 Hz adds weight.",
                 EQType::Bell, 50.0f, r.meanDev, 1.0f));
-        if (auto r = lack (600.0f, 2500.0f); r.meanDev < -8.0f)
+        if (auto r = lack (600.0f, 2500.0f); r.meanDev < -8.0f * depth)
         {
             Suggestion s; s.kind = Suggestion::Kind::Saturation; s.freqHz = 1000.0f; s.amountDb = r.meanDev;
             s.title = "Will vanish on small speakers";
@@ -599,11 +601,11 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource
     }
     else if (role == Role::Kick)
     {
-        if (auto r = excess (250.0f, 500.0f); r.meanDev > 3.0f)
+        if (auto r = excess (250.0f, 500.0f); r.meanDev > 3.0f * depth)
             out.push_back (cut ("Boxy around " + hz (r.peakHz),
                 "The kick has " + db (r.meanDev) + " extra in the cardboard range. Cutting it makes the low end sound deeper and the click clearer without boosting anything.",
                 r.peakHz, r.meanDev, 1.5f, false, r.peakDb));
-        if (auto r = lack (2000.0f, 5000.0f); r.meanDev < -5.0f)
+        if (auto r = lack (2000.0f, 5000.0f); r.meanDev < -5.0f * depth)
             out.push_back (boost ("No click",
                 "The beater range is " + db (r.meanDev) + " low, so the kick will be felt on big speakers but lost on small ones. A boost around 3 kHz lets it cut through.",
                 EQType::Bell, 3000.0f, r.meanDev, 1.2f));
@@ -615,7 +617,7 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource
             out.push_back (lowCut ("Sub rumble below 30 Hz",
                 "There is strong energy below 30 Hz that most systems cannot play. It uses up headroom and makes limiters work harder for nothing.",
                 28.0f, 1));
-        if (auto r = excess (50.0f, 120.0f); fullRange && r.meanDev > 4.0f)
+        if (auto r = excess (50.0f, 120.0f); fullRange && r.meanDev > 4.0f * depth)
         {
             Suggestion s; s.title = "Bass-heavy"; s.freqHz = 100.0f; s.amountDb = r.meanDev;
             s.why = "The low end is " + db (r.meanDev) + " heavier than a balanced " + juce::String (role == Role::Master ? "master" : "beat") + ". It will sound huge here and boomy everywhere else. A gentle shelf evens it out.";
@@ -624,19 +626,19 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource
             s.action = "Shelf " + juce::String (s.band.gainDb, 1) + " dB below 110 Hz";
             out.push_back (s);
         }
-        if (auto r = excess (180.0f, 400.0f); r.meanDev > 3.0f)
+        if (auto r = excess (180.0f, 400.0f); r.meanDev > 3.0f * depth)
             out.push_back (cut ("Mud around " + hz (r.peakHz),
                 "The low mids are " + db (r.meanDev) + " thicker than usual. This is where pads, keys and reverb pile up and where the vocal's body needs room.",
                 r.peakHz, r.meanDev, 1.2f, true, r.peakDb));
-        if (auto r = excess (2500.0f, 5000.0f); r.meanDev > 3.0f)
+        if (auto r = excess (2500.0f, 5000.0f); r.meanDev > 3.0f * depth)
             out.push_back (cut ("Harsh around " + hz (r.peakHz),
                 "The upper mids are " + db (r.meanDev) + " hot. This is the range ears are most sensitive to and exactly where the vocal's clarity lives. A dynamic cut takes the edge off the loud moments.",
                 r.peakHz, r.meanDev, 1.6f, true, r.peakDb));
-        if (auto r = lack (8000.0f, 16000.0f); r.meanDev < -5.0f)
+        if (auto r = lack (8000.0f, 16000.0f); r.meanDev < -5.0f * depth)
             out.push_back (boost ("Dull top end",
                 "There is " + db (r.meanDev) + " less high-frequency energy than usual. A small shelf adds sparkle; keep it modest so hi-hats do not get sharp.",
                 EQType::HighShelf, 10000.0f, r.meanDev, 0.71f));
-        if (auto r = lack (60.0f, 150.0f); fullRange && r.meanDev < -5.0f)
+        if (auto r = lack (60.0f, 150.0f); fullRange && r.meanDev < -5.0f * depth)
             out.push_back (boost ("Thin low end",
                 "The bass range is " + db (r.meanDev) + " lighter than usual. Check the 808 and kick levels first; if they are right, a low shelf adds weight.",
                 EQType::LowShelf, 100.0f, r.meanDev, 0.71f));

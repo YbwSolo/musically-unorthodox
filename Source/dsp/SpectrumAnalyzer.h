@@ -52,6 +52,15 @@ public:
 
     // Finds narrow peaks sticking out of the smoothed long-term spectrum (for "Clean harsh").
     std::vector<Resonance> findResonances (float minHz, float maxHz, float minProminenceDb) const;
+    // The notes in the sound: narrow lines low down, which are the fundamentals and first harmonics of pitches
+    // that were held or repeated over the last few seconds. Empty for speech, rap without a fixed pitch, noise
+    // and most drums. Frequencies are interpolated between bins.
+    std::vector<float> findNoteLines (float minHz, float maxHz, float minProminenceDb) const;
+    // Whether f is one of those notes or a whole multiple of one (up to maxHarmonic). A narrow peak that passes
+    // this is part of the tune, not a resonance. High up, where the harmonics of several notes lie closer
+    // together than they can be told apart, nearly everything passes: there a peak cannot be called either way.
+    static bool isHarmonicOf (float f, const std::vector<float>& lines, float binHz, int maxHarmonic = 24);
+    float getBinHz() const { return (float) fs / (float) kFFTSize; }
 
     // Spectral features used by the role detector (dB relative, 0 = no data).
     float lowEnergyRatio() const;    // energy below 150 Hz / total

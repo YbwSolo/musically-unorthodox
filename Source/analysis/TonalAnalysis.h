@@ -70,7 +70,8 @@ BandArray roleTargetCurve (Role role);
 // whether a cut should be fixed (the build-up is always there) or dynamic (it only appears on some notes or words).
 // source says what the track is when the role alone is too coarse; passes chooses which of the three jobs to do.
 std::vector<Suggestion> analyseTone (const BandArray& measuredDb, Role role, const BandArray* swingDb = nullptr,
-                                     EqSource source = EqSource::TrackKind, int passes = kAllEqPasses);
+                                     EqSource source = EqSource::TrackKind, int passes = kAllEqPasses, float depth = 1.0f);
+// depth: 1 lists what clearly stands out; 0.6 ("Detailed") also lists smaller differences, for the ear to judge.
 // The shape a source is compared with (the role's curve when the source has none of its own).
 BandArray sourceTargetCurve (EqSource source, Role trackRole);
 

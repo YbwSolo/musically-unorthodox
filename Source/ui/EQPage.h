@@ -44,6 +44,7 @@ private:
     Segmented sourceGroup { juce::StringArray { "Track kind", "Vocal", "Instrument" } };
     juce::ComboBox sourceBox;
     std::array<juce::TextButton, 3> passButtons;
+    Segmented depthPick;
     juce::Rectangle<int> sourceNoteArea;
     int shownSource = -1, shownPasses = -1;
     void syncSource();

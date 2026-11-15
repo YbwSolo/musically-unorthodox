@@ -626,6 +626,17 @@ void MUProcessor::timerCallback()
                 // peaks, stop pushing, and back off if it is beyond 8 dB.
                 float worst = 0.0f;
                 for (int i = 0; i < 250; ++i) worst = juce::jmin (worst, maximizer.reductionHistory().get (i));
+                // A level set by Analyse and master came from the whole song. It is not moved by whichever passage
+                // happens to be playing (a quiet verse would push it up, and the chorus would then come out too
+                // loud); only the guard against crushing the mix still acts. Changing the target by hand hands
+                // the level back to the steering below.
+                if (masterLevelSet.load() && std::abs (pTargetLufs->load() - masterLevelTarget.load()) > 0.05f) masterLevelSet.store (false);
+                if (masterLevelSet.load())
+                {
+                    if (worst < -8.0f) masterTrimDb.store (juce::jlimit (-24.0f, 24.0f, masterTrimDb.load() + juce::jmax (-3.0f, worst + 8.0f)));
+                    lastAutoTrimStep = now;
+                    return;
+                }
                 // Once it has stopped pushing it stays stopped until the limiter has clearly eased off (under 4.5 dB),
                 // so the level does not creep up and down as louder and quieter passages go by.
                 bool held = autoLevelHeld.load();
@@ -646,10 +657,10 @@ void MUProcessor::timerCallback()
             }
         }
         else if (std::abs (masterTrimDb.load()) > 0.001f)
-            masterTrimDb.store (0.0f);
+            { masterTrimDb.store (0.0f); masterLevelSet.store (false); }
     }
     else if (std::abs (masterTrimDb.load()) > 0.001f)
-        masterTrimDb.store (0.0f);
+        { masterTrimDb.store (0.0f); masterLevelSet.store (false); }
 }
 
 // The name of the track says more than its sound does: someone who names a track "rap" or "808" has told us.
@@ -1200,7 +1211,55 @@ std::vector<Suggestion> MUProcessor::analyse (juce::String& status)
     const auto role = getEffectiveRole();
     const auto source = getEqSource();
     const int passes = juce::jlimit (1, kAllEqPasses, (int) getParam (ids::eqPasses));
-    out = analyseTone (bands, role, fromPass ? &swing : nullptr, source, passes);
+    const bool detailed = getParam (ids::eqDepth) > 0.5f;
+    out = analyseTone (bands, role, fromPass ? &swing : nullptr, source, passes, detailed ? 0.6f : 1.0f);
+    std::vector<float> heardNotes;
+    // Narrow peaks, at the analyser's own resolution (the ones that can be seen on the display): a peak standing
+    // clear of the spectrum around it over the last few seconds. Not on a bass, a kick or a whole mix, where a
+    // peak is a note. On a voice or an instrument that holds notes, the tall narrow peaks ARE the notes and their
+    // harmonics, so the notes are found first (the lines low down) and anything that is one of them, or a whole
+    // multiple of one, is left out: cutting it would be cutting the tune. The same test is put to the ringing
+    // found by the broad analysis, where one band can hold a single harmonic of the note that is sung most.
+    {
+        const Role fam = eqSourceRole (source, role);
+        const bool pitched = fam == Role::Vocal || fam == Role::BackingVocal || fam == Role::Melody;
+        const std::vector<float> notes = pitched ? spectrum.findNoteLines (70.0f, 1500.0f, 6.0f) : std::vector<float>();
+        heardNotes = notes;
+        const float binHz = spectrum.getBinHz();
+        if (! notes.empty())
+            out.erase (std::remove_if (out.begin(), out.end(), [&] (const Suggestion& s)
+            {
+                if (! s.title.startsWith ("Ringing")) return false;
+                for (float f0 : notes) for (int k = 1; k <= 8; ++k) if (std::abs (std::log2 ((float) k * f0 / s.band.freqHz)) < 0.17f) return true;
+                return false;
+            }), out.end());
+        if ((passes & 1) != 0 && (pitched || fam == Role::Drums))
+        {
+            auto peaks = spectrum.findResonances (fam == Role::Drums ? 200.0f : 700.0f, 9000.0f, detailed ? 6.0f : 8.0f);
+            auto harmonic = [&] (float f) { return SpectrumAnalyzer::isHarmonicOf (f, notes, binHz); };
+            int added = 0;
+            for (auto& pk : peaks)
+            {
+                if (added >= (detailed ? 3 : 1) || harmonic (pk.freqHz)) continue;
+                // one that the broad analysis already placed to the nearest third of an octave is replaced by the exact one
+                out.erase (std::remove_if (out.begin(), out.end(), [&pk] (const Suggestion& s) { return s.title.startsWith ("Ringing") && std::abs (std::log2 (s.band.freqHz / pk.freqHz)) < 0.3f; }), out.end());
+                bool covered = false;
+                for (auto& s : out) if (s.kind == Suggestion::Kind::EqBand && s.stage != EqStage::Tonal && std::abs (std::log2 (s.band.freqHz / pk.freqHz)) < 0.2f) covered = true;
+                if (covered) continue;
+                Suggestion s; s.stage = EqStage::Surgical; s.freqHz = pk.freqHz; s.amountDb = pk.prominenceDb;
+                const juce::String at = pk.freqHz >= 1000.0f ? juce::String (pk.freqHz / 1000.0f, 2) + " kHz" : juce::String (juce::roundToInt (pk.freqHz)) + " Hz";
+                s.title = "Narrow peak at " + at;
+                s.why = "On the display there is a narrow peak here, " + juce::String (pk.prominenceDb, 1) + " dB clear of the spectrum around it over the last few seconds. It is not one of the notes that were held while listening, nor a harmonic of one, so it is likely a resonance (the room, the microphone, the instrument) and a narrow cut takes it out. That is a likelihood, not a certainty: solo the band and sweep it, and if the peak moves with the tune, leave it.";
+                s.band.enabled = true; s.band.type = EQType::Bell; s.band.freqHz = pk.freqHz; s.band.q = juce::jlimit (3.0f, 8.0f, pk.q);
+                s.band.gainDb = -juce::jlimit (2.0f, 4.5f, 0.5f * pk.prominenceDb);
+                s.action = "Narrow cut " + juce::String (s.band.gainDb, 1) + " dB at " + at;
+                // after the other surgical moves, before the tonal ones
+                auto where = std::find_if (out.begin(), out.end(), [] (const Suggestion& x) { return x.kind == Suggestion::Kind::EqBand && x.stage != EqStage::Surgical; });
+                out.insert (where, s);
+                ++added;
+            }
+        }
+    }
 
     // Clashes with other tracks in the session that involve this one (the master sees all of them).
     const bool master = role == Role::Master;
@@ -1239,10 +1298,24 @@ std::vector<Suggestion> MUProcessor::analyse (juce::String& status)
     const juce::String basis = fromPass ? "Listened to " + juce::String (listened, 0) + " s of this track as: " + what + ". " : juce::String();
     juce::StringArray jobs;
     if (passes & 1) jobs.add ("surgical"); if (passes & 2) jobs.add ("tonal"); if (passes & 4) jobs.add ("dynamic");
+    // What the tall narrow peaks on the display are, said in so many words: they look like the obvious thing to cut.
+    juce::String aboutNotes;
+    if (! heardNotes.empty())
+    {
+        std::sort (heardNotes.begin(), heardNotes.end());
+        juce::StringArray named;
+        std::vector<float> roots;
+        for (float f : heardNotes)
+            if (named.size() < 3 && ! SpectrumAnalyzer::isHarmonicOf (f, roots, spectrum.getBinHz(), 8)) { roots.push_back (f); named.add (juce::String (juce::roundToInt (f))); }
+        juce::String list = named[0];
+        for (int i = 1; i < named.size(); ++i) list += (i == named.size() - 1 ? " and " : ", ") + named[i];
+        aboutNotes = " The tall narrow peaks on the display at " + list + " Hz and at whole multiples of " + (named.size() == 1 ? "that" : "those")
+                   + " are the notes being " + (eqSourceRole (source, role) == Role::Melody ? "played" : "sung") + ": they are the tune, not faults, and are never suggested as cuts.";
+    }
     if (out.empty())
-        status = basis + "Nothing stands out (" + jobs.joinIntoString (", ") + "). The tone of this track is in the normal range for " + what + ", so leave the EQ alone unless your ears say otherwise.";
+        status = basis + "Nothing stands out (" + jobs.joinIntoString (", ") + "). The tone of this track is in the normal range for " + what + ", so leave the EQ alone unless your ears say otherwise." + aboutNotes;
     else
-        status = basis + juce::String ((int) out.size()) + (out.size() == 1 ? " thing" : " things") + " worth a look, in the order an engineer would do them: surgical cuts first, then tonal lifts, then dynamic. Read why, then apply the ones you agree with.";
+        status = basis + juce::String ((int) out.size()) + (out.size() == 1 ? " thing" : " things") + " worth a look, in the order an engineer would do them: surgical cuts first, then tonal lifts, then dynamic. Read why, then apply the ones you agree with." + aboutNotes;
     return out;
 }
 
@@ -1654,7 +1727,7 @@ juce::String MUProcessor::applyChainPreset (int index)
         if (fitted.startsWith ("EQ fitted") || fitted.startsWith ("The tone")) note << " " << fitted;
     }
     restartSpectrumAverage();
-    if (p.role == Role::Master) { masterTrimDb.store (0.0f); autoLevelHeld.store (false); }
+    if (p.role == Role::Master) { masterTrimDb.store (0.0f); autoLevelHeld.store (false); masterLevelSet.store (false); }
     resetMeasurement();                 // readings taken with the old chain no longer describe this track
     rememberLoaded ("chain", scopeParams ("chain"));
     return p.name + " loaded." + note;
@@ -1723,7 +1796,9 @@ int MUProcessor::mergeEqBand (EQBandSettings band, bool& addedToExisting)
     {
         const auto have = getBandSettings (b);
         if (have.enabled && have.type == band.type && have.dynamic == band.dynamic && band.type != EQType::LowCut && band.type != EQType::HighCut
-            && std::abs (std::log2 (have.freqHz / juce::jmax (20.0f, band.freqHz))) < (shelf ? 1.3f : 0.6f)) into = b;
+            // (two narrow cuts a third of an octave apart are two different things: how near counts as "the same
+            // place" shrinks with the width of the narrower band)
+            && std::abs (std::log2 (have.freqHz / juce::jmax (20.0f, band.freqHz))) < (shelf ? 1.3f : juce::jlimit (0.12f, 0.6f, 0.7f / juce::jmax (have.q, band.q)))) into = b;
     }
     if (into < 0)
     {
@@ -2083,7 +2158,7 @@ void MUProcessor::applyMasterMode (int mode)
         setParam (ids::peakGuard, 1.0f);
         setParam (ids::masterAutoTrim, 1.0f);
         masterTrimDb.store (0.0f);            // find the level for the new target from scratch
-        autoLevelHeld.store (false);
+        autoLevelHeld.store (false); masterLevelSet.store (false);
         loudness.resetIntegrated();
         loudness.resetPeakHold();
     }
@@ -2148,6 +2223,7 @@ juce::String MUProcessor::restyleMaster()
     masterFacts = {};
     storeMasterText();
     settleStarted = (double) samplesProcessed.load() / juce::jmax (1.0, getSampleRate());
+    settlePhase = 0; inProbe.stop(); outProbe.stop();
     masterStage.store ((int) MasterStage::Settling);
     return "Mastered as " + masterStyleNames()[(int) style] + " from " + juce::String (mixFacts.probe.seconds, 0) + " s of the song: " + juce::String (masterPlan.processing.size())
          + " processors in use. Keep it playing: the level settles, then the master is measured for the report.";
@@ -2191,6 +2267,7 @@ void MUProcessor::applyMasterPlan (const MasterPlan& plan)
     setParam (ids::peakGuard, 1.0f); setParam (ids::masterAutoTrim, 1.0f);
     masterTrimDb.store (juce::jlimit (-12.0f, 12.0f, plan.targetLufs - mixFacts.integratedLufs));
     autoLevelHeld.store (false);
+    masterLevelTarget.store (plan.targetLufs); masterLevelSet.store (true);
     loudness.resetIntegrated(); loudness.resetPeakHold();
     restartSpectrumAverage();
 }
@@ -2222,7 +2299,7 @@ juce::String MUProcessor::undoMaster()
     inProbe.stop(); outProbe.stop();
     for (auto* key : { "mstDetected", "mstProcessing", "mstLeft", "mstNotes", "mstReport" }) apvts.state.removeProperty (key, nullptr);
     masterStage.store ((int) MasterStage::Idle);
-    masterTrimDb.store (0.0f); autoLevelHeld.store (false);
+    masterTrimDb.store (0.0f); autoLevelHeld.store (false); masterLevelSet.store (false);
     loudness.resetIntegrated(); loudness.resetPeakHold();
     return "Back to how everything was before Analyse and master.";
 }
@@ -2234,23 +2311,56 @@ void MUProcessor::masterTick()
     const double now = (double) samplesProcessed.load() / juce::jmax (1.0, getSampleRate());
     if (stage == MasterStage::Settling && isMasterInstance())
     {
-        // the report is of the master at its settled level: wait for the auto level to arrive (or to say it will not push further)
-        const float error = std::abs (getParam (ids::targetLufs) - loudness.getIntegrated());
-        const double waited = now - settleStarted;
-        if (waited > 6.0 && (error < 0.7f || autoLevelHeld.load() || waited > 25.0))
+        // The level starts at the gain the measurement of the whole song says is needed. What the EQ, the
+        // compression and the limiter then add or take away is measured here: the mix going in and the master
+        // coming out over the same twelve seconds, so it does not matter which part of the song is playing.
+        // The level is corrected once by the difference and then left alone.
+        auto measureBoth = [this]
         {
+            inMeter.reset(); inMeter.resetIntegrated(); inMeter.resetPeakHold();
             outMeter.reset(); outMeter.resetIntegrated(); outMeter.resetPeakHold();
+            inProbe.start(); outProbe.start();
+        };
+        const double waited = now - settleStarted;
+        if (settlePhase == 0 && waited > 3.0) { measureBoth(); settlePhase = 1; }
+        else if (settlePhase == 1)
+        {
+            inMeter.readIntegrated(); outMeter.readIntegrated();
+            if (outProbe.secondsHeard() >= 12.0f)
+            {
+                const float in = inMeter.getIntegrated(), out = outMeter.getIntegrated();
+                float worst = 0.0f;
+                for (int i = 0; i < 250; ++i) worst = juce::jmin (worst, maximizer.reductionHistory().get (i));
+                if (in > -60.0f && out > -60.0f && mixFacts.enough())
+                {
+                    float fix = juce::jlimit (-4.0f, 4.0f, (masterLevelTarget.load() - mixFacts.integratedLufs) - (out - in));
+                    if (fix > 0.0f && worst < -8.0f) fix = 0.0f;          // never chased by crushing the mix
+                    if (std::abs (fix) > 0.2f) masterTrimDb.store (juce::jlimit (-24.0f, 24.0f, masterTrimDb.load() + fix));
+                }
+                inProbe.stop(); outProbe.stop();
+                settlePhase = 2; settleStarted = now;
+            }
+        }
+        else if (settlePhase == 2 && waited > 2.0)
+        {
+            measureBoth();
             spectrum.startListen (true);
-            outProbe.start();
+            settlePhase = 0;
             masterStage.store ((int) MasterStage::Checking);
         }
     }
     if (stage == MasterStage::Checking)
     {
-        outMeter.readIntegrated();
+        outMeter.readIntegrated(); inMeter.readIntegrated();
         if (outProbe.secondsHeard() >= kMasterCheckSeconds)
         {
             masterFacts = collectFacts (outProbe, outMeter, spectrum);
+            // The passage that was checked is not the whole song. What it shows for certain is how much louder the
+            // master is than the mix over that passage, so the loudness in the report is the whole song's own
+            // loudness plus that.
+            if (const float in = inMeter.getIntegrated(); in > -60.0f && masterFacts.integratedLufs > -60.0f && mixFacts.enough())
+                masterFacts.integratedLufs = mixFacts.integratedLufs + (masterFacts.integratedLufs - in);
+            inProbe.stop();
             outProbe.stop(); spectrum.stopListen();
             storeMasterText();
             masterStage.store ((int) MasterStage::Done);
@@ -2379,6 +2489,14 @@ void MUProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("version", MU_VERSION_STRING, nullptr);
     state.setProperty ("uiTabs", 8, nullptr);
     state.setProperty ("trimAfter", ! trimBeforeChain.load(), nullptr);
+    // the level the master has arrived at, so that a project that is opened again (or bounced straight away)
+    // starts at that level and does not have to find it again over the first seconds of the song
+    if (isMasterInstance() && std::abs (masterTrimDb.load()) > 0.001f)
+    {
+        state.setProperty ("masterLevelDb", masterTrimDb.load(), nullptr);
+        if (masterLevelSet.load()) state.setProperty ("masterLevelFor", masterLevelTarget.load(), nullptr); else state.removeProperty ("masterLevelFor", nullptr);
+    }
+    else { state.removeProperty ("masterLevelDb", nullptr); state.removeProperty ("masterLevelFor", nullptr); }
     {
         const juce::ScopedLock sl (graphLock);
         const auto notes = graph.toString();
@@ -2413,6 +2531,10 @@ void MUProcessor::setStateInformation (const void* data, int sizeInBytes)
             }
             currentPreset = tree.getProperty ("chainPresetName", juce::String()).toString();
             abStates[0].clear(); abStates[1].clear(); abSlot = 0;
+            masterTrimDb.store (juce::jlimit (-24.0f, 24.0f, (float) tree.getProperty ("masterLevelDb", 0.0)));
+            masterLevelSet.store (tree.hasProperty ("masterLevelFor"));
+            masterLevelTarget.store ((float) tree.getProperty ("masterLevelFor", -14.0));
+            masterTrimGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (masterTrimDb.load()));
         }
     }
 }

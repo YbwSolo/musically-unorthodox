@@ -123,7 +123,7 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
     std::vector<EQBandSettings> corrective, tonal, dynamic;
     juce::StringArray eqSurgical, eqTonal, eqDynamic;
 
-    // ---- corrective: only what is measured as too much
+    // ---- what is measured as too much or too little, in words (the EQ itself is fitted below)
     if (meanBetween (mix.bandsDb, centres, 20.0f, 28.0f) > meanBetween (mix.bandsDb, centres, 45.0f, 110.0f) - 6.0f)
     {
         EQBandSettings e; e.enabled = true; e.type = EQType::LowCut; e.freqHz = 25.0f; e.q = 0.71f; e.slope = 0;
@@ -131,30 +131,23 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
         plan.detected.add ("Rumble below 30 Hz is within 6 dB of the bass itself. Nothing plays it back, and it uses up headroom.");
         eqSurgical.add ("low cut at 25 Hz");
     }
-    if (auto r = region (45.0f, 110.0f, true); r.mean > 3.0f)
+    if (auto r = region (45.0f, 110.0f, true); r.mean > 2.0f)   plan.detected.add ("The low end (45 to 110 Hz) is " + d1 (r.mean) + " dB heavier than the balance being aimed for.");
+    if (auto r = region (180.0f, 400.0f, true); r.mean > 2.0f)  plan.detected.add ("Low-mid build-up: " + d1 (r.mean) + " dB too much between 180 and 400 Hz, strongest at " + hzText (r.peakHz) + (r.swing > 6.0f ? ", and it comes and goes." : "."));
+    if (auto r = region (400.0f, 900.0f, true); r.mean > 2.0f)  plan.detected.add ("Boxy: " + d1 (r.mean) + " dB too much between 400 and 900 Hz.");
+    if (auto r = region (8000.0f, 16000.0f, true); r.mean > 3.0f) plan.detected.add ("The top (above 8 kHz) is " + d1 (r.mean) + " dB brighter than the balance being aimed for.");
+    if (auto r = region (45.0f, 110.0f, false); r.mean < -3.0f)
     {
-        const float g = -juce::jlimit (0.5f, 3.0f, 0.5f * r.mean * scale);
-        corrective.push_back (shelf (false, 110.0f, g));
-        plan.detected.add ("The low end (45 to 110 Hz) is " + d1 (r.mean) + " dB heavier than the balance being aimed for.");
-        eqSurgical.add ("low shelf " + d1 (g) + " dB below 110 Hz");
+        plan.detected.add ("Thin low end: " + d1 (-r.mean) + " dB short between 45 and 110 Hz.");
+        plan.notes.add ("A master can only lift the low end that is in the mix. If the 808 or the kick is too quiet, turn it up in the mix.");
     }
-    if (auto r = region (180.0f, 400.0f, true); r.mean > 2.5f)
+    if (auto r = region (1500.0f, 4000.0f, false); r.mean < -2.0f) plan.detected.add ("Short of presence: " + d1 (-r.mean) + " dB under between 1.5 and 4 kHz, where words and attack are heard.");
+    if (auto r = region (8000.0f, 16000.0f, false); r.mean < -3.0f) plan.detected.add ("Dull top: " + d1 (-r.mean) + " dB short above 8 kHz.");
+
+    // ---- problems that are only there some of the time get a band that only works while they are there
+    if (auto r = region (180.0f, 400.0f, true); r.mean > 2.5f && r.swing > 6.0f)
     {
-        const float g = -juce::jlimit (0.5f, 2.5f, 0.55f * r.mean * scale);
-        plan.detected.add ("Low-mid build-up: " + d1 (r.mean) + " dB too much between 180 and 400 Hz, strongest at " + hzText (r.peakHz) + (r.swing > 6.0f ? ", and it comes and goes." : "."));
-        if (r.swing > 6.0f)
-        {
-            auto e = bell (r.peakHz, 0.0f, 1.0f); e.dynamic = true; e.rangeDb = g * 1.2f; e.thresholdDb = juce::jlimit (-60.0f, -6.0f, r.peakDb + 1.0f);
-            dynamic.push_back (e); eqDynamic.add ("up to " + d1 (e.rangeDb) + " dB at " + hzText (r.peakHz) + " while it builds up");
-        }
-        else { corrective.push_back (bell (r.peakHz, g, 1.0f)); eqSurgical.add (d1 (g) + " dB at " + hzText (r.peakHz)); }
-    }
-    if (auto r = region (400.0f, 900.0f, true); r.mean > 3.0f)
-    {
-        const float g = -juce::jlimit (0.5f, 2.0f, 0.5f * r.mean * scale);
-        corrective.push_back (bell (r.peakHz, g, 1.2f));
-        plan.detected.add ("Boxy: " + d1 (r.mean) + " dB too much between 400 and 900 Hz.");
-        eqSurgical.add (d1 (g) + " dB at " + hzText (r.peakHz));
+        auto e = bell (r.peakHz, 0.0f, 1.0f); e.dynamic = true; e.rangeDb = -juce::jlimit (0.8f, 3.0f, 0.65f * r.mean * scale); e.thresholdDb = juce::jlimit (-60.0f, -6.0f, r.peakDb + 1.0f);
+        dynamic.push_back (e); eqDynamic.add ("up to " + d1 (e.rangeDb) + " dB at " + hzText (r.peakHz) + " while it builds up");
     }
     if (auto r = region (2500.0f, 5000.0f, true); r.mean > 2.5f)
     {
@@ -164,44 +157,90 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
         plan.detected.add ("Harsh upper mids: " + d1 (r.mean) + " dB too much between 2.5 and 5 kHz, strongest at " + hzText (r.peakHz) + ".");
         eqDynamic.add ("up to " + d1 (e.rangeDb) + " dB at " + hzText (r.peakHz) + " on the loud moments");
     }
-    if (auto r = region (8000.0f, 16000.0f, true); r.mean > 4.0f)
-    {
-        const float g = -juce::jlimit (0.5f, 2.0f, 0.4f * r.mean * scale);
-        corrective.push_back (shelf (true, 9000.0f, g));
-        plan.detected.add ("The top (above 8 kHz) is " + d1 (r.mean) + " dB brighter than the balance being aimed for.");
-        eqSurgical.add ("high shelf " + d1 (g) + " dB above 9 kHz");
-    }
 
-    // ---- tonal: only what is measured as missing. The mix is judged after the corrective cuts, as on the EQ tab.
-    for (auto& e : corrective)
-        for (int b = 0; b < kAnalysisBands; ++b) dev[(size_t) b] += EQEngine::bandResponseDb (e, centres[(size_t) b], 48000.0);
-    if (auto r = region (45.0f, 110.0f, false); r.mean < -4.0f)
+    // ---- the EQ itself: fitted to the difference between the mix and the tone being aimed for.
+    // Up to five broad bands, the biggest difference first, each taking out a share of it (30 % at the lowest
+    // intensity, 60 % in the middle, 90 % at the top; cuts never more than 6 dB times that share, lifts 70 % of that). Where the
+    // difference is under about 1 dB nothing is done. The differences are measured from the middle value of the
+    // mix, not its average, so one heavy range does not make every other range look short and get boosted.
     {
-        const float g = juce::jlimit (0.5f, 2.0f, 0.35f * -r.mean * scale);
-        tonal.push_back (shelf (false, 100.0f, g));
-        plan.detected.add ("Thin low end: " + d1 (-r.mean) + " dB short between 45 and 110 Hz.");
-        eqTonal.add ("low shelf +" + d1 (g) + " dB below 100 Hz");
-        plan.notes.add ("A master can only lift the low end that is in the mix. If the 808 or the kick is too quiet, turn it up in the mix.");
+        std::vector<float> sorted;
+        for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] >= 60.0f && centres[(size_t) b] <= 9000.0f) sorted.push_back (dev[(size_t) b]);
+        std::sort (sorted.begin(), sorted.end());
+        const float anchor = sorted.empty() ? 0.0f : sorted[sorted.size() / 2];
+        const float share = 0.3f + 0.6f * k, limit = 6.0f * share;
+        BandArray want {};
+        for (int b = 0; b < kAnalysisBands; ++b)
+        {
+            const float f = centres[(size_t) b];
+            const bool usable = f >= 40.0f && f <= 14000.0f && mix.bandsDb[(size_t) b] > mMean - 45.0f;
+            want[(size_t) b] = usable ? -(dev[(size_t) b] - anchor) : 0.0f;
+        }
+        for (auto& e : dynamic)       // the range a dynamic band is dealing with is not cut a second time
+        {
+            const float lo = e.freqHz < 1000.0f ? 170.0f : 2300.0f, hi = e.freqHz < 1000.0f ? 420.0f : 5400.0f;
+            for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] >= lo && centres[(size_t) b] <= hi) want[(size_t) b] = juce::jmax (0.0f, want[(size_t) b]);
+        }
+        BandArray smooth = want;
+        for (int b = 1; b < kAnalysisBands - 1; ++b) smooth[(size_t) b] = 0.25f * want[(size_t) b - 1] + 0.5f * want[(size_t) b] + 0.25f * want[(size_t) b + 1];
+        // lifts are kept to 70 % of what cuts are allowed: adding what a mix lacks is the riskier half on a master
+        for (auto& v : smooth) v = juce::jlimit (-limit, 0.7f * limit, v * share);
+        const BandArray asked = smooth;
+        const float octPerBand = std::log2 (1000.0f) / (float) kAnalysisBands;
+        bool usedLow = false, usedHigh = false;
+        std::vector<std::pair<float, float>> fitted;      // where and which way
+        for (int n = 0; n < 8 && fitted.size() < 5; ++n)
+        {
+            int peak = -1; float best = 0.7f;
+            for (int b = 0; b < kAnalysisBands; ++b) if (std::abs (smooth[(size_t) b]) > best) { best = std::abs (smooth[(size_t) b]); peak = b; }
+            if (peak < 0) break;
+            const float g = juce::jlimit (-limit, 0.7f * limit, smooth[(size_t) peak]), f = centres[(size_t) peak];
+            // a lift right beside a cut (or the other way round) mostly cancels it: two differences that close
+            // together are too fine a detail for a master, so the smaller one is let go
+            bool fights = false;
+            for (auto& done : fitted) if (done.second * g < 0.0f && std::abs (std::log2 (f / done.first)) < 0.75f) fights = true;
+            if (fights)
+            {
+                for (int b = 0; b < kAnalysisBands; ++b) if (std::abs (std::log2 (centres[(size_t) b] / f)) < 0.4f) smooth[(size_t) b] = 0.0f;
+                continue;
+            }
+            int width = 1;
+            for (int b = peak - 1; b >= 0 && smooth[(size_t) b] * g > 0.0f && std::abs (smooth[(size_t) b]) > std::abs (g) * 0.5f; --b) ++width;
+            for (int b = peak + 1; b < kAnalysisBands && smooth[(size_t) b] * g > 0.0f && std::abs (smooth[(size_t) b]) > std::abs (g) * 0.5f; ++b) ++width;
+            const float bw = juce::jlimit (0.7f, 3.0f, (float) width * octPerBand);
+            // The ends of the range are shelves, the way a mastering EQ is used; everything between is a broad bell.
+            // A shelf moves everything beyond its corner, so it is used once per end and only where everything
+            // beyond the corner is wanted the same way; a low end that is heavy at the bottom and short above it
+            // gets two bells, not shelves stacked against each other.
+            bool allBelow = true, allAbove = true;
+            for (int b = 0; b < kAnalysisBands; ++b)
+            {
+                if (centres[(size_t) b] < f && asked[(size_t) b] * g < -0.1f) allBelow = false;
+                if (centres[(size_t) b] > f && asked[(size_t) b] * g < -0.1f) allAbove = false;
+            }
+            const bool highShelf = f >= 7000.0f && ! usedHigh && allAbove, lowShelf = f <= 110.0f && ! usedLow && allBelow;
+            usedHigh = usedHigh || highShelf; usedLow = usedLow || lowShelf;
+            EQBandSettings e = highShelf ? shelf (true, juce::jmax (5000.0f, f * 0.75f), g) : lowShelf ? shelf (false, juce::jmin (160.0f, f * 1.4f), g)
+                                         : bell (juce::jlimit (45.0f, 12000.0f, f), g, juce::jlimit (0.5f, 1.6f, std::sqrt (std::pow (2.0f, bw)) / (std::pow (2.0f, bw) - 1.0f)));
+            fitted.push_back ({ e.freqHz, g });        // a shelf counts from its corner
+            // What is left over after a band is fitted is only chased where it is still the same kind of difference
+            // that was measured. A leftover of the other sign is the skirt of the band just fitted, and "fixing"
+            // it would add bands that undo each other.
+            for (int b = 0; b < kAnalysisBands; ++b)
+            {
+                smooth[(size_t) b] -= EQEngine::bandResponseDb (e, centres[(size_t) b], 48000.0);
+                if (std::abs (asked[(size_t) b]) < 0.3f || smooth[(size_t) b] * asked[(size_t) b] < 0.0f) smooth[(size_t) b] = 0.0f;
+            }
+            const juce::String what = (e.type == EQType::Bell ? juce::String() : juce::String (e.type == EQType::HighShelf ? "high shelf " : "low shelf ")) + (g > 0.0f ? "+" : "") + d1 (g) + " dB "
+                                    + (e.type == EQType::HighShelf ? "above " : e.type == EQType::LowShelf ? "below " : "at ") + hzText (e.freqHz);
+            if (g < 0.0f) { corrective.push_back (e); eqSurgical.add (what); } else { tonal.push_back (e); eqTonal.add (what); }
+        }
     }
-    if (auto r = region (1500.0f, 4000.0f, false); r.mean < -3.0f)
-    {
-        const float g = juce::jlimit (0.5f, 2.0f, 0.35f * -r.mean * scale);
-        tonal.push_back (bell (3000.0f, g, 0.7f));
-        plan.detected.add ("Short of presence: " + d1 (-r.mean) + " dB under between 1.5 and 4 kHz, where words and attack are heard.");
-        eqTonal.add ("+" + d1 (g) + " dB around 3 kHz, wide");
-    }
-    if (auto r = region (8000.0f, 16000.0f, false); r.mean < -4.0f)
-    {
-        const float g = juce::jlimit (0.5f, 2.5f, 0.35f * -r.mean * scale);
-        tonal.push_back (shelf (true, 10000.0f, g));
-        plan.detected.add ("Dull top: " + d1 (-r.mean) + " dB short above 8 kHz.");
-        eqTonal.add ("high shelf +" + d1 (g) + " dB above 10 kHz");
-    }
-    for (auto* list : { &corrective, &tonal, &dynamic }) for (auto& e : *list) if (plan.eq.size() < 7) plan.eq.push_back (e);
+    for (auto* list : { &corrective, &tonal, &dynamic }) for (auto& e : *list) if (plan.eq.size() < 8) plan.eq.push_back (e);
     if (! eqSurgical.isEmpty()) plan.processing.add ("Corrective EQ: " + eqSurgical.joinIntoString (", ") + ".");
     if (! eqTonal.isEmpty())    plan.processing.add ("Tonal EQ: " + eqTonal.joinIntoString (", ") + ".");
     if (! eqDynamic.isEmpty())  plan.processing.add ("Dynamic EQ: " + eqDynamic.joinIntoString (", ") + ".");
-    if (plan.eq.empty()) plan.leftAlone.add ("EQ: the tone is within 2.5 to 4 dB of the balance being aimed for everywhere, so it is not touched.");
+    if (plan.eq.empty()) plan.leftAlone.add ("EQ: the tone is within about 1 dB of the balance being aimed for everywhere, so it is not touched.");
 
     // ---- how squashed the mix already is
     const float peakOver = mix.peakToLoudness();

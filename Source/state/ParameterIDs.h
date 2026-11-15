@@ -279,6 +279,7 @@ namespace ids
     // EQ analysis: what the track is, and which of the three jobs Analyse does (bit 0 surgical, 1 tonal, 2 dynamic)
     inline const juce::String eqSource  { "eqSource" };
     inline const juce::String eqPasses  { "eqPasses" };
+    inline const juce::String eqDepth   { "eqDepth" };       // how much Analyse lists: the main things, or smaller ones too
 
     // Mastering assistant (master instance): style and intensity, the three-band compressor and the soft clipper
     inline const juce::String mstStyle     { "mstStyle" };

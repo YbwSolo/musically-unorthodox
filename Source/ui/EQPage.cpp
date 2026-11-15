@@ -773,7 +773,8 @@ private:
 // =====================================================================================================
 EQPage::EQPage (MUProcessor& p, std::function<void (const juce::String&)> status)
     : proc (p), setStatus (std::move (status)),
-      eqPower (p, ids::eqEnabled, "", "power"), autoGain (p, ids::eqAutoGain, "Auto gain")
+      eqPower (p, ids::eqEnabled, "", "power"), autoGain (p, ids::eqAutoGain, "Auto gain"),
+      depthPick (p, ids::eqDepth, { "Main things", "Detailed" }, "eq.depth")
 {
     useTabPresets (presets, proc, "eq", setStatus);
     addAndMakeVisible (presets);
@@ -834,6 +835,7 @@ EQPage::EQPage (MUProcessor& p, std::function<void (const juce::String&)> status
             addAndMakeVisible (b);
         }
     }
+    addAndMakeVisible (depthPick);
     syncSource();
 
     styleButton (analyseButton, "Analyse", true, "eq.analyse");
@@ -1099,6 +1101,8 @@ void EQPage::resized()
         const int w = (row.getWidth() - 12) / 3;
         for (int i = 0; i < 3; ++i) { passButtons[(size_t) i].setBounds (row.removeFromLeft (w)); row.removeFromLeft (6); }
     }
+    b.removeFromTop (6);
+    depthPick.setBounds (b.removeFromTop (24));
     b.removeFromTop (10);
     const int statusH = juce::roundToInt (wrappedHeight (brainStatus, (float) b.getWidth(), body (12.0f))) + 4;
     statusArea = b.removeFromTop (statusH);

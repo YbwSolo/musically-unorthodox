@@ -373,6 +373,7 @@ private:
     bool referencePass = false;
     std::vector<float> masterUndo;
     double settleStarted = 0.0;
+    int settlePhase = 0;                          // 0 waiting for the new settings to arrive, 1 measuring the gain, 2 waiting after the correction
     std::array<std::vector<float>, 2> dryRing; int dryPos = 0;       // the mix as it arrived, kept for the comparison
     juce::SmoothedValue<float> compareGain { 1.0f };
     std::atomic<float> compareGainDb { 0.0f };
@@ -406,6 +407,10 @@ private:
     juce::SmoothedValue<float> trimGain { 1.0f }, outGain { 1.0f }, masterTrimGain { 1.0f };
     std::atomic<float> masterTrimDb { 0.0f };
     std::atomic<bool> autoLevelHeld { false };
+    // After Analyse and master the level is the one worked out from the whole song and stays where it is put,
+    // for as long as the loudness target is the one it was worked out for.
+    std::atomic<bool> masterLevelSet { false };
+    std::atomic<float> masterLevelTarget { -14.0f };
     double lastAutoTrimStep = 0.0;     // seconds of processed audio
     float lastGuardState = -1000.0f;
     std::atomic<uint64_t> samplesProcessed { 0 };

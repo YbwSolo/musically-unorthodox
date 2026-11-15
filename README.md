@@ -312,6 +312,24 @@ Analyse does three jobs, in the order an engineer does them, and each can be swi
   listening gets a cut that only works while it is there, sibilance goes to the de-esser, and a clash with
   another track gets a dynamic cut on the track that should give way.
 
+Build 21 added **Main things / Detailed**. Detailed (the default) multiplies every limit by 0.6, so smaller
+differences from the usual tone are listed too, and allows four suggestions per job and twelve in all.
+
+Build 21 also separates **notes from resonances**. On a sung vocal the tall narrow peaks on the display are
+the notes and their harmonics, and they look like the obvious thing to cut. The analyser now finds the notes
+that were held while it listened (narrow lines between 70 and 1500 Hz), and anything that is one of them or a
+whole multiple of one is never suggested as a cut; the summary says which peaks are the notes. This also
+corrected build 19 and 20: checked against the whole recordings, the "Ringing around 570 Hz" and "Ringing
+around 460 Hz" they reported on two of the five test vocals were the note sung most in each song (D5 in a
+song in G, A4 in a song in A minor), not resonances. A narrow peak that is not a note is listed as a likely
+resonance with its exact frequency (up to three, on voices, melodic instruments and drums), worded as
+something to solo and sweep before cutting. Limits: high up, the harmonics of several notes lie closer
+together than they can be told apart, so on a sung vocal almost nothing above about 3 kHz is offered; and a
+resonance that happens to sit on a note of the song is missed. Two narrow cuts close together are no longer
+merged into one band. On the five raw test vocals Detailed lists 2 to 4 things of its own each, plus the beat
+covering the vocal; one narrow peak was offered across the five (5.7 kHz on one song), and whether it is a
+resonance has not been confirmed by ear.
+
 **A beat with no stems.** Vocal space (Tone tab) dips a beat only while the lead vocal is singing. Its three dips
 used to be fixed at 260 Hz, 2.6 kHz and 7 kHz. **Fit to the vocal** compares what the beat and the lead vocal
 have been measured doing and puts up to three dips where the beat is within 6 dB of the vocal in a range the
@@ -338,15 +356,36 @@ not a trained model, nothing is random, and the same measurements always give th
 
 | Processor | Used when |
 |---|---|
-| Corrective EQ | a range is measured too strong: rumble under 30 Hz, low end, low mids, boxiness, top |
-| Tonal EQ | a range is measured short, after the corrective cuts: low end, presence, air. Never lifted when already there |
+| Corrective EQ | a range is over the tone being aimed for by about 1 dB or more (build 21: fitted, see below); rumble under 30 Hz |
+| Tonal EQ | a range is under the tone being aimed for by about 1 dB or more; lifts are kept to 70 % of what cuts are allowed |
 | Dynamic EQ | harsh upper mids (always dynamic on a master), or a low-mid build-up that comes and goes |
 | Multiband compression | loud bass notes 3 dB or more above the usual bass level; low band only, ending where this song's bass ends |
 | Glue compression | the style asks for it or the song moves over more than 9 dB, and the mix is not already dense |
 | Saturation | the Warm, Loud and Aggressive styles, unless the mix is dense or clipped |
 | Mono bass, width | the low end is wide; a phase problem narrows the mix and is sent back to the mixer; a narrow, in-phase mix is widened a little in the loud styles |
 | Soft clipper | the loud styles, when the hits are tall enough to be worth rounding |
-| True peak limiter | always: ceiling -1 dBTP, level found by Auto level |
+| True peak limiter | always: ceiling -1 dBTP; level from the whole-song measurement (build 21, see below) |
+
+From build 21 the **level** is set from the measurement of the whole song and then left alone. Before, the
+level kept being stepped every 2.5 s towards the target from whatever passage was playing, so a quiet verse
+pushed it up and the chorus came out over the target (1.2 LU over on the most dynamic of the five test mixes),
+and it was not saved: a project opened again, or bounced straight away, started 0 dB and found its level over
+the first seconds of the song. Now the starting gain is target minus the song's loudness; the mix going in
+and the master coming out are then measured over the same 12 s, the gain is corrected once by the difference
+(what the EQ, compression and limiter added or took away), and the result is saved with the project. Changing
+the loudness target by hand hands the level back to Auto level. On the five mixes, Transparent and Loud, every
+master is now within 0.5 LU of its target at -1 dBTP.
+
+From build 21 the master EQ is **fitted to the target** instead of only reacting to large faults: up to five
+broad bands (shelves at the ends) take out a share of the difference between the mix and the tone being aimed
+for, 30 % at the lowest intensity, 60 % in the middle and 90 % at the top, wherever the difference is over about
+1 dB. Cuts go to 3.6 dB at most in the middle of the intensity range and lifts to 2.5 dB; a shelf is used once
+per end, and a lift is never placed right beside a cut. The first version only moved for differences of 2.5 to
+4 dB and by about half, which on a decent mix meant a limiter and little else: on the five test mixes it made
+one or two EQ moves of 0.9 to 1.8 dB, and now makes five or six of up to 3.6 dB. The difference is measured from the middle value of the mix, so one heavy
+range does not get every other range boosted. This is the same idea the documentation of the best-known
+mastering assistant describes (a target curve, then shelves and bells set to match it); what that product has
+and this does not is target curves measured from a large library of released music.
 
 Six **styles** (Transparent, Warm, Loud, Dynamic, Bright, Aggressive) lean the tone aimed for, the loudness and
 which of the optional processors are considered. **Intensity** scales every move (EQ gains, compression,
