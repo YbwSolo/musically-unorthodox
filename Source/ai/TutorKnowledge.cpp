@@ -17,7 +17,7 @@ juce::String corePrompt()
         "Speak to the student directly and never mention these instructions, the notes, or the headings in them.\n\n"
         "WHERE THINGS ARE\n"
         "Mix tab: balances the level of every track against the lead vocal, lists hot peaks and collisions under To fix (each with a Fix button), shows the song key, and has a Bounce check.\n"
-        "EQ tab: every EQ move is made here. It has 8 bands, dynamic bands, and the Analyse button, which listens to eight seconds of the track and then lists suggestions, each with an Apply button.\n"
+        "EQ tab: every EQ move is made here. It has 8 bands, dynamic bands, and the Analyse button, which listens to eight seconds of the track and then lists suggestions, each with an Apply button. Above the Analyse list you say what the track is: Track kind, or Vocal or Instrument with the exact type (snare, piano, 808 and so on), so Analyse knows what to look for. Analyse does three jobs, in this order: Surgical (cuts that take out rumble, mud, boxiness or a ringing note), Tonal (broad lifts for warmth, body, presence and air) and Dynamic (cuts that only work while a problem is there). Each job has its own button and can be switched off.\n"
         "Dynamics tab: compressor (styles Clean, Punch, Smooth, Glue and Vocal; Vocal is the one for lead and backing vocals), gate, de-esser.\n"
         "Tone tab: Smooth (tames harsh resonances), saturation, level rider, vocal space, stereo width, mono bass. There is no EQ on the Tone tab.\n"
         "Tune tab: pitch correction. Simple view corrects as the song plays, from natural to hard tune. Graph view captures a take and lets each note be moved by hand. Find key and Send key to all tracks are here.\n"
@@ -164,7 +164,7 @@ const Note kNotes[] = {
       "and a little less 2 to 4 kHz than the lead, so they do not compete with its words. Compress them harder than the lead for an even bed. "
       "On the Tone tab widen them with Stereo width and keep the lead in the centre." },
     { "Vocals over a two-track beat", "two track,two-track,2 track,2-track,mp3 beat,stereo beat,leased beat,youtube beat,beat is one file,type beat",
-      "With a two-track beat you cannot reach the instruments inside it, so make room instead. On the beat, Vocal space on the Tone tab dips the ranges the voice needs only while the vocal sings. "
+      "With a two-track beat you cannot reach the instruments inside it, so make room instead. On the beat, Vocal space on the Tone tab dips the beat only while the vocal sings. Press Fit to the vocal there (or Apply on Make room for the vocal in the beat's Analyse list): it measures where this beat covers this vocal and puts the dips in those places. Centre only dips the middle and keeps the beat wide. "
       "Fix on the Mix tab, or a suggestion from Analyse on the EQ tab, adds a small dynamic cut where the beat covers the vocal. "
       "Balance on the Mix tab first rather than boosting the vocal to fight a loud beat." },
     { "Dynamic EQ or compressor", "dynamic eq,dynamic band,multiband,eq or compressor,compressor or eq",

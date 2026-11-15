@@ -290,6 +290,37 @@ What has not been done: none of this has been compared by ear, in a blind test, 
 that were given as references, and no claim is made that it matches them. The measurements above say the voice
 is brighter, lighter in the low mids and more even than in build 12; they do not say it sounds good.
 
+### EQ analysis (build 19)
+
+Above the Analyse list on the EQ tab you now say what the track is. **Track kind** uses the kind set for the whole
+plugin. **Vocal** and **Instrument** name it exactly: lead, rap, high or low voice, backing vocals, adlibs; kick,
+snare, hi-hats, drum bus, 808, bass, piano, acoustic and electric guitar, synth lead, pad, brass, a full beat,
+sound FX. Each has its own tone curve and its own list of what goes wrong where (a snare is boxy at 350 to
+700 Hz, a hi-hat is clangy at 800 Hz to 2 kHz, a piano has hard hammers at 2 to 4.5 kHz). The curves for the
+named instruments are reasoned from how the instruments are built and from ordinary mixing practice. They were
+not measured from a library of stems.
+
+Analyse does three jobs, in the order an engineer does them, and each can be switched off:
+
+- **Surgical**: what should not be there. A low cut under the source, fixed cuts for mud, boxiness and
+  honk, and a narrow cut for a single ringing note (a band standing 5 dB or more clear of the bands either
+  side). The analysis hears in thirds of an octave, so a ringing note is placed to within that; it is not
+  looked for on a bass, a kick or a whole beat, where one band standing out is the note or the tune.
+- **Tonal**: what is good and wants bringing out. Broad bells and shelves, worked out on the spectrum as it will
+  be once the surgical cuts are in, so a voice is not given presence to make up for mud that is about to go.
+- **Dynamic**: what is only there some of the time. A build-up that came and went during the eight seconds of
+  listening gets a cut that only works while it is there, sibilance goes to the de-esser, and a clash with
+  another track gets a dynamic cut on the track that should give way.
+
+**A beat with no stems.** Vocal space (Tone tab) dips a beat only while the lead vocal is singing. Its three dips
+used to be fixed at 260 Hz, 2.6 kHz and 7 kHz. **Fit to the vocal** compares what the beat and the lead vocal
+have been measured doing and puts up to three dips where the beat is within 6 dB of the vocal in a range the
+vocal is strong in, sized 1.5 to 6 dB. **Centre only** dips the middle of the stereo picture and leaves the
+sides. On the five studio sessions, after Learn and balance, it found one place on each beat, between 190 and
+300 Hz, 2 to 3 dB deep: these beats were already clear of the vocal in the presence range. Analyse on a beat
+offers the same thing as "Make room for the vocal". It follows the level of the vocal, not what the vocal is
+singing, and nobody has judged it by ear yet.
+
 ### Checked on real recordings (build 18): Tune
 
 Tune was reported as glitchy on real vocals. Three sung takes from the same sessions (a woman, two men, one of

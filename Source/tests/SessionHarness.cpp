@@ -177,7 +177,14 @@ int main()
 
         // build 19: a beat with no stems is fitted around this vocal
         {
+            // (the test beat is pushed up so that it does cover the vocal; everything is put back afterwards)
+            juce::StringArray touched { ids::vsEnabled, ids::vsAmount, ids::outputGain };
+            for (int i = 0; i < 3; ++i) { touched.add (ids::vsFreq (i)); touched.add (ids::vsCut (i)); touched.add (ids::vsQ (i)); }
+            std::vector<float> was;
+            for (auto& id : touched) was.push_back (beat->getParam (id));
             beat->setParam (ids::vsEnabled, 0.0f);
+            beat->setParam (ids::outputGain, beat->getParam (ids::outputGain) + 14.0f);
+            runSeconds (8.0);
             juce::String st2;
             bool offered = false;
             for (auto& x : beat->analyse (st2)) offered = offered || x.kind == Suggestion::Kind::VocalRoom;
@@ -195,6 +202,8 @@ int main()
             for (auto& x : beat->analyse (st2)) again = again || x.kind == Suggestion::Kind::VocalRoom;
             check (offered && sane && dips >= 1 && ! again, "Analyse offers to make room for the vocal on the beat, Fit to the vocal sets it up, and it is not offered twice", said);
             check (vocal->fitVocalSpace().containsIgnoreCase ("not for a vocal") && vocal->getParam (ids::vsEnabled) < 0.5f, "Fit to the vocal does nothing on the vocal itself");
+            for (int i = 0; i < touched.size(); ++i) beat->setParam (touched[i], was[(size_t) i]);
+            runSeconds (8.0);
         }
 
         const Suggestion* own = nullptr;
