@@ -6,7 +6,9 @@
 
 namespace mu
 {
-juce::StringArray masterStyleNames() { return { "Transparent", "Warm", "Loud", "Dynamic", "Bright", "Aggressive" }; }
+juce::StringArray masterStyleNames() { return { "Transparent", "Warm", "Loud", "Dynamic", "Bright", "Aggressive", "House (measured)" }; }
+
+HouseReference houseReference() { return {}; }
 
 juce::String masterStyleBlurb (MasterStyle s)
 {
@@ -18,6 +20,7 @@ juce::String masterStyleBlurb (MasterStyle s)
         case MasterStyle::Dynamic:     return "Keeps the hits and the quiet parts. Quieter than the others on purpose.";
         case MasterStyle::Bright:      return "Clear, polished top. Air and presence are lifted if the mix is not already bright.";
         case MasterStyle::Aggressive:  return "Hard-hitting, for rap, trap and electronic. The most drive, clipping and loudness.";
+        case MasterStyle::House:       return "Aims at the tone, low end and loudness measured on five finished releases the studio chose.";
         case MasterStyle::Count: break;
     }
     return {};
@@ -35,6 +38,8 @@ namespace
             case MasterStyle::Dynamic:    return { -16.0f, 3.0f, 0.0f, 0.0f,  0.0f, false, 1.5f, -1, 0.0f, 0.0f, 0.0f, false };
             case MasterStyle::Bright:     return { -12.0f, 5.0f, 0.0f, 1.5f,  0.5f, false, 1.5f, -1, 0.0f, 0.0f, 0.25f, false };
             case MasterStyle::Aggressive: return { -8.5f,  7.0f, 1.0f, 0.5f,  1.0f, true,  2.0f, 2, 4.0f, 0.30f, 0.7f, true };
+            // the tone comes from the measured table, so nothing is leaned here; loudness is the middle one of the five records
+            case MasterStyle::House:      return { -10.0f, 6.0f, 0.0f, 0.0f,  0.0f, true,  2.0f, 2, 2.0f, 0.15f, 0.5f, true };
             case MasterStyle::Transparent: case MasterStyle::Count: break;
         }
         return { -14.0f, 3.0f, 0.0f, 0.0f, 0.0f, false, 1.5f, -1, 0.0f, 0.0f, 0.0f, false };
@@ -51,8 +56,31 @@ namespace
 
 // A balanced master, leaned the way the style leans. The starting shape is the one the Mix Brain uses for a whole
 // mix; like it, this is reasoned from mixing practice and not measured from a library of released songs.
+//
+// House is different: it is the average tone of five finished releases, each measured over the whole song with this
+// plugin's own analyser and set level with the others between 60 Hz and 9 kHz, lightly smoothed above 125 Hz.
+// The two bands above 12 kHz continue the slope below them, because the copies measured were cut off at 15.8 kHz.
+// Against it the reasoned Transparent shape is 4 to 10 dB short between 34 and 66 Hz, 1 to 2.6 dB heavy between
+// 1.7 and 5 kHz and 2.4 to 3.8 dB short from 6 to 12 kHz.
+namespace
+{
+    const BandArray kHouseTone      { 3.5f, 3.3f, 11.1f, 13.3f, 12.3f, 10.0f, 7.1f, 6.1f, 4.8f, 4.0f, 3.0f, 2.5f, 3.0f, 3.3f, 2.7f, 2.0f, 0.9f, -0.4f, -1.2f, -2.1f, -3.8f, -4.8f, -5.3f, -6.0f, -6.6f, -6.5f, -6.1f, -6.5f, -7.8f, -9.2f, -10.7f, -12.2f };
+    // how far the five differ among themselves in each band (one standard deviation, never under 1 dB)
+    const BandArray kHouseTolerance { 3.5f, 3.5f, 1.8f, 1.1f, 1.0f, 1.0f, 1.3f, 1.0f, 1.1f, 1.4f, 1.4f, 1.7f, 2.4f, 2.2f, 1.5f, 1.6f, 2.0f, 1.7f, 1.5f, 1.6f, 1.7f, 2.0f, 2.4f, 2.5f, 2.1f, 2.2f, 2.3f, 1.8f, 1.2f, 2.0f, 3.0f, 4.0f };
+}
+
+BandArray masterTargetTolerance (MasterStyle style)
+{
+    if (style == MasterStyle::House) return kHouseTolerance;
+    BandArray t {};
+    const auto centres = analysisBandCentres();
+    for (int b = 0; b < kAnalysisBands; ++b) t[(size_t) b] = centres[(size_t) b] < 70.0f ? 4.0f : centres[(size_t) b] < 110.0f ? 2.0f : 0.0f;
+    return t;
+}
+
 BandArray masterTargetCurve (MasterStyle style)
 {
+    if (style == MasterStyle::House) return kHouseTone;
     auto t = roleTargetCurve (Role::Master);
     const auto centres = analysisBandCentres();
     const auto spec = specFor (style);
@@ -103,7 +131,17 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
     }
     const float mMean = meanBetween (mix.bandsDb, centres, 60.0f, 9000.0f), tMean = meanBetween (plan.targetCurve, centres, 60.0f, 9000.0f);
     BandArray dev {};
-    for (int b = 0; b < kAnalysisBands; ++b) dev[(size_t) b] = (mix.bandsDb[(size_t) b] - mMean) - (plan.targetCurve[(size_t) b] - tMean);
+    // A band only counts as different by what it is beyond the tolerance: inside it, the mix is as close to the
+    // target as the reference records are to each other (House), or the difference is a choice of genre (the
+    // bottom of the reasoned styles). With a reference track the target is that one song, and nothing is let off.
+    const BandArray tolerance = useReference ? BandArray {} : masterTargetTolerance (style);
+    BandArray rawDev {};
+    for (int b = 0; b < kAnalysisBands; ++b)
+    {
+        const float d = (mix.bandsDb[(size_t) b] - mMean) - (plan.targetCurve[(size_t) b] - tMean);
+        rawDev[(size_t) b] = d;
+        dev[(size_t) b] = d > 0.0f ? juce::jmax (0.0f, d - tolerance[(size_t) b]) : juce::jmin (0.0f, d + tolerance[(size_t) b]);
+    }
     struct Region { float mean, peakHz, peakDb, swing; };
     auto region = [&] (float lo, float hi, bool excess)
     {
@@ -124,7 +162,12 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
     juce::StringArray eqSurgical, eqTonal, eqDynamic;
 
     // ---- what is measured as too much or too little, in words (the EQ itself is fitted below)
-    if (meanBetween (mix.bandsDb, centres, 20.0f, 28.0f) > meanBetween (mix.bandsDb, centres, 45.0f, 110.0f) - 6.0f)
+    // Rumble is sound below the lowest note, as strong as the sub above it. A strong 808 at 35 to 45 Hz also shows
+    // in the two lowest bands of the analyser (they are one step wide at that pitch), a few dB under it: that is
+    // the 808, not rumble, and all five reference records read that way. So the bottom has to be within 3 dB of
+    // the sub right above it as well.
+    if (meanBetween (mix.bandsDb, centres, 20.0f, 28.0f) > meanBetween (mix.bandsDb, centres, 45.0f, 110.0f) - 6.0f
+        && meanBetween (mix.bandsDb, centres, 20.0f, 28.0f) > meanBetween (mix.bandsDb, centres, 33.0f, 55.0f) - 3.0f)
     {
         EQBandSettings e; e.enabled = true; e.type = EQType::LowCut; e.freqHz = 25.0f; e.q = 0.71f; e.slope = 0;
         corrective.push_back (e);
@@ -212,12 +255,19 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
             // A shelf moves everything beyond its corner, so it is used once per end and only where everything
             // beyond the corner is wanted the same way; a low end that is heavy at the bottom and short above it
             // gets two bells, not shelves stacked against each other.
+            // (the same way, and by at least half as much on average: a shelf also moves what was not asked for)
             bool allBelow = true, allAbove = true;
+            float sumBelow = 0.0f, sumAbove = 0.0f; int nBelow = 0, nAbove = 0;
             for (int b = 0; b < kAnalysisBands; ++b)
             {
-                if (centres[(size_t) b] < f && asked[(size_t) b] * g < -0.1f) allBelow = false;
-                if (centres[(size_t) b] > f && asked[(size_t) b] * g < -0.1f) allAbove = false;
+                const float fb = centres[(size_t) b], a = asked[(size_t) b] * (g > 0.0f ? 1.0f : -1.0f);
+                if (fb < f && a < -0.1f) allBelow = false;
+                if (fb > f && a < -0.1f) allAbove = false;
+                if (fb < f && fb >= 30.0f)    { sumBelow += a; ++nBelow; }
+                if (fb > f && fb <= 14000.0f) { sumAbove += a; ++nAbove; }
             }
+            if (nBelow > 0 && sumBelow / (float) nBelow < 0.5f * std::abs (g)) allBelow = false;
+            if (nAbove > 0 && sumAbove / (float) nAbove < 0.5f * std::abs (g)) allAbove = false;
             const bool highShelf = f >= 7000.0f && ! usedHigh && allAbove, lowShelf = f <= 110.0f && ! usedLow && allBelow;
             usedHigh = usedHigh || highShelf; usedLow = usedLow || lowShelf;
             EQBandSettings e = highShelf ? shelf (true, juce::jmax (5000.0f, f * 0.75f), g) : lowShelf ? shelf (false, juce::jmin (160.0f, f * 1.4f), g)
@@ -245,13 +295,19 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
     // ---- how squashed the mix already is
     const float peakOver = mix.peakToLoudness();
     const bool clipped = p.flatTops > 20;
-    const bool dense = peakOver < 9.0f || p.punchDb < 5.0f;
+    // A mix that arrives within 2 LU of the loudness being aimed for has been through compression and limiting
+    // already (it is a finished master, or a mix with a limiter on its bus). It gets the EQ and the ceiling, and
+    // none of the processors that take dynamics away a second time.
+    const float styleLoudness = useReference ? juce::jlimit (-18.0f, -7.5f, reference->integratedLufs) : spec.lufs + (k - 0.5f) * 1.5f;
+    const bool finished = mix.integratedLufs > styleLoudness - 2.0f;
+    const bool dense = finished || peakOver < 9.0f || p.punchDb < 5.0f;
     if (clipped)
     {
         plan.detected.add ("The mix arrives already clipped: " + juce::String (p.flatTops) + " flattened peaks.");
         plan.notes.add ("Clipping that is in the mix cannot be undone by a master. Turn the tracks or the mix bus down so the mix peaks under 0 dB, and master again.");
     }
-    if (dense) plan.detected.add ("The mix is already dense: its peaks are only " + d1 (peakOver) + " dB above its loudness, and its hits stand " + d1 (p.punchDb) + " dB above the level around them.");
+    if (finished) plan.detected.add ("The mix is already at mastering loudness (" + d1 (mix.integratedLufs) + " LUFS, the aim is " + d1 (styleLoudness) + "): it has been compressed and limited once, so compression, saturation and clipping are left off.");
+    else if (dense) plan.detected.add ("The mix is already dense: its peaks are only " + d1 (peakOver) + " dB above its loudness, and its hits stand " + d1 (p.punchDb) + " dB above the level around them.");
 
     // ---- low end that jumps about: its own band of compression
     plan.multiband.enabled = false;
@@ -259,9 +315,11 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
     // Loud notes are what a compressor can hold back: how far the loud bass notes stand above the usual bass level.
     // (A low end that moves a lot because the bass stops playing in places is not something compression changes.)
     const float lowJump = p.lowTypicalDb > -80.0f ? p.lowLoudDb - p.lowTypicalDb : 0.0f;
-    const bool lowUnsteady = lowJump >= 3.0f;
+    // On the five reference records the loud bass notes stand 1.6 to 4.9 dB above the usual bass level: that much
+    // is an 808 playing a tune, not a fault. It counts as uneven beyond that.
+    const bool lowUnsteady = lowJump >= 5.5f;
     if (lowUnsteady) plan.detected.add ("Uneven bass: the loud bass notes are " + d1 (lowJump) + " dB above the usual level of the low end (40 to 120 Hz).");
-    if (lowUnsteady && ! dense && (spec.multiband || lowJump >= 5.0f))
+    if (lowUnsteady && ! dense && (spec.multiband || lowJump >= 7.0f))
     {
         // the low band ends where this song's bass ends: the first place above 90 Hz that is 9 dB under the strongest low band
         float top = -200.0f, cross = 160.0f;
@@ -276,10 +334,15 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
         // the usual level, so ordinary notes pass and the loud ones are held
         low.thresholdDb = juce::jlimit (-60.0f, -3.0f, p.lowTypicalDb + 1.0f);
         const float expected = juce::jmax (0.0f, lowJump - 1.0f) * (1.0f - 1.0f / low.ratio);
+        // Holding the loud notes is meant to even the bass out, not to turn it down: half of what comes off the
+        // loudest notes is given back to the whole band, and all of it when the low end is already lighter than
+        // the House records.
+        const bool lightLows = style == MasterStyle::House && ! useReference && meanBetween (rawDev, centres, 33.0f, 70.0f) < -3.0f;
+        low.makeupDb = juce::jlimit (0.0f, 3.0f, expected * (lightLows ? 1.0f : 0.5f));
         plan.processing.add ("Multiband compression, low band only (up to " + hzText (plan.multiband.crossLowHz) + ", where this song's bass ends): " + d1 (low.ratio) + ":1 from " + d1 (low.thresholdDb)
-                             + " dB, about " + d1 (expected) + " dB off the loudest bass notes.");
+                             + " dB, about " + d1 (expected) + " dB off the loudest bass notes" + (low.makeupDb > 0.05f ? ", " + d1 (low.makeupDb) + " dB given back to the band." : "."));
     }
-    else if (lowUnsteady) plan.leftAlone.add (juce::String ("Multiband compression: the bass is uneven, but ") + (dense ? "the mix is already dense." : "this style keeps dynamics; it is used from 5 dB."));
+    else if (lowUnsteady) plan.leftAlone.add (juce::String ("Multiband compression: the bass is uneven, but ") + (dense ? "the mix is already dense." : "this style keeps dynamics; it is used from 7 dB."));
     else plan.leftAlone.add ("Multiband compression: the bass notes are even (the loud ones are " + d1 (lowJump) + " dB above the usual level).");
 
     // ---- glue
@@ -311,7 +374,10 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
         plan.detected.add ("The low end is wide: under 150 Hz the sides are only " + d1 (-p.sideToMidDb[0]) + " dB below the middle. It loses weight in mono and on club systems.");
         plan.processing.add ("Stereo: bass made mono below 120 Hz.");
     }
-    if (p.correlation < 0.25f || p.lowestCorrelation < -0.3f)
+    // A moment of the two sides pulling apart is not a fault: on the reference records the lowest reading is between
+    // +0.3 and -0.7 while they lose under 0.5 dB in mono. It is a fault when the whole song is like that, or when
+    // it costs level in mono.
+    if (p.correlation < 0.25f || (p.lowestCorrelation < -0.3f && p.monoLossDb < -1.5f))
     {
         plan.width = 0.9f;
         plan.detected.add ("Phase: the two sides are close to unrelated (correlation " + juce::String (p.correlation, 2) + ", lowest " + juce::String (p.lowestCorrelation, 2) + "); in mono the mix is " + d1 (-p.monoLossDb) + " dB quieter.");
@@ -323,13 +389,30 @@ MasterPlan planMaster (const MasterFacts& mix, MasterStyle style, float intensit
         plan.detected.add ("The mix is close to mono: the sides are " + d1 (-p.widthDb) + " dB below the middle.");
         plan.notes.add ("Width cannot be added by a master when there is almost nothing at the sides to turn up. Pan and widen things in the mix.");
     }
-    else if (p.widthDb < -14.0f && p.correlation > 0.7f && (style == MasterStyle::Bright || style == MasterStyle::Loud || style == MasterStyle::Aggressive) && k > 0.3f)
+    // (the reference records sit between 9 and 17 dB: narrower than all of them is narrow)
+    else if (! finished && p.widthDb < -18.0f && p.correlation > 0.7f && (style == MasterStyle::Bright || style == MasterStyle::Loud || style == MasterStyle::Aggressive || style == MasterStyle::House) && k > 0.3f)
     {
         plan.width = 1.0f + 0.12f * k;
         plan.detected.add ("Narrow: the sides are " + d1 (-p.widthDb) + " dB below the middle, and safely in phase (correlation " + juce::String (p.correlation, 2) + ").");
         plan.processing.add ("Stereo: width to " + juce::String (juce::roundToInt (plan.width * 100.0f)) + " %.");
     }
     else if (! plan.monoBass) plan.leftAlone.add ("Stereo: width and phase are fine as they are (correlation " + juce::String (p.correlation, 2) + ", " + d1 (-p.monoLossDb) + " dB lost in mono).");
+
+    // ---- House: what the reference records have that a master cannot give. Said with the figures, because these
+    // are the differences that decide whether a song sounds like those records, and they are made in the mix.
+    if (style == MasterStyle::House && ! useReference)
+    {
+        const auto ref = houseReference();
+        const float sub = meanBetween (rawDev, centres, 33.0f, 70.0f);
+        if (sub < -5.0f)
+            plan.notes.add ("Low end: between 34 and 66 Hz this mix is " + d1 (-sub) + " dB lighter than the reference records, which all carry their 808 or sub at nearly the same level. A master lifts this by 2 to 3 dB at most. The rest is the level, the tuning or the choice of the 808 in the mix.");
+        if (p.widthDb > -30.0f && p.sideToMidDb[2] < ref.sideHighMidNarrowest - 3.0f)
+            plan.notes.add ("Width: between 800 Hz and 5 kHz the sides of this mix are " + d1 (-p.sideToMidDb[2]) + " dB below the middle. On the reference records it is " + d1 (-ref.sideHighMidDb)
+                            + " dB (the narrowest of them " + d1 (-ref.sideHighMidNarrowest) + "). That width is built in the mix: doubles and ad-libs panned out, stereo reverb and delay, wide synths. Widening the master only turns up what is already at the sides.");
+        const float mids = meanBetween (rawDev, centres, 450.0f, 1500.0f), top = meanBetween (rawDev, centres, 5500.0f, 12000.0f);
+        if (mids > 3.0f && top < -3.0f)
+            plan.notes.add ("Balance: the middle (450 Hz to 1.5 kHz) is " + d1 (mids) + " dB over the reference records and the top (above 5.5 kHz) " + d1 (-top) + " dB under. That much is a mix decision: the vocal's own EQ and how bright the beat is.");
+    }
 
     // ---- loudness: as loud as the style asks, unless that would mean crushing it
     float target = useReference ? juce::jlimit (-18.0f, -7.5f, reference->integratedLufs) : spec.lufs + (k - 0.5f) * 1.5f;

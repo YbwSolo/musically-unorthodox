@@ -33,6 +33,29 @@ int main (int argc, char** argv)
     for (int i = 3; i < argc; ++i) { const juce::String a (argv[i]); opt.set (a.upToFirstOccurrenceOf ("=", false, false), a.fromFirstOccurrenceOf ("=", false, false)); }
     const juce::File folder (argv[2]); folder.createDirectory();
 
+    // measure=1: only measure the file, the way a reference file is measured, and print the figures (one line of
+    // "BANDS" in the analysis bands, for working out targets from finished records)
+    if (opt.getValue ("measure", "0").getIntValue() != 0)
+    {
+        juce::AudioBuffer<float> whole (2, frames);
+        for (int i = 0; i < frames; ++i) { whole.setSample (0, i, mixData[2 * i]); whole.setSample (1, i, mixData[2 * i + 1]); }
+        const auto f = measureMix (whole, fs);
+        std::printf ("FACTS seconds=%.0f lufs=%.2f truepeak=%.2f range=%.2f crest=%.2f punch=%.2f corr=%.3f lowcorr=%.3f width=%.2f side0=%.2f side1=%.2f side2=%.2f side3=%.2f monoloss=%.2f lowswing=%.2f levelswing=%.2f lowtypical=%.2f lowloud=%.2f maxshort=%.2f flat=%d\n",
+                     f.probe.seconds, f.integratedLufs, f.truePeakDb, f.probe.loudnessRangeLu, f.probe.crestDb, f.probe.punchDb, f.probe.correlation, f.probe.lowestCorrelation, f.probe.widthDb,
+                     f.probe.sideToMidDb[0], f.probe.sideToMidDb[1], f.probe.sideToMidDb[2], f.probe.sideToMidDb[3], f.probe.monoLossDb, f.probe.lowSwingDb, f.probe.levelSwingDb, f.probe.lowTypicalDb, f.probe.lowLoudDb,
+                     f.probe.maxShortTermLufs, f.probe.flatTops);
+        const auto centres = analysisBandCentres();
+        std::printf ("CENTRES"); for (int b = 0; b < kAnalysisBands; ++b) std::printf (" %.1f", centres[(size_t) b]); std::printf ("\n");
+        std::printf ("BANDS");   for (int b = 0; b < kAnalysisBands; ++b) std::printf (" %.2f", f.bandsDb[(size_t) b]); std::printf ("\n");
+        std::printf ("SWING");   for (int b = 0; b < kAnalysisBands; ++b) std::printf (" %.2f", f.swingDb[(size_t) b]); std::printf ("\n");
+        for (int st = 0; st < (int) MasterStyle::Count; ++st)
+        {
+            const auto t = masterTargetCurve ((MasterStyle) st);
+            std::printf ("TARGET%d", st); for (int b = 0; b < kAnalysisBands; ++b) std::printf (" %.2f", t[(size_t) b]); std::printf ("\n");
+        }
+        return 0;
+    }
+
     LabHead head;
     auto master = std::make_unique<MUProcessor>();
     master->setPlayConfigDetails (2, 2, fs, block);
@@ -64,6 +87,8 @@ int main (int argc, char** argv)
 
     juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
     runSeconds (2.0);
+    // reffile=<audio file>: the reference is loaded the way the Load a file button loads it
+    if (opt.containsKey ("reffile")) std::printf ("%s\n", master->loadReferenceFile (juce::File (opt["reffile"])).toRawUTF8());
     if (opt.containsKey ("ref"))
     {
         juce::MemoryBlock refData;

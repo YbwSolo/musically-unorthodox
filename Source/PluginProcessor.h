@@ -381,6 +381,7 @@ private:
     void applyMasterPlan (const MasterPlan& plan);
     void storeMasterText();
     void masterTick();
+    float masterGainHeard() const;
     Tuner tuner;
     Doubler doubler;
     Reverb reverb;
@@ -411,6 +412,12 @@ private:
     // for as long as the loudness target is the one it was worked out for.
     std::atomic<bool> masterLevelSet { false };
     std::atomic<float> masterLevelTarget { -14.0f };
+    // How much louder the master is than the mix, counted only while the mix is within 10 LU of the whole song's
+    // loudness: the same passages a loudness measurement of the whole song counts. (Written on the audio thread
+    // while a level measurement runs, read on the message thread when it ends.)
+    std::atomic<bool> gateOn { false };
+    std::atomic<float> gateFloorLufs { -70.0f };
+    std::atomic<double> gateIn { 0.0 }, gateOut { 0.0 }, gateSeconds { 0.0 };
     double lastAutoTrimStep = 0.0;     // seconds of processed audio
     float lastGuardState = -1000.0f;
     std::atomic<uint64_t> samplesProcessed { 0 };

@@ -1025,6 +1025,40 @@ int main()
                        "The master EQ uses one shelf per end at most, and at 50 % no lift is over 2.5 dB and no cut over 3.6 dB",
                        juce::String (lowShelves) + " low, " + juce::String (highShelves) + " high shelves; " + juce::String (biggestLift, 1) + " / " + juce::String (biggestCut, 1) + " dB | " + shaped.processing.joinIntoString (" | "));
             }
+            // ---- House: the measured target
+            {
+                check (masterStyleNames().size() == (int) MasterStyle::Count, "Every mastering style has a name");
+                // a mix with the tone of the reference records is left alone by the EQ, at their loudness
+                auto like = mixLike (MasterStyle::House);
+                const auto same = planMaster (like, MasterStyle::House, 0.5f);
+                check (same.eq.empty() && near (same.targetLufs, houseReference().lufs, 0.1f), "A mix with the tone of the reference records gets no EQ, and their loudness is the target",
+                       same.processing.joinIntoString (" | "));
+                // inside the spread of the records nothing is done; beyond it, only the part beyond it is corrected
+                const auto tol = masterTargetTolerance (MasterStyle::House);
+                auto inside = like, beyond = like;
+                for (int b = 0; b < kAnalysisBands; ++b)
+                    if (centres[(size_t) b] > 2000.0f && centres[(size_t) b] < 4500.0f) { inside.bandsDb[(size_t) b] += tol[(size_t) b] * 0.8f; beyond.bandsDb[(size_t) b] += tol[(size_t) b] + 4.0f; }
+                beyond.probe.sideToMidDb[2] = -8.0f; inside.probe.sideToMidDb[2] = -8.0f;
+                float cutAt3k = 0.0f; bool dyn = false;
+                for (auto& e : planMaster (beyond, MasterStyle::House, 0.5f).eq) { if (e.freqHz > 1800.0f && e.freqHz < 5000.0f) { if (e.dynamic) dyn = true; else cutAt3k = juce::jmin (cutAt3k, e.gainDb); } }
+                check (planMaster (inside, MasterStyle::House, 0.5f).eq.empty() && (dyn || (cutAt3k < -1.0f && cutAt3k > -3.0f)),
+                       "Differences inside the spread of the records are left; beyond it, the part beyond it is corrected", juce::String (cutAt3k, 1) + " dB" + (dyn ? ", dynamic" : ""));
+                // a balanced mix by the reasoned shape, mastered as House: the low end is lifted, never cut, and it says what a master cannot give
+                auto thin = mixLike (MasterStyle::Transparent);
+                thin.probe.sideToMidDb[2] = -15.0f;
+                const auto housed = planMaster (thin, MasterStyle::House, 0.5f);
+                float lowLift = 0.0f, lowCut = 0.0f;
+                for (auto& e : housed.eq) if (! e.dynamic && e.type != EQType::LowCut && e.freqHz < 160.0f) { lowLift = juce::jmax (lowLift, e.gainDb); lowCut = juce::jmin (lowCut, e.gainDb); }
+                check (lowLift > 1.5f && lowLift <= 2.55f && lowCut > -0.1f && mentions (housed.notes, "Low end") && mentions (housed.notes, "Width"),
+                       "House lifts a low end that is lighter than the records, within its limit, and says what has to come from the mix", juce::String (lowLift, 1) + " dB | " + housed.notes.joinIntoString (" | "));
+                // the reasoned styles do not judge how much sub a song carries: 5 dB more than their shape is left alone
+                auto subby = mixLike (MasterStyle::Transparent);
+                for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 30.0f && centres[(size_t) b] < 70.0f) subby.bandsDb[(size_t) b] += 4.5f;
+                bool cutsLows = false;
+                for (auto& e : planMaster (subby, MasterStyle::Transparent, 0.5f).eq) cutsLows = cutsLows || (! e.dynamic && e.type != EQType::LowCut && e.freqHz < 120.0f && e.gainDb < 0.0f);
+                check (! cutsLows, "The reasoned styles leave a heavy sub alone: how much sub a song carries is not theirs to judge");
+            }
+
             // muddy and harsh: a cut and a dynamic band, and no boost anywhere
             auto rough = good;
             for (int b = 0; b < kAnalysisBands; ++b)

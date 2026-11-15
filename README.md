@@ -387,7 +387,8 @@ range does not get every other range boosted. This is the same idea the document
 mastering assistant describes (a target curve, then shelves and bells set to match it); what that product has
 and this does not is target curves measured from a large library of released music.
 
-Six **styles** (Transparent, Warm, Loud, Dynamic, Bright, Aggressive) lean the tone aimed for, the loudness and
+Six reasoned **styles** (Transparent, Warm, Loud, Dynamic, Bright, Aggressive; build 22 adds the measured
+House style, below) lean the tone aimed for, the loudness and
 which of the optional processors are considered. **Intensity** scales every move (EQ gains, compression,
 saturation, clipping) from 0.4 to 1.3 times; the loudness target moves by under 1 dB over its range. Loudness is
 **held back** when reaching the style's target would take more off the peaks than the style allows (3 dB for
@@ -417,6 +418,61 @@ multi-step undo, a frequency-dependent exciter, and reordering of the processors
 inside a mix; when it measures a problem that belongs in the mix (clipping, phase, a mono mix, a thin low
 end) it says so. The targets are reasoned, not measured from released masters. Nobody has judged a master
 from it by ear yet, and no claim is made that it matches the products that were given as references.
+
+### House: a target measured from finished records (build 22)
+
+Until build 22 every target in the mastering assistant was reasoned from mixing practice. The studio then chose
+five finished commercial releases (rap, drill and R&B) as its standard, and they were measured over the whole
+song with the plugin's own analyser. **House (measured)** is a seventh style, and the default, that aims at
+what they have in common. The audio itself is not in this repository; only the averages below are.
+
+What was measured, and what it showed about the reasoned targets:
+
+| | The five records | Before build 22 |
+|---|---|---|
+| Tone, 34 to 66 Hz (against the average of 60 Hz to 9 kHz) | +10 to +13 dB, within 1 to 2 dB of each other | the reasoned target sat 4 to 10 dB lower, so a fitted EQ cut the sub of a rap mix |
+| Tone, 1.7 to 5 kHz | 4 to 7 dB under that average | reasoned target 0.6 to 2.6 dB higher |
+| Tone, 6 to 12 kHz | 5 to 9 dB under | reasoned target 2.4 to 3.8 dB lower (duller) |
+| Integrated loudness | -10.4, -10.2, -10.0, -9.1, -8.0 LUFS | House aims at -10.0 |
+| Loud bass notes above the usual bass level | 1.6 to 4.9 dB | called "uneven bass" from 3 dB; now from 5.5 |
+| Lowest stereo correlation | +0.3 down to -0.7, with under 0.5 dB lost in mono | below -0.3 was called a phase fault and the master narrowed; now it also has to cost 1.5 dB in mono |
+| Sides against the middle, whole range | 9 to 17 dB under | under 14 dB was called narrow; now under 18 |
+| Sides against the middle, 800 Hz to 5 kHz | 7 to 10 dB under | not looked at |
+| Sound below 30 Hz | 5 to 15 dB under the sub above it | could be read as rumble and cut; now it has to be within 3 dB of the sub |
+
+How House uses it. The tone target is the average of the five, and each band has a **tolerance**: how much the
+five differ among themselves there (1 to 2.5 dB, never under 1). A mix inside the tolerance is as close to the
+target as the records are to each other and is left alone; beyond it, only the part beyond it is corrected,
+inside the same limits as every style (3.6 dB of cut and 2.5 dB of lift in the middle of the intensity range).
+The reasoned styles got a tolerance too, in the bottom octave and a half only (4 dB under 70 Hz), because how
+much sub a song carries is not something a reasoned shape can judge. A mix that arrives within 2 LU of the
+loudness aimed for is treated as **already mastered**: EQ and ceiling only.
+
+Checks. The five records themselves, put through House: two get no EQ, three get one or two moves of 0.7 to
+1.3 dB, none gets compression, saturation, clipping or widening, and their loudness comes out at -10.0 to -10.4
+LUFS. The five studio test mixes, through House at intensity 50: tone distance from the records' average goes
+from 1.9, 3.9, 2.6, 2.9, 1.9 dB to 1.6, 2.6, 2.1, 2.3, 1.7 dB (the records themselves are 1.2 to 2.1 dB from
+their own average), and all land within 0.25 LU of their loudness target, measured independently. They are
+denser than the records: peaks 9.1 to 11.5 dB above the average level against 11.3 to 12.6, part of which is
+the -1 dBTP ceiling (the records peak at full scale) and the lossy copies' overshoot.
+
+What House cannot do, and says in its notes with the figures. Three of the five test mixes are 7 to 12 dB
+lighter than the records between 34 and 66 Hz. Between 800 Hz and 5 kHz four are 6 to 15 dB narrower than
+the middle one of the records, and the fifth is mono. A master lifts the low end 2 to 3 dB and widens a few per cent; the rest is the 808 level and the
+panning, doubles and stereo effects in the mix. Those two differences, not the mastering chain, are most of
+the measured distance between these mixes and the records.
+
+Limits of the measurement. Five songs of one family of genres: House is that sound, not a general target. The
+copies measured were lossy and cut off at 15.8 kHz, so nothing above 12 kHz is taken from them (the two top
+bands continue the slope below) and their true peaks say nothing. The 30 s excerpts of the test mixes may not
+be the loudest part of each song. Nobody has compared a House master with the records by ear yet.
+
+The **level** measurement changed again in this build: the gain of the master is now measured only while the
+mix is within 10 LU of the whole song's loudness, because measured on a quiet intro the master looks louder
+than it will be once the compressors and the limiter are working (a finished record measured the build 21 way
+came out 2.4 LU under its target for that reason). It is corrected twice, after 12 s and after the 30 s check.
+Loading a reference **file** was tested on real FLAC and WAV files at 44.1 kHz for the first time (same
+figures as measuring the samples directly); MP3 and M4A still depend on the computer and are untested.
 
 ### Checked on real recordings (build 18): Tune
 

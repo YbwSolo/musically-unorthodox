@@ -16,10 +16,27 @@ struct MasterFacts
     float peakToLoudness() const { return truePeakDb - integratedLufs; }       // how far the peaks stand above the loudness
 };
 
-enum class MasterStyle : int { Transparent = 0, Warm, Loud, Dynamic, Bright, Aggressive, Count };
+// House is the one style whose aims are measured, not reasoned: see houseReference().
+enum class MasterStyle : int { Transparent = 0, Warm, Loud, Dynamic, Bright, Aggressive, House, Count };
 juce::StringArray masterStyleNames();
 juce::String masterStyleBlurb (MasterStyle);
 BandArray masterTargetCurve (MasterStyle);
+// How far a band may sit from the target before it is treated as a difference at all. For House it is how much
+// the reference records differ among themselves in that band; for the reasoned styles it is only the bottom
+// octave and a half, where how much sub a song carries is a choice the target cannot know.
+BandArray masterTargetTolerance (MasterStyle);
+// What was measured on the five finished releases the studio chose as its standard (build 22). Measured with this
+// plugin's own analyser from lossy copies cut off at 15.8 kHz: nothing above 12 kHz, and no true peak, is taken
+// from them.
+struct HouseReference
+{
+    int records = 5;
+    float lufs = -10.0f, lufsLow = -10.4f, lufsHigh = -8.0f;      // integrated loudness: the middle one, the quietest, the loudest
+    float sideHighMidDb = -8.4f, sideHighMidNarrowest = -10.1f;   // sides against the middle between 800 Hz and 5 kHz
+    float sideLowDb = -25.6f;                                     // and under 150 Hz: the low end is kept in the middle
+    float crestDb = 11.5f, punchDb = 8.4f;
+};
+HouseReference houseReference();
 // How far a mix's tone is from a target shape, in dB (the typical size of the difference between 60 Hz and 12 kHz).
 float toneDistanceDb (const BandArray& measuredDb, const BandArray& targetDb);
 

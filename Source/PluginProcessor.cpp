@@ -513,6 +513,17 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     loudness.process (buffer);
     spectrum.pushBlock (buffer);
     if (master && outProbe.isRunning()) { outMeter.process (buffer); outProbe.process (buffer, outMeter.getShortTerm(), outMeter.getMomentary()); }
+    if (master && gateOn.load (std::memory_order_relaxed) && inProbe.isRunning() && outProbe.isRunning())
+    {
+        const float in = inMeter.getMomentary(), out = outMeter.getMomentary();
+        if (in > gateFloorLufs.load (std::memory_order_relaxed) && out > -70.0f)
+        {
+            const double dt = (double) buffer.getNumSamples() / juce::jmax (1.0, getSampleRate());
+            gateIn.store (gateIn.load (std::memory_order_relaxed) + dt * std::pow (10.0, 0.1 * (double) in), std::memory_order_relaxed);
+            gateOut.store (gateOut.load (std::memory_order_relaxed) + dt * std::pow (10.0, 0.1 * (double) out), std::memory_order_relaxed);
+            gateSeconds.store (gateSeconds.load (std::memory_order_relaxed) + dt, std::memory_order_relaxed);
+        }
+    }
     samplesProcessed.fetch_add ((uint64_t) n, std::memory_order_relaxed);
     // The session balance works on the mix itself, so the master reports its level before the mastering stage.
     const auto& shared = master ? mixMeter : loudness;
@@ -2304,6 +2315,16 @@ juce::String MUProcessor::undoMaster()
     return "Back to how everything was before Analyse and master.";
 }
 
+// How much louder the master came out than the mix went in over the measurement that has just run: from the loud
+// passages if enough of them were heard, otherwise from everything that was. -100 when nothing usable was heard.
+float MUProcessor::masterGainHeard() const
+{
+    const double in = gateIn.load(), out = gateOut.load();
+    if (gateSeconds.load() >= 8.0 && in > 0.0 && out > 0.0) return (float) (10.0 * std::log10 (out / in));
+    const float i = inMeter.getIntegrated(), o = outMeter.getIntegrated();
+    return i > -60.0f && o > -60.0f ? o - i : -100.0f;
+}
+
 void MUProcessor::masterTick()
 {
     const auto stage = getMasterStage();
@@ -2313,27 +2334,34 @@ void MUProcessor::masterTick()
     {
         // The level starts at the gain the measurement of the whole song says is needed. What the EQ, the
         // compression and the limiter then add or take away is measured here: the mix going in and the master
-        // coming out over the same twelve seconds, so it does not matter which part of the song is playing.
-        // The level is corrected once by the difference and then left alone.
+        // coming out at the same moments. Only the loud passages are counted (within 10 LU of the whole song's
+        // loudness), because those are what the loudness of the whole song is made of and where the compressors
+        // and the limiter work: measured on a quiet intro, the master looks louder than it will be. The level is
+        // corrected by the difference, once here and once more after the longer check, and then left alone.
         auto measureBoth = [this]
         {
             inMeter.reset(); inMeter.resetIntegrated(); inMeter.resetPeakHold();
             outMeter.reset(); outMeter.resetIntegrated(); outMeter.resetPeakHold();
+            gateIn.store (0.0); gateOut.store (0.0); gateSeconds.store (0.0);
+            gateFloorLufs.store (mixFacts.enough() ? mixFacts.integratedLufs - 10.0f : -70.0f);
             inProbe.start(); outProbe.start();
+            gateOn.store (true);
         };
         const double waited = now - settleStarted;
         if (settlePhase == 0 && waited > 3.0) { measureBoth(); settlePhase = 1; }
         else if (settlePhase == 1)
         {
             inMeter.readIntegrated(); outMeter.readIntegrated();
-            if (outProbe.secondsHeard() >= 12.0f)
+            const bool enoughLoud = gateSeconds.load() >= 12.0, givenUp = outProbe.secondsHeard() >= 45.0f;
+            if (enoughLoud || givenUp)
             {
-                const float in = inMeter.getIntegrated(), out = outMeter.getIntegrated();
+                gateOn.store (false);
+                const float gain = masterGainHeard();
                 float worst = 0.0f;
                 for (int i = 0; i < 250; ++i) worst = juce::jmin (worst, maximizer.reductionHistory().get (i));
-                if (in > -60.0f && out > -60.0f && mixFacts.enough())
+                if (gain > -90.0f && mixFacts.enough())
                 {
-                    float fix = juce::jlimit (-4.0f, 4.0f, (masterLevelTarget.load() - mixFacts.integratedLufs) - (out - in));
+                    float fix = juce::jlimit (-4.0f, 4.0f, (masterLevelTarget.load() - mixFacts.integratedLufs) - gain);
                     if (fix > 0.0f && worst < -8.0f) fix = 0.0f;          // never chased by crushing the mix
                     if (std::abs (fix) > 0.2f) masterTrimDb.store (juce::jlimit (-24.0f, 24.0f, masterTrimDb.load() + fix));
                 }
@@ -2354,12 +2382,24 @@ void MUProcessor::masterTick()
         outMeter.readIntegrated(); inMeter.readIntegrated();
         if (outProbe.secondsHeard() >= kMasterCheckSeconds)
         {
+            gateOn.store (false);
             masterFacts = collectFacts (outProbe, outMeter, spectrum);
             // The passage that was checked is not the whole song. What it shows for certain is how much louder the
-            // master is than the mix over that passage, so the loudness in the report is the whole song's own
-            // loudness plus that.
-            if (const float in = inMeter.getIntegrated(); in > -60.0f && masterFacts.integratedLufs > -60.0f && mixFacts.enough())
-                masterFacts.integratedLufs = mixFacts.integratedLufs + (masterFacts.integratedLufs - in);
+            // master is than the mix, so the loudness in the report is the whole song's own loudness plus that.
+            // If that is still off the target the level is corrected a second time, by the remainder.
+            if (const float gain = masterGainHeard(); gain > -90.0f && mixFacts.enough())
+            {
+                masterFacts.integratedLufs = mixFacts.integratedLufs + gain;
+                float worst = 0.0f;
+                for (int i = 0; i < 250; ++i) worst = juce::jmin (worst, maximizer.reductionHistory().get (i));
+                float fix = juce::jlimit (-2.0f, 2.0f, masterLevelTarget.load() - masterFacts.integratedLufs);
+                if (fix > 0.0f && worst < -8.0f) fix = 0.0f;
+                if (std::abs (fix) > 0.3f && masterLevelSet.load())
+                {
+                    masterTrimDb.store (juce::jlimit (-24.0f, 24.0f, masterTrimDb.load() + fix));
+                    masterFacts.integratedLufs += fix;
+                }
+            }
             inProbe.stop();
             outProbe.stop(); spectrum.stopListen();
             storeMasterText();

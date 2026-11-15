@@ -163,7 +163,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     p.push_back (std::make_unique<APC> (id (ids::eqDepth), "EQ analysis detail", juce::StringArray { "Main things", "Detailed" }, 1));
 
     // ---- mastering assistant
-    p.push_back (std::make_unique<APC> (id (ids::mstStyle), "Mastering style", masterStyleNames(), 0));
+    p.push_back (std::make_unique<APC> (id (ids::mstStyle), "Mastering style", masterStyleNames(), (int) MasterStyle::House));
     p.push_back (std::make_unique<APF> (id (ids::mstIntensity), "Mastering intensity", range (0.0f, 100.0f, 0.1f), 50.0f, pctAttr()));
     p.push_back (std::make_unique<APB> (id (ids::mbOn), "Multiband compressor", false));
     p.push_back (std::make_unique<APF> (id (ids::mbCrossLow), "Multiband low crossover", juce::NormalisableRange<float> (60.0f, 500.0f, 1.0f, 0.5f), 140.0f, hzAttr()));
