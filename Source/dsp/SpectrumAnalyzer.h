@@ -41,10 +41,10 @@ public:
     // at a known stretch of the track (and at how each band behaves over that stretch) instead of whatever
     // happened to be playing in the last few seconds. Message thread.
     static constexpr int kListenMax = 1500;            // about 32 s of sound
-    void startListen();
+    void startListen (bool wholeSong = false);          // wholeSong: keep listening past 32 s, for as long as the song lasts
     void stopListen() { listening = false; }
     bool isListening() const { return listening; }
-    float getListenSeconds() const { return (float) ((double) listenFrames * kHop / fs); }
+    float getListenSeconds() const { return (float) ((double) listenSeen * kHop / fs); }
     // meanDb: the average level of each band over the pass. swingDb: how much each band's share of the sound
     // moves from its usual value to its loud moments (a build-up that is always there scores low, one that comes
     // and goes with certain notes or words scores high). False if there is no pass to report.
@@ -74,7 +74,8 @@ private:
     int longTermFrames = 0;
     std::array<float, kFFTSize / 2> longTermBinLinear {};
     bool listening = false;
-    int listenFrames = 0;
+    int listenFrames = 0, listenSeen = 0, listenStride = 1;      // frames kept, frames heard, and how many are heard for each one kept
+    bool listenWhole = false;
     std::array<double, kNumBands> listenSum {};
     std::vector<float> listenShare;                    // kListenMax x kNumBands: each band's level against the frame's total
 };

@@ -1,4 +1,5 @@
 #include "../analysis/TonalAnalysis.h"
+#include "../analysis/MasterEngine.h"
 #include "ParameterLayout.h"
 
 namespace mu
@@ -159,6 +160,29 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     // ---- EQ analysis
     p.push_back (std::make_unique<APC> (id (ids::eqSource), "EQ analysis source", eqSourceNames(), 0));
     p.push_back (std::make_unique<juce::AudioParameterInt> (id (ids::eqPasses), "EQ analysis jobs", 1, 7, 7));
+
+    // ---- mastering assistant
+    p.push_back (std::make_unique<APC> (id (ids::mstStyle), "Mastering style", masterStyleNames(), 0));
+    p.push_back (std::make_unique<APF> (id (ids::mstIntensity), "Mastering intensity", range (0.0f, 100.0f, 0.1f), 50.0f, pctAttr()));
+    p.push_back (std::make_unique<APB> (id (ids::mbOn), "Multiband compressor", false));
+    p.push_back (std::make_unique<APF> (id (ids::mbCrossLow), "Multiband low crossover", juce::NormalisableRange<float> (60.0f, 500.0f, 1.0f, 0.5f), 140.0f, hzAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::mbCrossHigh), "Multiband high crossover", juce::NormalisableRange<float> (1000.0f, 9000.0f, 1.0f, 0.5f), 3500.0f, hzAttr()));
+    {
+        const char* names[3] = { "low", "mid", "high" };
+        for (int b = 0; b < 3; ++b)
+        {
+            const juce::String n = juce::String ("Multiband ") + names[b];
+            p.push_back (std::make_unique<APB> (id (ids::mbBandOn (b)), n + " band", false));
+            p.push_back (std::make_unique<APF> (id (ids::mbThreshold (b)), n + " threshold", range (-60.0f, 0.0f, 0.1f), -24.0f, dbAttr()));
+            p.push_back (std::make_unique<APF> (id (ids::mbRatio (b)), n + " ratio", juce::NormalisableRange<float> (1.0f, 8.0f, 0.01f, 0.5f), 2.0f));
+            p.push_back (std::make_unique<APF> (id (ids::mbAttack (b)), n + " attack", juce::NormalisableRange<float> (0.5f, 200.0f, 0.1f, 0.4f), b == 0 ? 30.0f : b == 1 ? 15.0f : 5.0f));
+            p.push_back (std::make_unique<APF> (id (ids::mbRelease (b)), n + " release", juce::NormalisableRange<float> (10.0f, 1000.0f, 1.0f, 0.4f), b == 0 ? 200.0f : b == 1 ? 150.0f : 80.0f));
+            p.push_back (std::make_unique<APF> (id (ids::mbMakeup (b)), n + " make-up", range (-6.0f, 6.0f, 0.1f), 0.0f, dbAttr()));
+        }
+    }
+    p.push_back (std::make_unique<APB> (id (ids::clipOn), "Soft clipper", false));
+    p.push_back (std::make_unique<APF> (id (ids::clipAmount), "Soft clipper amount", range (0.0f, 100.0f, 0.1f), 50.0f, pctAttr()));
+    p.push_back (std::make_unique<APF> (id (ids::clipSoft), "Soft clipper softness", range (0.0f, 100.0f, 0.1f), 60.0f, pctAttr()));
 
     // ---- tune
     p.push_back (std::make_unique<APB> (id (ids::tuneOn), "Tune", false));

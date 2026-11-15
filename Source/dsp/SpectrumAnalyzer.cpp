@@ -139,7 +139,7 @@ bool SpectrumAnalyzer::update()
             for (int i = i0; i <= i1; ++i) sum += longTermBinLinear[(size_t) i];
             longTermDb[(size_t) b] = 10.0f * std::log10 (juce::jmax (1.0e-12f, sum));
         }
-        if (listening && listenFrames < kListenMax)
+        if (listening && (listenWhole || listenFrames < kListenMax))
         {
             std::array<float, kNumBands> power {};
             float total = 0.0f;
@@ -154,23 +154,34 @@ bool SpectrumAnalyzer::update()
             // only frames with real sound in them count: the gaps between words say nothing about the tone
             if (total > 1.0e-8f)
             {
-                for (int b = 0; b < kNumBands; ++b)
+                for (int b = 0; b < kNumBands; ++b) listenSum[(size_t) b] += (double) power[(size_t) b];
+                ++listenSeen;
+                // A whole song is longer than the store. When it fills up, every second frame kept so far is
+                // dropped and from then on only every second new one is kept, and so on: the average is still
+                // of every frame, and how each band comes and goes is still read from the whole song.
+                if (listenSeen % listenStride == 0)
                 {
-                    listenSum[(size_t) b] += (double) power[(size_t) b];
-                    listenShare[(size_t) (listenFrames * kNumBands + b)] = 10.0f * std::log10 (juce::jmax (1.0e-12f, power[(size_t) b]) / total);
+                    if (listenFrames == kListenMax)
+                    {
+                        for (int f = 0; f < kListenMax / 2; ++f)
+                            std::copy_n (listenShare.begin() + (size_t) (2 * f * kNumBands), (size_t) kNumBands, listenShare.begin() + (size_t) (f * kNumBands));
+                        listenFrames = kListenMax / 2; listenStride *= 2;
+                    }
+                    for (int b = 0; b < kNumBands; ++b)
+                        listenShare[(size_t) (listenFrames * kNumBands + b)] = 10.0f * std::log10 (juce::jmax (1.0e-12f, power[(size_t) b]) / total);
+                    ++listenFrames;
                 }
-                ++listenFrames;
             }
         }
     }
     return true;
 }
 
-void SpectrumAnalyzer::startListen()
+void SpectrumAnalyzer::startListen (bool wholeSong)
 {
     listenShare.assign ((size_t) kListenMax * kNumBands, -120.0f);
     listenSum.fill (0.0);
-    listenFrames = 0;
+    listenFrames = 0; listenSeen = 0; listenStride = 1; listenWhole = wholeSong;
     listening = true;
 }
 
@@ -180,7 +191,7 @@ bool SpectrumAnalyzer::listenBands (std::array<float, kNumBands>& meanDb, std::a
     std::vector<float> column ((size_t) listenFrames);
     for (int b = 0; b < kNumBands; ++b)
     {
-        meanDb[(size_t) b] = (float) (10.0 * std::log10 (juce::jmax (1.0e-12, listenSum[(size_t) b] / (double) listenFrames)));
+        meanDb[(size_t) b] = (float) (10.0 * std::log10 (juce::jmax (1.0e-12, listenSum[(size_t) b] / (double) juce::jmax (1, listenSeen))));
         for (int f = 0; f < listenFrames; ++f) column[(size_t) f] = listenShare[(size_t) (f * kNumBands + b)];
         std::sort (column.begin(), column.end());
         swingDb[(size_t) b] = column[(size_t) (listenFrames * 9 / 10)] - column[(size_t) (listenFrames / 2)];

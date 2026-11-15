@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include <juce_audio_formats/juce_audio_formats.h>
 #include "ai/TutorKnowledge.h"
 #include "PluginEditor.h"
 
@@ -25,6 +26,13 @@ MUProcessor::MUProcessor()
     pSmOn = p (ids::smOn); pSmDepth = p (ids::smDepth); pSmFocus = p (ids::smFocus); pSmSpeed = p (ids::smSpeed);
     pSatOn = p (ids::satOn); pSatDrive = p (ids::satDrive); pSatMix = p (ids::satMix); pSatType = p (ids::satType);
     pRiderOn = p (ids::riderOn); pRiderTarget = p (ids::riderTarget); pRiderRange = p (ids::riderRange); pRiderSpeed = p (ids::riderSpeed);
+    pMbOn = p (ids::mbOn); pMbCrossLow = p (ids::mbCrossLow); pMbCrossHigh = p (ids::mbCrossHigh);
+    pClipOn = p (ids::clipOn); pClipAmount = p (ids::clipAmount); pClipSoft = p (ids::clipSoft);
+    for (int b = 0; b < 3; ++b)
+    {
+        pMbBandOn[(size_t) b] = p (ids::mbBandOn (b)); pMbThr[(size_t) b] = p (ids::mbThreshold (b)); pMbRatio[(size_t) b] = p (ids::mbRatio (b));
+        pMbAtt[(size_t) b] = p (ids::mbAttack (b)); pMbRel[(size_t) b] = p (ids::mbRelease (b)); pMbGain[(size_t) b] = p (ids::mbMakeup (b));
+    }
     pVsOn = p (ids::vsEnabled); pVsAmount = p (ids::vsAmount); pVsSpeed = p (ids::vsSpeed); pVsCentre = p (ids::vsCentre);
     for (int i = 0; i < 3; ++i) { pVsFreq[(size_t) i] = p (ids::vsFreq (i)); pVsCut[(size_t) i] = p (ids::vsCut (i)); pVsQ[(size_t) i] = p (ids::vsQ (i)); }
     pStWidth = p (ids::stWidth); pStMonoBass = p (ids::stMonoBass); pStMonoFreq = p (ids::stMonoFreq);
@@ -96,6 +104,14 @@ void MUProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     const int ch = juce::jmax (1, getTotalNumOutputChannels());
     loudness.prepare (sampleRate, samplesPerBlock, ch);
     mixMeter.prepare (sampleRate, samplesPerBlock, ch);
+    inMeter.prepare (sampleRate, samplesPerBlock, ch);
+    outMeter.prepare (sampleRate, samplesPerBlock, ch);
+    inProbe.prepare (sampleRate, ch); outProbe.prepare (sampleRate, ch);
+    multiband.prepare (sampleRate, samplesPerBlock, ch);
+    clipper.prepare (sampleRate, samplesPerBlock, ch);
+    for (auto& d : dryRing) d.assign (1 << 15, 0.0f);
+    dryPos = 0;
+    compareGain.reset (sampleRate, 0.03); compareGain.setCurrentAndTargetValue (1.0f);
     spectrum.prepare (sampleRate);
     preSpectrum.prepare (sampleRate);
     gate.prepare (sampleRate, samplesPerBlock, ch);
@@ -144,7 +160,7 @@ void MUProcessor::updateLatency()
     // master instance, so vocal and instrument tracks stay at about a millisecond for recording.
     // Tune adds 20 ms while it is on. In low latency mode the look-ahead stages are out of the path.
     const bool lowLatency = bus->isLowLatency();
-    const int latency = saturator.getLatencySamples() + tuner.getLatencySamples() + (isMasterInstance() && ! lowLatency ? maximizer.getLatencySamples() : 0);
+    const int latency = saturator.getLatencySamples() + tuner.getLatencySamples() + (isMasterInstance() && ! lowLatency ? maximizer.getLatencySamples() + clipper.getLatencySamples() : 0);
     if (latency != reportedLatency)
     {
         reportedLatency = latency;
@@ -266,6 +282,25 @@ void MUProcessor::pullParameters()
     maximizer.setActive (role == Role::Master && ! lowLatency);
     maximizer.setEnabled (role == Role::Master && ! lowLatency && pPeakGuard->load() > 0.5f);
     maximizer.setGainDb (pMaxGain->load());
+    {
+        // the master's own stages: three-band compression after the EQ, a soft clipper in front of the limiter
+        MultibandSettings mb;
+        mb.enabled = role == Role::Master && pMbOn->load() > 0.5f;
+        mb.crossLowHz = pMbCrossLow->load(); mb.crossHighHz = pMbCrossHigh->load();
+        for (int b = 0; b < 3; ++b)
+        {
+            auto& band = mb.band[(size_t) b];
+            band.on = pMbBandOn[(size_t) b]->load() > 0.5f; band.thresholdDb = pMbThr[(size_t) b]->load(); band.ratio = pMbRatio[(size_t) b]->load();
+            band.attackMs = pMbAtt[(size_t) b]->load(); band.releaseMs = pMbRel[(size_t) b]->load(); band.makeupDb = pMbGain[(size_t) b]->load();
+        }
+        multiband.setSettings (mb);
+        clipper.setActive (role == Role::Master && ! lowLatency);
+        clipper.setEnabled (role == Role::Master && ! lowLatency && pClipOn->load() > 0.5f);
+        // Amount: at 0 % the clipper starts 6 dB above the limiter's ceiling (it rarely touches anything); at 100 % it
+        // starts at the ceiling, so all the peak control is rounding and the limiter has almost nothing left to do
+        clipper.setThresholdDb (pTargetTp->load() + 6.0f * (1.0f - pClipAmount->load() * 0.01f));
+        clipper.setSoftness (pClipSoft->load() * 0.01f);
+    }
     maximizer.setCeilingDb (pTargetTp->load());
 }
 
@@ -328,7 +363,20 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     pullParameters();
     const bool bypassed = pBypass->load() > 0.5f;
     const bool master = getEffectiveRole() == Role::Master;
-    if (editorsOpen.load (std::memory_order_relaxed) > 0) preSpectrum.pushBlock (buffer);
+    if (editorsOpen.load (std::memory_order_relaxed) > 0 || inProbe.isRunning()) preSpectrum.pushBlock (buffer);
+    if (master)
+    {
+        // the mix as it arrives: measured while a mastering pass is listening, and kept for the comparison
+        if (inProbe.isRunning()) { inMeter.process (buffer); inProbe.process (buffer, inMeter.getShortTerm(), inMeter.getMomentary()); }
+        const int size = (int) dryRing[0].size();
+        for (int c = 0; c < juce::jmin (2, numCh); ++c)
+        {
+            const float* in = buffer.getReadPointer (c); auto& ring = dryRing[(size_t) c];
+            int pos = dryPos;
+            for (int i = 0; i < n; ++i) { ring[(size_t) pos] = in[i]; pos = pos + 1 == size ? 0 : pos + 1; }
+        }
+        dryPos = (dryPos + n) % size;
+    }
     keyFinder.push (buffer.getReadPointer (0), numCh > 1 ? buffer.getReadPointer (1) : nullptr, n);
 
     auto applySmoothedGain = [&] (juce::SmoothedValue<float>& g)
@@ -371,6 +419,7 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
 
         if (! deltaOnly)
         {
+            multiband.process (buffer);                  // master only; everywhere else it is out of the path
             comp.process (buffer);
             deEsser.process (buffer);
             if (listen == Listen::SmoothDelta && canDelta)
@@ -445,6 +494,7 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         if (master) mixMeter.process (buffer);         // the mix as it arrives, before any mastering gain
         masterTrimGain.setTargetValue (juce::Decibels::decibelsToGain (master && ! bus->isLowLatency() ? masterTrimDb.load() : 0.0f));
         applySmoothedGain (masterTrimGain);
+        clipper.process (buffer);
         maximizer.process (buffer);
     }
     else
@@ -454,12 +504,15 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         saturator.setSettings ({});
         saturator.process (buffer);
         if (master) mixMeter.process (buffer);
+        clipper.setEnabled (false);
+        clipper.process (buffer);
         maximizer.setEnabled (false);
         maximizer.process (buffer);
     }
 
     loudness.process (buffer);
     spectrum.pushBlock (buffer);
+    if (master && outProbe.isRunning()) { outMeter.process (buffer); outProbe.process (buffer, outMeter.getShortTerm(), outMeter.getMomentary()); }
     samplesProcessed.fetch_add ((uint64_t) n, std::memory_order_relaxed);
     // The session balance works on the mix itself, so the master reports its level before the mastering stage.
     const auto& shared = master ? mixMeter : loudness;
@@ -469,6 +522,23 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     // Listening check, master only, after everything has been measured: hear the mix as it would sound in mono
     // or on a phone speaker. Never during a bounce, so it cannot end up in the exported song.
     const int check = master && ! isNonRealtime() ? listenCheck.load (std::memory_order_relaxed) : 0;
+    // Level-matched comparison, master only and never during a bounce: the mix as it arrived (late by the same
+    // amount as the master, so switching does not jump in time), or the master turned down to the mix's loudness.
+    {
+        const int compare = master && ! isNonRealtime() ? masterCompare.load (std::memory_order_relaxed) : 0;
+        if (compare == 2)
+        {
+            const int size = (int) dryRing[0].size(), late = juce::jlimit (0, size - n - 1, juce::jmax (0, reportedLatency));
+            for (int c = 0; c < juce::jmin (2, numCh); ++c)
+            {
+                auto* out = buffer.getWritePointer (c); const auto& ring = dryRing[(size_t) c];
+                int pos = (dryPos - n - late + 2 * size) % size;
+                for (int i = 0; i < n; ++i) { out[i] = ring[(size_t) pos]; pos = pos + 1 == size ? 0 : pos + 1; }
+            }
+        }
+        compareGain.setTargetValue (compare == 1 ? juce::Decibels::decibelsToGain (compareGainDb.load (std::memory_order_relaxed)) : 1.0f);
+        if (compare != 2) applySmoothedGain (compareGain);
+    }
     if (check != checkWas) { checkWas = check; checkHp1.clear(); checkHp2.clear(); checkLp.clear(); }
     if (check != 0 && numCh > 1)
     {
@@ -488,9 +558,12 @@ void MUProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::
     if (buffer.getNumSamples() == 0) return;
     maximizer.setActive (getEffectiveRole() == Role::Master);
     maximizer.setEnabled (false);
+    clipper.setActive (getEffectiveRole() == Role::Master);
+    clipper.setEnabled (false);
     tuner.process (buffer, true);
     saturator.setSettings ({});
     saturator.process (buffer);
+    clipper.process (buffer);
     maximizer.process (buffer);
     loudness.process (buffer);
     spectrum.pushBlock (buffer);
@@ -507,6 +580,7 @@ void MUProcessor::timerCallback()
     loudness.readIntegrated();
     mixMeter.readIntegrated();
     pumpAnalysis();
+    masterTick();
     noteEqForMeasurement();
     updateLatency();
     lufsHistory.push (loudness.getShortTerm());
@@ -1818,7 +1892,13 @@ std::vector<juce::String> MUProcessor::scopeParams (const juce::String& scope) c
                  ids::riderOn, ids::riderTarget, ids::riderRange, ids::riderSpeed, ids::stWidth, ids::stMonoBass, ids::stMonoFreq, ids::vsEnabled, ids::vsAmount, ids::vsSpeed,
                  ids::vsFreq (0), ids::vsFreq (1), ids::vsFreq (2), ids::vsCut (0), ids::vsCut (1), ids::vsCut (2), ids::vsQ (0), ids::vsQ (1), ids::vsQ (2), ids::vsCentre };
     if (scope == "master")
-        return { ids::masterMode, ids::targetLufs, ids::targetTruePeak, ids::maxGain, ids::peakGuard };
+    {
+        std::vector<juce::String> m { ids::masterMode, ids::targetLufs, ids::targetTruePeak, ids::maxGain, ids::peakGuard, ids::mstStyle, ids::mstIntensity,
+                                      ids::mbOn, ids::mbCrossLow, ids::mbCrossHigh, ids::clipOn, ids::clipAmount, ids::clipSoft };
+        for (int b = 0; b < 3; ++b)
+            for (auto& id : { ids::mbBandOn (b), ids::mbThreshold (b), ids::mbRatio (b), ids::mbAttack (b), ids::mbRelease (b), ids::mbMakeup (b) }) m.push_back (id);
+        return m;
+    }
     for (auto& preset : modulePresets())
         if (preset.module == scope)
             for (auto& v : preset.values)
@@ -2007,6 +2087,225 @@ void MUProcessor::applyMasterMode (int mode)
         loudness.resetIntegrated();
         loudness.resetPeakHold();
     }
+}
+
+// ---- Mastering assistant -------------------------------------------------------------------------
+MasterFacts MUProcessor::collectFacts (const MasterProbe& probe, const LoudnessMeter& meter, const SpectrumAnalyzer& analyser) const
+{
+    MasterFacts f;
+    f.probe = probe.read();
+    f.integratedLufs = meter.getIntegrated();
+    f.truePeakDb = meter.getTruePeakHold();
+    f.hasBands = analyser.listenBands (f.bandsDb, f.swingDb);
+    return f;
+}
+
+float MUProcessor::masteringSeconds() const
+{
+    const auto stage = getMasterStage();
+    return stage == MasterStage::Listening ? inProbe.secondsHeard() : stage == MasterStage::Checking ? outProbe.secondsHeard() : 0.0f;
+}
+
+juce::String MUProcessor::startMastering()
+{
+    if (! isMasterInstance()) return "Mastering works on the plugin that sits on the Stereo Out. Set this one to Master (Settings, or the button on this tab) and try again.";
+    referencePass = false;
+    outProbe.stop();
+    inMeter.reset(); inMeter.resetIntegrated(); inMeter.resetPeakHold();
+    preSpectrum.startListen (true);
+    inProbe.start();
+    masterStage.store ((int) MasterStage::Listening);
+    return "Listening to the mix. Play the song from the start, all the way through if you can: at least " + juce::String ((int) kMasterMinSeconds) + " seconds of the loudest part. Then press Master it.";
+}
+
+void MUProcessor::cancelMastering()
+{
+    inProbe.stop(); outProbe.stop(); preSpectrum.stopListen();
+    referencePass = false;
+    masterStage.store ((int) (masterText ("processing").isEmpty() ? MasterStage::Idle : MasterStage::Done));
+}
+
+juce::String MUProcessor::finishMastering()
+{
+    if (getMasterStage() != MasterStage::Listening || referencePass) return "Press Analyse and master first, and play the song.";
+    const float heard = inProbe.secondsHeard();
+    if (heard < kMasterMinSeconds) return "Only " + juce::String (heard, 0) + " s of sound heard so far. Keep the song playing: a decision needs at least " + juce::String ((int) kMasterMinSeconds) + " s.";
+    inMeter.readIntegrated();
+    const auto facts = collectFacts (inProbe, inMeter, preSpectrum);
+    inProbe.stop(); preSpectrum.stopListen();
+    if (! facts.enough()) { masterStage.store ((int) MasterStage::Idle); return "The mix could not be measured (too little sound, or too quiet). Play the song and try again."; }
+    mixFacts = facts;
+    masterUndo = captureSnapshot();
+    return restyleMaster();
+}
+
+juce::String MUProcessor::restyleMaster()
+{
+    if (! mixFacts.enough()) return "Nothing has been measured yet. Press Analyse and master and play the song.";
+    const auto style = (MasterStyle) juce::jlimit (0, (int) MasterStyle::Count - 1, (int) getParam (ids::mstStyle));
+    masterPlan = planMaster (mixFacts, style, getParam (ids::mstIntensity) * 0.01f, refFacts.enough() ? &refFacts : nullptr);
+    applyMasterPlan (masterPlan);
+    masterFacts = {};
+    storeMasterText();
+    settleStarted = (double) samplesProcessed.load() / juce::jmax (1.0, getSampleRate());
+    masterStage.store ((int) MasterStage::Settling);
+    return "Mastered as " + masterStyleNames()[(int) style] + " from " + juce::String (mixFacts.probe.seconds, 0) + " s of the song: " + juce::String (masterPlan.processing.size())
+         + " processors in use. Keep it playing: the level settles, then the master is measured for the report.";
+}
+
+void MUProcessor::applyMasterPlan (const MasterPlan& plan)
+{
+    // EQ: the corrective, tonal and dynamic bands, in that order, from band 1
+    resetEQ();
+    for (int b = 0; b < kNumEQBands && b < (int) plan.eq.size(); ++b) setBandSettings (b, plan.eq[(size_t) b]);
+    setParam (ids::eqEnabled, plan.eq.empty() ? 0.0f : 1.0f);
+    // glue
+    setParam (ids::compEnabled, plan.glue ? 1.0f : 0.0f);
+    if (plan.glue)
+    {
+        setParam (ids::compStyle, 3.0f); setParam (ids::compRatio, plan.glueRatio); setParam (ids::compThreshold, plan.glueThresholdDb);
+        setParam (ids::compAttack, 30.0f); setParam (ids::compRelease, 200.0f); setParam (ids::compKnee, 10.0f); setParam (ids::compScHp, 100.0f);
+        setParam (ids::compAutoMakeup, 1.0f); setParam (ids::compMix, 100.0f);
+    }
+    // three bands
+    setParam (ids::mbOn, plan.multiband.enabled ? 1.0f : 0.0f);
+    setParam (ids::mbCrossLow, plan.multiband.crossLowHz); setParam (ids::mbCrossHigh, plan.multiband.crossHighHz);
+    for (int b = 0; b < 3; ++b)
+    {
+        const auto& band = plan.multiband.band[(size_t) b];
+        setParam (ids::mbBandOn (b), band.on ? 1.0f : 0.0f);
+        if (band.on) { setParam (ids::mbThreshold (b), band.thresholdDb); setParam (ids::mbRatio (b), band.ratio); setParam (ids::mbAttack (b), band.attackMs); setParam (ids::mbRelease (b), band.releaseMs); setParam (ids::mbMakeup (b), band.makeupDb); }
+    }
+    // saturation, stereo, clipper
+    setParam (ids::satOn, plan.saturate ? 1.0f : 0.0f);
+    if (plan.saturate) { setParam (ids::satType, (float) plan.satType); setParam (ids::satDrive, plan.satDriveDb); setParam (ids::satMix, plan.satMix * 100.0f); }
+    setParam (ids::stMonoBass, plan.monoBass ? 1.0f : 0.0f);
+    if (plan.monoBass) setParam (ids::stMonoFreq, plan.monoBelowHz);
+    setParam (ids::stWidth, plan.width * 100.0f);
+    setParam (ids::clipOn, plan.clip ? 1.0f : 0.0f);
+    setParam (ids::clipAmount, plan.clipAmount * 100.0f); setParam (ids::clipSoft, plan.clipSoftness * 100.0f);
+    // loudness: the limiter on, the level found by the auto level, starting from the gain the measurement says is needed
+    setParam (ids::masterMode, 3.0f);
+    setParam (ids::targetLufs, plan.targetLufs); setParam (ids::targetTruePeak, plan.ceilingDb);
+    setParam (ids::maxGain, 0.0f);
+    setParam (ids::peakGuard, 1.0f); setParam (ids::masterAutoTrim, 1.0f);
+    masterTrimDb.store (juce::jlimit (-12.0f, 12.0f, plan.targetLufs - mixFacts.integratedLufs));
+    autoLevelHeld.store (false);
+    loudness.resetIntegrated(); loudness.resetPeakHold();
+    restartSpectrumAverage();
+}
+
+// The words of the last decision travel with the project, so they are still there when it is opened again.
+void MUProcessor::storeMasterText()
+{
+    apvts.state.setProperty ("mstDetected", masterPlan.detected.joinIntoString ("\n"), nullptr);
+    apvts.state.setProperty ("mstProcessing", masterPlan.processing.joinIntoString ("\n"), nullptr);
+    apvts.state.setProperty ("mstLeft", masterPlan.leftAlone.joinIntoString ("\n"), nullptr);
+    apvts.state.setProperty ("mstNotes", masterPlan.notes.joinIntoString ("\n"), nullptr);
+    apvts.state.setProperty ("mstReport", masterFacts.enough() ? masterReport (mixFacts, masterFacts, masterPlan).joinIntoString ("\n") : juce::String(), nullptr);
+}
+
+juce::StringArray MUProcessor::masterText (const juce::String& part) const
+{
+    const char* key = part == "detected" ? "mstDetected" : part == "processing" ? "mstProcessing" : part == "left" ? "mstLeft" : part == "notes" ? "mstNotes" : "mstReport";
+    juce::StringArray lines;
+    lines.addLines (apvts.state.getProperty (key, juce::String()).toString());
+    lines.removeEmptyStrings();
+    return lines;
+}
+
+juce::String MUProcessor::undoMaster()
+{
+    if (masterUndo.empty()) return "There is nothing to undo.";
+    applySnapshot (masterUndo);
+    masterUndo.clear();
+    inProbe.stop(); outProbe.stop();
+    for (auto* key : { "mstDetected", "mstProcessing", "mstLeft", "mstNotes", "mstReport" }) apvts.state.removeProperty (key, nullptr);
+    masterStage.store ((int) MasterStage::Idle);
+    masterTrimDb.store (0.0f); autoLevelHeld.store (false);
+    loudness.resetIntegrated(); loudness.resetPeakHold();
+    return "Back to how everything was before Analyse and master.";
+}
+
+void MUProcessor::masterTick()
+{
+    const auto stage = getMasterStage();
+    if (stage == MasterStage::Listening) inMeter.readIntegrated();
+    const double now = (double) samplesProcessed.load() / juce::jmax (1.0, getSampleRate());
+    if (stage == MasterStage::Settling && isMasterInstance())
+    {
+        // the report is of the master at its settled level: wait for the auto level to arrive (or to say it will not push further)
+        const float error = std::abs (getParam (ids::targetLufs) - loudness.getIntegrated());
+        const double waited = now - settleStarted;
+        if (waited > 6.0 && (error < 0.7f || autoLevelHeld.load() || waited > 25.0))
+        {
+            outMeter.reset(); outMeter.resetIntegrated(); outMeter.resetPeakHold();
+            spectrum.startListen (true);
+            outProbe.start();
+            masterStage.store ((int) MasterStage::Checking);
+        }
+    }
+    if (stage == MasterStage::Checking)
+    {
+        outMeter.readIntegrated();
+        if (outProbe.secondsHeard() >= kMasterCheckSeconds)
+        {
+            masterFacts = collectFacts (outProbe, outMeter, spectrum);
+            outProbe.stop(); spectrum.stopListen();
+            storeMasterText();
+            masterStage.store ((int) MasterStage::Done);
+        }
+    }
+    // the comparison: how far the master has to come down to be as loud as the mix was
+    const float mixLufs = mixFacts.enough() ? mixFacts.integratedLufs : mixMeter.getIntegrated();
+    const float nowLufs = masterFacts.enough() ? masterFacts.integratedLufs : loudness.getIntegrated();
+    compareGainDb.store (mixLufs > -70.0f && nowLufs > -70.0f ? juce::jlimit (-24.0f, 0.0f, mixLufs - nowLufs) : 0.0f);
+}
+
+juce::String MUProcessor::startReferencePass()
+{
+    if (! isMasterInstance()) return "The reference is played through the plugin on the Stereo Out.";
+    if (getMasterStage() == MasterStage::Listening && ! referencePass) return "The mix is being listened to. Finish that first.";
+    referencePass = true;
+    inMeter.reset(); inMeter.resetIntegrated(); inMeter.resetPeakHold();
+    preSpectrum.startListen (true);
+    inProbe.start();
+    masterStage.store ((int) MasterStage::Listening);
+    return "Listening to the reference. Solo the reference track so only it reaches the Stereo Out, play at least " + juce::String ((int) kMasterMinSeconds) + " s of it, then press Use as reference.";
+}
+
+juce::String MUProcessor::finishReferencePass()
+{
+    if (! referencePass) return "Press Play a reference first.";
+    const float heard = inProbe.secondsHeard();
+    if (heard < kMasterMinSeconds) return "Only " + juce::String (heard, 0) + " s of the reference heard so far. Keep it playing.";
+    inMeter.readIntegrated();
+    const auto facts = collectFacts (inProbe, inMeter, preSpectrum);
+    inProbe.stop(); preSpectrum.stopListen();
+    referencePass = false;
+    masterStage.store ((int) (masterText ("processing").isEmpty() ? MasterStage::Idle : MasterStage::Done));
+    if (! facts.enough()) return "The reference could not be measured. Play it louder or for longer.";
+    refFacts = facts; refName = "the track you played";
+    return "Reference measured: " + juce::String (facts.integratedLufs, 1) + " LUFS, true peak " + juce::String (facts.truePeakDb, 1) + " dBTP, loudness range " + juce::String (facts.probe.loudnessRangeLu, 1)
+         + " LU. Un-solo it, then press Analyse and master (or Decide again) to lean the master towards it.";
+}
+
+juce::String MUProcessor::loadReferenceFile (const juce::File& file)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    if (reader == nullptr) return "That file could not be read. WAV, AIFF and FLAC always work; MP3 and M4A depend on the computer.";
+    const auto length = (int) juce::jmin ((juce::int64) (reader->sampleRate * 600.0), reader->lengthInSamples);        // ten minutes at most
+    if (length < (int) (reader->sampleRate * (double) kMasterMinSeconds)) return "That file is shorter than " + juce::String ((int) kMasterMinSeconds) + " seconds: too little to measure.";
+    juce::AudioBuffer<float> audio (2, length);
+    reader->read (&audio, 0, length, 0, true, true);
+    if (reader->numChannels < 2) audio.copyFrom (1, 0, audio, 0, 0, length);
+    const auto facts = measureMix (audio, reader->sampleRate);
+    if (! facts.enough()) return "The reference could not be measured (it may be silent).";
+    refFacts = facts; refName = file.getFileName();
+    return "Reference \"" + refName + "\": " + juce::String (facts.integratedLufs, 1) + " LUFS, true peak " + juce::String (facts.truePeakDb, 1) + " dBTP, loudness range " + juce::String (facts.probe.loudnessRangeLu, 1)
+         + " LU. Press Analyse and master (or Decide again) to lean the master towards it.";
 }
 
 void MUProcessor::resetEQ()

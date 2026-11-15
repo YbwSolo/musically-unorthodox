@@ -279,6 +279,22 @@ namespace ids
     // EQ analysis: what the track is, and which of the three jobs Analyse does (bit 0 surgical, 1 tonal, 2 dynamic)
     inline const juce::String eqSource  { "eqSource" };
     inline const juce::String eqPasses  { "eqPasses" };
+
+    // Mastering assistant (master instance): style and intensity, the three-band compressor and the soft clipper
+    inline const juce::String mstStyle     { "mstStyle" };
+    inline const juce::String mstIntensity { "mstIntensity" };
+    inline const juce::String mbOn         { "mbOn" };
+    inline const juce::String mbCrossLow   { "mbCrossLow" };
+    inline const juce::String mbCrossHigh  { "mbCrossHigh" };
+    inline juce::String mbBandOn (int b)   { return "mbOn" + juce::String (b + 1); }
+    inline juce::String mbThreshold (int b) { return "mbThr" + juce::String (b + 1); }
+    inline juce::String mbRatio (int b)    { return "mbRatio" + juce::String (b + 1); }
+    inline juce::String mbAttack (int b)   { return "mbAtt" + juce::String (b + 1); }
+    inline juce::String mbRelease (int b)  { return "mbRel" + juce::String (b + 1); }
+    inline juce::String mbMakeup (int b)   { return "mbGain" + juce::String (b + 1); }
+    inline const juce::String clipOn       { "clipOn" };
+    inline const juce::String clipAmount   { "clipAmount" };
+    inline const juce::String clipSoft     { "clipSoft" };
 }
 
 // Default relative loudness of each role against the lead vocal (LU). Editable on the master instance.

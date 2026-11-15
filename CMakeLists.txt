@@ -76,6 +76,9 @@ set(MU_DSP_SOURCES
     Source/dsp/StereoTool.cpp
     Source/dsp/Maximizer.cpp
     Source/dsp/VocalSpace.cpp
+    Source/dsp/MultibandComp.cpp
+    Source/dsp/Clipper.cpp
+    Source/dsp/MasterProbe.cpp
     Source/dsp/RoleDetector.cpp
     Source/dsp/Pitch.cpp
     Source/dsp/Tuner.cpp
@@ -88,6 +91,7 @@ set(MU_DSP_SOURCES
     Source/dsp/TuneGraph.cpp
     Source/analysis/ReverbAdvisor.cpp
     Source/analysis/TonalAnalysis.cpp
+    Source/analysis/MasterEngine.cpp
     Source/session/BalanceEngine.cpp)
 
 target_sources(MusicallyUnorthodox PRIVATE

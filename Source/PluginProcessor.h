@@ -20,6 +20,8 @@
 #include "dsp/RoleDetector.h"
 #include "dsp/History.h"
 #include "analysis/TonalAnalysis.h"
+#include "analysis/MasterEngine.h"
+#include "dsp/Clipper.h"
 #include "session/SessionBus.h"
 #include "dsp/Tuner.h"
 #include "dsp/Doubler.h"
@@ -275,6 +277,35 @@ public:
     juce::String importUserPreset (const juce::File& file, bool load);
     static bool isFactoryName (const juce::String& scope, const juce::String& name);
     void applyMasterMode (int mode);
+
+    // ---- Mastering assistant (master instance). One pass listens to the mix as it arrives; the engine then
+    // decides which processors this song needs and sets them; a second pass measures the result.
+    enum class MasterStage { Idle = 0, Listening, Settling, Checking, Done };
+    static constexpr float kMasterMinSeconds = 20.0f;         // the least a decision is made from
+    static constexpr float kMasterCheckSeconds = 30.0f;       // how much of the master is measured for the report
+    juce::String startMastering();                             // begin listening
+    juce::String finishMastering();                            // decide and apply (needs kMasterMinSeconds of sound)
+    void cancelMastering();
+    juce::String restyleMaster();                              // decide again from the same measurements, with the style and intensity as they are now
+    juce::String undoMaster();                                 // back to how everything was before the last Analyse and master
+    bool canUndoMaster() const { return ! masterUndo.empty(); }
+    MasterStage getMasterStage() const { return (MasterStage) masterStage.load(); }
+    float masteringSeconds() const;                            // sound heard in the pass that is running
+    bool hasMixFacts() const { return mixFacts.enough(); }
+    const MasterFacts& getMixFacts() const { return mixFacts; }
+    juce::StringArray masterText (const juce::String& part) const;   // "detected", "processing", "left", "notes", "report": kept with the project
+    // a reference: a finished song to lean towards. Either played through the master instance, or read from a file.
+    juce::String startReferencePass();
+    juce::String finishReferencePass();
+    juce::String loadReferenceFile (const juce::File& file);
+    void clearMasterReference() { refFacts = {}; refName.clear(); }
+    juce::String getMasterReferenceName() const { return refFacts.enough() ? refName : juce::String(); }
+    bool isReferencePass() const { return referencePass; }
+    // Level-matched comparison: 0 the master as it is, 1 the master turned down to the loudness of the mix, 2 the mix itself.
+    void setMasterCompare (int mode) { masterCompare.store (juce::jlimit (0, 2, mode)); }
+    int getMasterCompare() const { return masterCompare.load(); }
+    const MultibandComp& getMultiband() const { return multiband; }
+    const Clipper& getClipper() const { return clipper; }
     void resetEQ();
     void resetTrim();
     void moveTrimAfterChain();
@@ -330,6 +361,25 @@ private:
     VocalSpace vocalSpace;
     StereoTool stereo;
     Maximizer maximizer;
+    MultibandComp multiband;
+    Clipper clipper;
+    MasterProbe inProbe, outProbe;
+    LoudnessMeter inMeter;                 // the mix as it arrives, while a mastering pass is listening
+    LoudnessMeter outMeter;                // the master, while its check pass is running (the main meter is restarted by the auto level)
+    std::atomic<int> masterStage { 0 }, masterCompare { 0 };
+    MasterFacts mixFacts, masterFacts, refFacts;
+    MasterPlan masterPlan;
+    juce::String refName;
+    bool referencePass = false;
+    std::vector<float> masterUndo;
+    double settleStarted = 0.0;
+    std::array<std::vector<float>, 2> dryRing; int dryPos = 0;       // the mix as it arrived, kept for the comparison
+    juce::SmoothedValue<float> compareGain { 1.0f };
+    std::atomic<float> compareGainDb { 0.0f };
+    MasterFacts collectFacts (const MasterProbe& probe, const LoudnessMeter& meter, const SpectrumAnalyzer& analyser) const;
+    void applyMasterPlan (const MasterPlan& plan);
+    void storeMasterText();
+    void masterTick();
     Tuner tuner;
     Doubler doubler;
     Reverb reverb;
@@ -390,6 +440,8 @@ private:
     AF pSmOn = nullptr, pSmDepth = nullptr, pSmFocus = nullptr, pSmSpeed = nullptr;
     AF pSatOn = nullptr, pSatDrive = nullptr, pSatMix = nullptr, pSatType = nullptr;
     AF pRiderOn = nullptr, pRiderTarget = nullptr, pRiderRange = nullptr, pRiderSpeed = nullptr;
+    AF pMbOn = nullptr, pMbCrossLow = nullptr, pMbCrossHigh = nullptr, pClipOn = nullptr, pClipAmount = nullptr, pClipSoft = nullptr;
+    std::array<AF, 3> pMbBandOn {}, pMbThr {}, pMbRatio {}, pMbAtt {}, pMbRel {}, pMbGain {};
     AF pVsOn = nullptr, pVsAmount = nullptr, pVsSpeed = nullptr, pVsCentre = nullptr;
     std::array<AF, 3> pVsFreq {}, pVsCut {}, pVsQ {};
     AF pStWidth = nullptr, pStMonoBass = nullptr, pStMonoFreq = nullptr;
