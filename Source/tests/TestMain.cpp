@@ -765,6 +765,106 @@ int main()
         check (analyseTone (quieter, Role::Vocal).size() == sug.size(), "Analysis is independent of overall level");
     }
 
+    // --- EQ analysis, build 19: saying what the track is, the three jobs, ringing notes, room for the vocal
+    {
+        const auto centres = analysisBandCentres();
+        auto bandNear = [&] (float hz) { int best = 0; for (int b = 1; b < kAnalysisBands; ++b) if (std::abs (std::log2 (centres[(size_t) b] / hz)) < std::abs (std::log2 (centres[(size_t) best] / hz))) best = b; return best; };
+        // every named source, played as it should be, is left alone
+        juce::StringArray fussy;
+        for (int i = 1; i < (int) EqSource::Count; ++i)
+            if (! analyseTone (sourceTargetCurve ((EqSource) i, Role::Melody), Role::Melody, nullptr, (EqSource) i).empty()) fussy.add (eqSourceNames()[i]);
+        check (fussy.isEmpty() && eqSourceNames().size() == (int) EqSource::Count, "Every kind of voice and instrument, with its usual tone, gets no suggestions", fussy.joinIntoString (", "));
+
+        // the same sound is judged differently as a snare and as a piano
+        auto snare = sourceTargetCurve (EqSource::Snare, Role::Drums);
+        for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 350.0f && centres[(size_t) b] < 700.0f) snare[(size_t) b] += 6.0f;
+        const auto asSnare = analyseTone (snare, Role::Drums, nullptr, EqSource::Snare);
+        bool boxy = false;
+        for (auto& x : asSnare) boxy = boxy || (x.title.startsWith ("Boxy") && x.stage == EqStage::Surgical && x.band.gainDb < -1.0f && x.band.freqHz > 350.0f && x.band.freqHz < 700.0f);
+        juce::String snareTitles, pianoTitles;
+        for (auto& x : asSnare) snareTitles << x.title << "; ";
+        for (auto& x : analyseTone (snare, Role::Drums, nullptr, EqSource::Piano)) pianoTitles << x.title << "; ";
+        check (boxy && snareTitles != pianoTitles, "A boxy snare is told so, and the same sound called a piano gets a different answer", snareTitles + " | as a piano: " + pianoTitles);
+
+        auto rumbly = sourceTargetCurve (EqSource::Pad, Role::Melody);
+        for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] < 90.0f) rumbly[(size_t) b] = rumbly[(size_t) bandNear (300.0f)] - 12.0f;
+        bool lowCutFound = false;
+        for (auto& x : analyseTone (rumbly, Role::Melody, nullptr, EqSource::Pad)) lowCutFound = lowCutFound || (x.band.type == EQType::LowCut && near (x.band.freqHz, 120.0f, 1.0f) && x.stage == EqStage::Surgical);
+        check (lowCutFound, "A pad carrying low rumble gets a low cut at 120 Hz");
+
+        // a vocal with mud and no presence: surgical first, then tonal; each job can be asked for alone
+        auto voice = roleTargetCurve (Role::Vocal);
+        for (int b = 0; b < kAnalysisBands; ++b)
+        {
+            if (centres[(size_t) b] > 180.0f && centres[(size_t) b] < 350.0f) voice[(size_t) b] += 6.0f;
+            if (centres[(size_t) b] > 1800.0f && centres[(size_t) b] < 4500.0f) voice[(size_t) b] -= 8.0f;
+        }
+        BandArray steady; steady.fill (1.0f);            // the mud is there all the time, so its cut is a fixed one
+        const auto all = analyseTone (voice, Role::Vocal, &steady, EqSource::LeadVocal);
+        bool ordered = true, hasCut = false, hasLift = false;
+        for (size_t i = 0; i + 1 < all.size(); ++i) ordered = ordered && (int) all[i].stage <= (int) all[i + 1].stage;
+        for (auto& x : all) { hasCut = hasCut || x.stage == EqStage::Surgical; hasLift = hasLift || (x.stage == EqStage::Tonal && x.band.gainDb > 0.0f); }
+        const auto onlySurgical = analyseTone (voice, Role::Vocal, &steady, EqSource::LeadVocal, 1), onlyTonal = analyseTone (voice, Role::Vocal, &steady, EqSource::LeadVocal, 2);
+        bool pure = ! onlySurgical.empty() && ! onlyTonal.empty();
+        for (auto& x : onlySurgical) pure = pure && x.stage == EqStage::Surgical;
+        for (auto& x : onlyTonal) pure = pure && x.stage == EqStage::Tonal;
+        check (ordered && hasCut && hasLift && pure, "Analyse gives surgical cuts first and tonal lifts after, and does either job alone when asked",
+               juce::String ((int) all.size()) + " in all, " + juce::String ((int) onlySurgical.size()) + " surgical, " + juce::String ((int) onlyTonal.size()) + " tonal");
+        // the tonal lift is worked out on the voice as it will be after the surgical cuts
+        auto presence = [] (const std::vector<Suggestion>& v) { float g = 0.0f; for (auto& x : v) if (x.stage == EqStage::Tonal && x.band.type == EQType::Bell && x.band.freqHz > 1500.0f) g = x.band.gainDb; return g; };
+        check (presence (all) > 1.0f && presence (all) <= presence (onlyTonal), "The presence lift is no bigger once the mud is out than it is with the mud left in",
+               juce::String (presence (all), 1) + " dB after the cuts, " + juce::String (presence (onlyTonal), 1) + " dB without them");
+        // a problem that comes and goes becomes a dynamic cut and is listed as the dynamic job
+        BandArray moving; moving.fill (9.0f);
+        bool dynamicMud = false;
+        for (auto& x : analyseTone (voice, Role::Vocal, &moving, EqSource::LeadVocal)) dynamicMud = dynamicMud || (x.stage == EqStage::Dynamic && x.band.dynamic && x.band.rangeDb < 0.0f && x.band.freqHz < 400.0f);
+        check (dynamicMud, "Mud that comes and goes is given to the dynamic job");
+
+        // one ringing note
+        auto ringing = roleTargetCurve (Role::Vocal);
+        const int rb = bandNear (600.0f);
+        ringing[(size_t) rb] += 9.0f;
+        bool narrow = false;
+        for (auto& x : analyseTone (ringing, Role::Vocal)) narrow = narrow || (x.title.startsWith ("Ringing") && x.band.q >= 3.0f && x.band.gainDb <= -2.0f && x.band.gainDb >= -4.5f && std::abs (std::log2 (x.band.freqHz / centres[(size_t) rb])) < 0.05f);
+        check (narrow, "A single ringing note gets a narrow cut where it is");
+        auto bassNote = sourceTargetCurve (EqSource::Sub808, Role::Bass808);
+        bassNote[(size_t) bandNear (55.0f)] += 9.0f;
+        bool wrong = false;
+        for (auto& x : analyseTone (bassNote, Role::Bass808, nullptr, EqSource::Sub808)) wrong = wrong || x.title.startsWith ("Ringing");
+        check (! wrong, "The note an 808 is playing is not mistaken for a ringing fault");
+
+        // room for the vocal: found where the beat covers it, not found where it does not
+        auto vocalDb = roleTargetCurve (Role::Vocal), beatDb = roleTargetCurve (Role::Beat);
+        for (int b = 0; b < kAnalysisBands; ++b) { vocalDb[(size_t) b] -= 20.0f; beatDb[(size_t) b] -= 30.0f; }
+        check (! planVocalRoom (vocalDb, beatDb).found, "A beat that sits well under the vocal is left alone");
+        for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 2000.0f && centres[(size_t) b] < 3500.0f) beatDb[(size_t) b] += 16.0f;
+        const auto plan = planVocalRoom (vocalDb, beatDb);
+        bool there = false;
+        for (int i = 0; i < plan.count; ++i) there = there || (plan.freqHz[(size_t) i] > 1900.0f && plan.freqHz[(size_t) i] < 3700.0f && plan.cutDb[(size_t) i] <= -1.5f && plan.cutDb[(size_t) i] >= -6.0f);
+        check (plan.found && there && plan.count <= 3, "A beat that covers the vocal around 2.5 kHz is dipped there", plan.text);
+
+        // the dips go where they are put, and Centre only leaves the sides alone
+        auto dipAt = [&] (float hz, bool centreOnly, bool sideSignal)
+        {
+            VocalSpace v; v.prepare (fs, 512, 2);
+            VocalSpace::Settings st; st.enabled = true; st.amount = 1.0f; st.speed = 2; st.centreOnly = centreOnly;
+            st.freqHz = { 300.0f, 1000.0f, 5000.0f }; st.cutDb = { 0.0f, -5.0f, 0.0f }; st.q = { 1.0f, 1.0f, 1.0f };
+            v.setSettings (st); v.setKeyLevel (1.0f);
+            auto sig = sine (fs, hz, 0.1f, (int) fs);
+            if (sideSignal) sig.applyGain (1, 0, sig.getNumSamples(), -1.0f);
+            for (int pos = 0; pos < sig.getNumSamples(); pos += 512)
+            {
+                juce::AudioBuffer<float> view (sig.getArrayOfWritePointers(), 2, pos, juce::jmin (512, sig.getNumSamples() - pos));
+                v.process (view);
+            }
+            return juce::Decibels::gainToDecibels (sig.getMagnitude (0, (int) fs / 2, (int) fs / 2) / 0.1f);
+        };
+        check (near (dipAt (1000.0f, false, false), -5.0f, 0.4f) && std::abs (dipAt (7000.0f, false, false)) < 0.4f, "Vocal space dips where it is set to, not at fixed places",
+               juce::String (dipAt (1000.0f, false, false), 2) + " dB at 1 kHz, " + juce::String (dipAt (7000.0f, false, false), 2) + " dB at 7 kHz");
+        check (near (dipAt (1000.0f, true, false), -5.0f, 0.4f) && std::abs (dipAt (1000.0f, true, true)) < 0.05f, "Centre only dips the middle and leaves the sides exactly as they were",
+               juce::String (dipAt (1000.0f, true, false), 2) + " dB in the middle, " + juce::String (dipAt (1000.0f, true, true), 3) + " dB at the sides");
+    }
+
     // --- EQ match
     {
         const auto centres = analysisBandCentres();

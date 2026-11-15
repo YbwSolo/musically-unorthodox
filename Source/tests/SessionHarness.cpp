@@ -175,6 +175,28 @@ int main()
         for (auto& s : beatFound) if (s.kind == Suggestion::Kind::Masking) clash = true;
         check (clash, "The beat is told it is covering the vocal");
 
+        // build 19: a beat with no stems is fitted around this vocal
+        {
+            beat->setParam (ids::vsEnabled, 0.0f);
+            juce::String st2;
+            bool offered = false;
+            for (auto& x : beat->analyse (st2)) offered = offered || x.kind == Suggestion::Kind::VocalRoom;
+            const auto said = beat->fitVocalSpace();
+            std::printf ("   fit to the vocal: %s\n", said.toRawUTF8());
+            bool sane = beat->getParam (ids::vsEnabled) > 0.5f;
+            int dips = 0;
+            for (int i = 0; i < 3; ++i)
+            {
+                const float f = beat->getParam (ids::vsFreq (i)), c = beat->getParam (ids::vsCut (i));
+                sane = sane && f >= 150.0f && f <= 9000.0f && c <= 0.0f && c >= -6.0f;
+                if (c <= -1.5f) ++dips;
+            }
+            bool again = false;
+            for (auto& x : beat->analyse (st2)) again = again || x.kind == Suggestion::Kind::VocalRoom;
+            check (offered && sane && dips >= 1 && ! again, "Analyse offers to make room for the vocal on the beat, Fit to the vocal sets it up, and it is not offered twice", said);
+            check (vocal->fitVocalSpace().containsIgnoreCase ("not for a vocal") && vocal->getParam (ids::vsEnabled) < 0.5f, "Fit to the vocal does nothing on the vocal itself");
+        }
+
         const Suggestion* own = nullptr;
         for (auto& s : found) if (s.kind != Suggestion::Kind::Masking) { own = &s; break; }
         if (own != nullptr)

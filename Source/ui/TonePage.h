@@ -24,6 +24,7 @@ private:
     Segmented satType; Knob satDrive, satMix;
     Knob riderTarget, riderRange; Segmented riderSpeed;
     Knob vsAmount; Segmented vsSpeed;
+    juce::TextButton vsFit; ParamToggle vsCentre;
     Knob stWidth, stMonoFreq; ParamToggle stMonoBass;
     Knob outGain, trim;
     juce::Rectangle<int> smoothWell, satWell, riderWell, spaceWell, corrWell, smFocusLabel, smSpeedLabel;

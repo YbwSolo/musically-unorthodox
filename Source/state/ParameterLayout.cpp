@@ -1,3 +1,4 @@
+#include "../analysis/TonalAnalysis.h"
 #include "ParameterLayout.h"
 
 namespace mu
@@ -142,6 +143,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     p.push_back (std::make_unique<APB> (id (ids::vsEnabled), "Vocal space", false));
     p.push_back (std::make_unique<APF> (id (ids::vsAmount), "Vocal space amount", range (0.0f, 100.0f, 0.1f), 50.0f, pctAttr()));
     p.push_back (std::make_unique<APC> (id (ids::vsSpeed), "Vocal space speed", juce::StringArray { "Smooth", "Normal", "Fast" }, 1));
+    {
+        // the defaults are where the three dips always were, so songs made before build 19 sound the same
+        const float freq[3] = { 260.0f, 2600.0f, 7000.0f }, cutDb[3] = { -2.0f, -4.5f, -2.5f }, q[3] = { 0.9f, 0.8f, 1.1f };
+        for (int i = 0; i < 3; ++i)
+        {
+            const auto n = juce::String (i + 1);
+            p.push_back (std::make_unique<APF> (id (ids::vsFreq (i)), "Vocal space dip " + n + " frequency", juce::NormalisableRange<float> (100.0f, 12000.0f, 1.0f, 0.35f), freq[i], hzAttr()));
+            p.push_back (std::make_unique<APF> (id (ids::vsCut (i)), "Vocal space dip " + n + " depth", range (-9.0f, 0.0f, 0.1f), cutDb[i], dbAttr()));
+            p.push_back (std::make_unique<APF> (id (ids::vsQ (i)), "Vocal space dip " + n + " width", juce::NormalisableRange<float> (0.4f, 4.0f, 0.01f, 0.5f), q[i]));
+        }
+        p.push_back (std::make_unique<APB> (id (ids::vsCentre), "Vocal space centre only", false));
+    }
+
+    // ---- EQ analysis
+    p.push_back (std::make_unique<APC> (id (ids::eqSource), "EQ analysis source", eqSourceNames(), 0));
+    p.push_back (std::make_unique<juce::AudioParameterInt> (id (ids::eqPasses), "EQ analysis jobs", 1, 7, 7));
 
     // ---- tune
     p.push_back (std::make_unique<APB> (id (ids::tuneOn), "Tune", false));

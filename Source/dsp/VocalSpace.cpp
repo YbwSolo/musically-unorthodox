@@ -15,7 +15,7 @@ void VocalSpace::reset()
     depth = 0.0f;
     for (auto& b : states) for (auto& s : b) s = {};
     for (int i = 0; i < kBands; ++i)
-        coeffs[(size_t) i] = EQEngine::computeCoefficients ({ true, EQType::Bell, freqs[(size_t) i], 0.0f, qs[(size_t) i] }, fs);
+        coeffs[(size_t) i] = EQEngine::computeCoefficients ({ true, EQType::Bell, settings.freqHz[(size_t) i], 0.0f, settings.q[(size_t) i] }, fs);
 }
 
 void VocalSpace::process (juce::AudioBuffer<float>& buffer) noexcept
@@ -40,9 +40,26 @@ void VocalSpace::process (juce::AudioBuffer<float>& buffer) noexcept
 
         for (int b = 0; b < kBands; ++b)
         {
-            const float gain = maxCut[(size_t) b] * settings.amount * depth;
-            coeffs[(size_t) b] = EQEngine::computeCoefficients ({ true, EQType::Bell, freqs[(size_t) b], gain, qs[(size_t) b] }, fs);
+            const float gain = settings.cutDb[(size_t) b] * settings.amount * depth;
+            coeffs[(size_t) b] = EQEngine::computeCoefficients ({ true, EQType::Bell, settings.freqHz[(size_t) b], gain, settings.q[(size_t) b] }, fs);
             const auto& c = coeffs[(size_t) b];
+            if (settings.centreOnly && ch == 2)
+            {
+                // The dip is made in the middle only: what the filter takes out of (L + R) / 2 is taken out of both
+                // sides equally, so anything panned wide keeps its tone and the picture does not narrow.
+                auto* l = buffer.getWritePointer (0) + start; auto* r = buffer.getWritePointer (1) + start;
+                auto& st = states[(size_t) b][0];
+                for (int i = 0; i < len; ++i)
+                {
+                    const float x = 0.5f * (l[i] + r[i]);
+                    const float y = c[0] * x + st.z1;
+                    st.z1 = c[1] * x - c[3] * y + st.z2;
+                    st.z2 = c[2] * x - c[4] * y;
+                    l[i] += y - x; r[i] += y - x;
+                }
+                states[(size_t) b][1] = st;       // so a switch back to both sides starts from the same place
+                continue;
+            }
             for (int chn = 0; chn < ch; ++chn)
             {
                 auto* d = buffer.getWritePointer (chn) + start;

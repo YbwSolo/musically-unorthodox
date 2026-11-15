@@ -231,6 +231,11 @@ public:
     bool isListening() const { return spectrum.isListening(); }
     float listenedSeconds() const { return spectrum.getListenSeconds(); }
     juce::String applySuggestion (const Suggestion& s);
+    // Vocal space, fitted: finds where this track covers the lead vocal (from what both have been measured doing)
+    // and puts the three dips there. plan only looks; fit also sets it up and switches it on.
+    VocalRoomPlan planVocalSpace() const;
+    juce::String fitVocalSpace();
+    EqSource getEqSource() const { return (EqSource) juce::jlimit (0, (int) EqSource::Count - 1, (int) getParam (ids::eqSource)); }
     float secondsHeard() const;
 
     // Reference tone (shared across the session)
@@ -385,7 +390,8 @@ private:
     AF pSmOn = nullptr, pSmDepth = nullptr, pSmFocus = nullptr, pSmSpeed = nullptr;
     AF pSatOn = nullptr, pSatDrive = nullptr, pSatMix = nullptr, pSatType = nullptr;
     AF pRiderOn = nullptr, pRiderTarget = nullptr, pRiderRange = nullptr, pRiderSpeed = nullptr;
-    AF pVsOn = nullptr, pVsAmount = nullptr, pVsSpeed = nullptr;
+    AF pVsOn = nullptr, pVsAmount = nullptr, pVsSpeed = nullptr, pVsCentre = nullptr;
+    std::array<AF, 3> pVsFreq {}, pVsCut {}, pVsQ {};
     AF pStWidth = nullptr, pStMonoBass = nullptr, pStMonoFreq = nullptr;
     AF pTuneOn = nullptr, pTuneKey = nullptr, pTuneScale = nullptr, pTuneSpeed = nullptr, pTuneAmount = nullptr, pTuneVibrato = nullptr;
     AF pDblOn = nullptr, pDblMix = nullptr, pDblDetune = nullptr, pDblTiming = nullptr, pDblWidth = nullptr, pDblVoices = nullptr;

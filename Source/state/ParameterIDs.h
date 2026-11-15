@@ -270,6 +270,15 @@ namespace ids
     inline const juce::String vsEnabled { "vsEnabled" };
     inline const juce::String vsAmount  { "vsAmount" };
     inline const juce::String vsSpeed   { "vsSpeed" };
+    // where the three dips are, how deep at most, how wide (build 19: these used to be fixed), and centre only
+    inline juce::String vsFreq (int i) { return "vsFreq" + juce::String (i + 1); }
+    inline juce::String vsCut (int i)  { return "vsCut" + juce::String (i + 1); }
+    inline juce::String vsQ (int i)    { return "vsQ" + juce::String (i + 1); }
+    inline const juce::String vsCentre  { "vsCentre" };
+
+    // EQ analysis: what the track is, and which of the three jobs Analyse does (bit 0 surgical, 1 tonal, 2 dynamic)
+    inline const juce::String eqSource  { "eqSource" };
+    inline const juce::String eqPasses  { "eqPasses" };
 }
 
 // Default relative loudness of each role against the lead vocal (LU). Editable on the master instance.

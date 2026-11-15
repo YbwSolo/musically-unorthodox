@@ -122,6 +122,18 @@ int main (int argc, char** argv)
         for (auto& s : vocal->analyse (status)) std::printf ("suggestion applied: %s -> %s\n", s.title.toRawUTF8(), vocal->applySuggestion (s).toRawUTF8());
         runSeconds (3.0);
     }
+    if (opt["room"] == "1")
+    {
+        // a beat with no stems, fitted around this vocal
+        const auto plan = beat->planVocalSpace();
+        std::printf ("room for the vocal: %s\n", plan.found ? plan.text.toRawUTF8() : ("none: " + plan.text).toRawUTF8());
+        std::printf ("fit: %s\n", beat->fitVocalSpace().toRawUTF8());
+        beat->startListening();
+        runSeconds (9.0);
+        juce::String status;
+        for (auto& s : beat->analyse (status)) std::printf ("beat, %s: %s -> %s\n", s.stage == EqStage::Surgical ? "surgical" : s.stage == EqStage::Tonal ? "tonal" : "dynamic", s.title.toRawUTF8(), s.action.toRawUTF8());
+        std::printf ("beat analysis: %s\n", status.toRawUTF8());
+    }
     applyOverrides();
     runSeconds (2.0);
     {

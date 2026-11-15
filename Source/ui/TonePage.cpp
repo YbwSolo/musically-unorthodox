@@ -10,7 +10,7 @@ TonePage::TonePage (MUProcessor& p, std::function<void (const juce::String&)> st
       smDepth (p, ids::smDepth, "Depth"), smFocus (p, ids::smFocus, { "Full range", "Low mids", "Harsh highs" }), smSpeed (p, ids::smSpeed, { "Slow", "Normal", "Fast" }),
       satType (p, ids::satType, { "Tape", "Tube", "Warm" }), satDrive (p, ids::satDrive, "Drive"), satMix (p, ids::satMix, "Mix"),
       riderTarget (p, ids::riderTarget, "Target"), riderRange (p, ids::riderRange, "Range"), riderSpeed (p, ids::riderSpeed, { "Slow", "Normal", "Fast" }),
-      vsAmount (p, ids::vsAmount, "Amount"), vsSpeed (p, ids::vsSpeed, { "Smooth", "Normal", "Fast" }),
+      vsAmount (p, ids::vsAmount, "Amount"), vsSpeed (p, ids::vsSpeed, { "Smooth", "Normal", "Fast" }), vsCentre (p, ids::vsCentre, "Centre only", "switch", "vsCentre"),
       stWidth (p, ids::stWidth, "Width"), stMonoFreq (p, ids::stMonoFreq, "Mono below"), stMonoBass (p, ids::stMonoBass, "Mono bass"),
       outGain (p, ids::outputGain, "Output"), trim (p, ids::trim, "Balance trim")
 {
@@ -18,8 +18,10 @@ TonePage::TonePage (MUProcessor& p, std::function<void (const juce::String&)> st
     addAndMakeVisible (presets);
     smooth.setPower (p, ids::smOn); sat.setPower (p, ids::satOn); rider.setPower (p, ids::riderOn); space.setPower (p, ids::vsEnabled);
     for (auto* c : std::initializer_list<juce::Component*> { &smooth, &sat, &rider, &space, &stereo, &output, &smDepth, &smFocus, &smSpeed, &smDelta, &satType, &satDrive, &satMix,
-                                                              &riderTarget, &riderRange, &riderSpeed, &vsAmount, &vsSpeed, &stWidth, &stMonoFreq, &stMonoBass, &outGain, &trim })
+                                                              &riderTarget, &riderRange, &riderSpeed, &vsAmount, &vsSpeed, &vsFit, &vsCentre, &stWidth, &stMonoFreq, &stMonoBass, &outGain, &trim })
         addAndMakeVisible (c);
+    styleButton (vsFit, "Fit to the vocal", false, "vsFit");
+    vsFit.onClick = [this] { setStatus (proc.fitVocalSpace()); };
     smDelta.setClickingTogglesState (true);
     smDelta.onClick = [this] { proc.setListenMode (smDelta.getToggleState() ? Listen::SmoothDelta : Listen::Normal); };
     setHelp (stereo, "st.corr");
@@ -66,6 +68,7 @@ void TonePage::tick (float dt)
         const bool vsAllowed = role != Role::Vocal && role != Role::BackingVocal && role != Role::Master;
         space.setTitle (vsAllowed ? "Vocal space" : "Vocal space (for beats and instruments)");
         vsAmount.setDimmed (! vsAllowed);
+        vsFit.setEnabled (vsAllowed); vsCentre.setEnabled (vsAllowed);
         stMonoFreq.setDimmed (proc.getParam (ids::stMonoBass) < 0.5f);
     }
 }
@@ -181,7 +184,6 @@ void TonePage::paintOverChildren (juce::Graphics& g)
         const auto r = spaceWell.toFloat();
         drawWell (g, r);
         const auto plot = r.reduced (1.0f);
-        const auto& vs = proc.getVocalSpace();
         const float amount = proc.getParam (ids::vsAmount) * 0.01f;
         const double fs = 48000.0;
         juce::Path full, now;
@@ -192,7 +194,7 @@ void TonePage::paintOverChildren (juce::Graphics& g)
             float cutFull = 0.0f;
             for (int b = 0; b < VocalSpace::kBands; ++b)
             {
-                EQBandSettings s { true, EQType::Bell, vs.bandFreq (b), vs.bandMaxCutDb (b) * amount, 0.9f };
+                EQBandSettings s { true, EQType::Bell, proc.getParam (ids::vsFreq (b)), proc.getParam (ids::vsCut (b)) * amount, proc.getParam (ids::vsQ (b)) };
                 cutFull += EQEngine::bandResponseDb (s, hz, fs);
             }
             const float yFull = plot.getY() + 10.0f + (-cutFull / 6.0f) * (plot.getHeight() - 20.0f), yNow = plot.getY() + 10.0f + (-cutFull * vsDepth / 6.0f) * (plot.getHeight() - 20.0f);
@@ -289,7 +291,14 @@ void TonePage::resized()
     si.removeFromTop (8);
     vsSpeed.setBounds (si.removeFromBottom (26));
     si.removeFromBottom (6);
-    vsAmount.setBounds (si.withSizeKeepingCentre (90, si.getHeight()));
+    {
+        // the knob on the left; on the right, Fit to the vocal and Centre only
+        auto right = si.removeFromRight (juce::jmin (132, si.getWidth() / 2));
+        vsFit.setBounds (right.removeFromTop (26));
+        right.removeFromTop (6);
+        vsCentre.setBounds (right.removeFromTop (22));
+        vsAmount.setBounds (si.withSizeKeepingCentre (juce::jmin (90, si.getWidth()), si.getHeight()));
+    }
 
     auto ti = inner (stereoArea);
     corrWell = ti.removeFromTop (40);

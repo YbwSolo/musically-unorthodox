@@ -659,6 +659,12 @@ public:
 private:
     struct Card : public juce::Component
     {
+        static juce::String stageName (const Suggestion& s)
+        {
+            if (s.kind == Suggestion::Kind::Masking) return "Between two tracks";
+            if (s.kind == Suggestion::Kind::VocalRoom) return "Dynamic, follows the vocal";
+            return s.stage == EqStage::Surgical ? "Surgical: take out what should not be there" : s.stage == EqStage::Tonal ? "Tonal: bring out what is good" : "Dynamic: only while it happens";
+        }
         Card (SuggestionList& o, const Suggestion& s, int index) : owner (o), suggestion (s), delay ((float) index * 0.07f)
         {
             styleButton (button, "Apply", true);
@@ -681,7 +687,7 @@ private:
         {
             const float tw = (float) w - 24.0f;
             const float actionH = juce::jmax (24.0f, wrappedHeight (suggestion.action, tw - 78.0f, bodyBold (11.5f)));
-            return juce::roundToInt (12.0f + wrappedHeight (suggestion.title, tw - 26.0f, bodyBold (12.5f), 1.25f) + 6.0f + wrappedHeight (suggestion.why, tw, body (11.5f)) + 10.0f + actionH + 12.0f);
+            return juce::roundToInt (12.0f + wrappedHeight (suggestion.title, tw - 26.0f, bodyBold (12.5f), 1.25f) + 19.0f + wrappedHeight (suggestion.why, tw, body (11.5f)) + 10.0f + actionH + 12.0f);
         }
         void paint (juce::Graphics& g) override
         {
@@ -694,7 +700,10 @@ private:
                          titleRow.removeFromLeft (18.0f).withHeight (17.0f), applied ? textMute : yellow);
             titleRow.removeFromLeft (8.0f);
             drawWrapped (g, suggestion.title, titleRow, bodyBold (12.5f), applied ? textDim : text, 1.25f);
-            r.removeFromTop (6.0f);
+            // which of the three jobs this is
+            g.setFont (body (10.5f)); g.setColour (textMute);
+            g.drawText (stageName (suggestion), r.removeFromTop (15.0f).withTrimmedLeft (26.0f), juce::Justification::centredLeft);
+            r.removeFromTop (4.0f);
             const float whyH = wrappedHeight (suggestion.why, r.getWidth(), body (11.5f));
             drawWrapped (g, suggestion.why, r.removeFromTop (whyH), body (11.5f), textDim);
             r.removeFromTop (10.0f);
@@ -796,6 +805,37 @@ EQPage::EQPage (MUProcessor& p, std::function<void (const juce::String&)> status
     showInput.onClick = [this] { graph->showPre = showInput.getToggleState(); };
     setHelp (showInput, "eq.pre");
 
+    // ---- what the track is, and which jobs to do
+    addAndMakeVisible (sourceGroup); addAndMakeVisible (sourceBox);
+    setHelp (sourceGroup, "eq.source"); setHelp (sourceBox, "eq.source");
+    sourceGroup.onChange = [this] (int group) { chooseGroup (group); };
+    sourceBox.onChange = [this]
+    {
+        if (sourceBox.getSelectedId() > 0 && sourceBox.getSelectedId() != (int) proc.getEqSource())
+        {
+            proc.setParam (ids::eqSource, (float) sourceBox.getSelectedId());
+            brainStatus = "Now looking at this track as: " + eqSourceNames()[sourceBox.getSelectedId()].toLowerCase() + ". Press Analyse.";
+            resized(); repaint();
+        }
+    };
+    {
+        const char* names[3] = { "Surgical", "Tonal", "Dynamic" };
+        for (int i = 0; i < 3; ++i)
+        {
+            auto& b = passButtons[(size_t) i];
+            styleButton (b, names[i], false, "eq.passes");
+            b.onClick = [this, i]
+            {
+                int mask = juce::jlimit (1, kAllEqPasses, (int) proc.getParam (ids::eqPasses)) ^ (1 << i);
+                if (mask == 0) mask = 1 << i;                 // at least one job stays on
+                proc.setParam (ids::eqPasses, (float) mask);
+                syncSource();
+            };
+            addAndMakeVisible (b);
+        }
+    }
+    syncSource();
+
     styleButton (analyseButton, "Analyse", true, "eq.analyse");
     analyseButton.onClick = [this]
     {
@@ -894,6 +934,7 @@ void EQPage::refreshReference()
 void EQPage::tick (float dt)
 {
     presets.refresh();
+    syncSource();
     if (listening)
     {
         const float heard = proc.listenedSeconds();
@@ -936,6 +977,59 @@ void EQPage::tick (float dt)
     }
 }
 
+// Keeps the picker in step with the parameters (a preset, the host or A/B can change them).
+void EQPage::syncSource()
+{
+    const int source = (int) proc.getEqSource();
+    const int passes = juce::jlimit (1, kAllEqPasses, (int) proc.getParam (ids::eqPasses));
+    if (source != shownSource)
+    {
+        shownSource = source;
+        const auto src = (EqSource) source;
+        const int group = eqSourceIsVocal (src) ? 1 : eqSourceIsInstrument (src) ? 2 : 0;
+        sourceGroup.setIndex (group);
+        sourceBox.clear (juce::dontSendNotification);
+        const auto names = eqSourceNames();
+        if (group == 1) for (int i = (int) EqSource::LeadVocal; i <= (int) EqSource::Adlibs; ++i) sourceBox.addItem (names[i], i);
+        if (group == 2) for (int i = (int) EqSource::Kick; i < (int) EqSource::Count; ++i) sourceBox.addItem (names[i], i);
+        sourceBox.setSelectedId (source, juce::dontSendNotification);
+        sourceBox.setVisible (group != 0);
+        resized(); repaint();
+    }
+    if (passes != shownPasses)
+    {
+        shownPasses = passes;
+        for (int i = 0; i < 3; ++i)
+        {
+            passButtons[(size_t) i].getProperties().set ("primary", (passes & (1 << i)) != 0);
+            passButtons[(size_t) i].repaint();
+        }
+    }
+}
+
+void EQPage::chooseGroup (int group)
+{
+    const auto now = proc.getEqSource();
+    EqSource want = EqSource::TrackKind;
+    if (group == 1) want = eqSourceIsVocal (now) ? now : (proc.getEffectiveRole() == Role::BackingVocal ? EqSource::BackingVocals : EqSource::LeadVocal);
+    if (group == 2 && eqSourceIsInstrument (now)) want = now;
+    else if (group == 2)
+        switch (proc.getEffectiveRole())
+        {
+            case Role::Kick:    want = EqSource::Kick; break;
+            case Role::Bass808: want = EqSource::Sub808; break;
+            case Role::Drums:   want = EqSource::DrumBus; break;
+            case Role::Beat:    want = EqSource::FullBeat; break;
+            case Role::FX:      want = EqSource::SoundFx; break;
+            default:            want = EqSource::Piano; break;
+        }
+    proc.setParam (ids::eqSource, (float) (int) want);
+    brainStatus = group == 0 ? "Looking at this track as its track kind (" + roleNames()[(int) proc.getEffectiveRole()].toLowerCase() + "). Press Analyse."
+                             : "Pick what this " + juce::String (group == 1 ? "voice" : "instrument") + " is, then press Analyse.";
+    syncSource();
+    resized(); repaint();
+}
+
 void EQPage::paint (juce::Graphics& g)
 {
     g.fillAll (black);
@@ -945,6 +1039,11 @@ void EQPage::paint (juce::Graphics& g)
     g.setColour (text);
     g.drawText ("ANALYSIS", head, juce::Justification::centredLeft);
     drawWrapped (g, brainStatus, statusArea.toFloat(), body (12.0f), textDim);
+    if (! sourceBox.isVisible())
+    {
+        g.setFont (body (12.0f)); g.setColour (textMute);
+        g.drawText ("Analysed as: " + roleNames()[(int) proc.getEffectiveRole()], sourceNoteArea, juce::Justification::centredLeft);
+    }
 
     g.setColour (line);
     g.fillRect (brainArea.getX() + 14, referenceArea.getY() - 10, brainArea.getWidth() - 28, 1);
@@ -990,6 +1089,17 @@ void EQPage::resized()
     analyseButton.setBounds (head.removeFromRight (92).withSizeKeepingCentre (92, 28));
     head.removeFromRight (6);
     applyAllButton.setBounds (head.removeFromRight (78).withSizeKeepingCentre (78, 28));
+    sourceGroup.setBounds (b.removeFromTop (26));
+    b.removeFromTop (6);
+    sourceNoteArea = b.removeFromTop (26);
+    sourceBox.setBounds (sourceNoteArea);
+    b.removeFromTop (6);
+    {
+        auto row = b.removeFromTop (26);
+        const int w = (row.getWidth() - 12) / 3;
+        for (int i = 0; i < 3; ++i) { passButtons[(size_t) i].setBounds (row.removeFromLeft (w)); row.removeFromLeft (6); }
+    }
+    b.removeFromTop (10);
     const int statusH = juce::roundToInt (wrappedHeight (brainStatus, (float) b.getWidth(), body (12.0f))) + 4;
     statusArea = b.removeFromTop (statusH);
     b.removeFromTop (10);

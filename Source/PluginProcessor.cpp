@@ -25,7 +25,8 @@ MUProcessor::MUProcessor()
     pSmOn = p (ids::smOn); pSmDepth = p (ids::smDepth); pSmFocus = p (ids::smFocus); pSmSpeed = p (ids::smSpeed);
     pSatOn = p (ids::satOn); pSatDrive = p (ids::satDrive); pSatMix = p (ids::satMix); pSatType = p (ids::satType);
     pRiderOn = p (ids::riderOn); pRiderTarget = p (ids::riderTarget); pRiderRange = p (ids::riderRange); pRiderSpeed = p (ids::riderSpeed);
-    pVsOn = p (ids::vsEnabled); pVsAmount = p (ids::vsAmount); pVsSpeed = p (ids::vsSpeed);
+    pVsOn = p (ids::vsEnabled); pVsAmount = p (ids::vsAmount); pVsSpeed = p (ids::vsSpeed); pVsCentre = p (ids::vsCentre);
+    for (int i = 0; i < 3; ++i) { pVsFreq[(size_t) i] = p (ids::vsFreq (i)); pVsCut[(size_t) i] = p (ids::vsCut (i)); pVsQ[(size_t) i] = p (ids::vsQ (i)); }
     pStWidth = p (ids::stWidth); pStMonoBass = p (ids::stMonoBass); pStMonoFreq = p (ids::stMonoFreq);
     pTuneOn = p (ids::tuneOn); pTuneKey = p (ids::tuneKey); pTuneScale = p (ids::tuneScale); pTuneSpeed = p (ids::tuneSpeed); pTuneAmount = p (ids::tuneAmount); pTuneVibrato = p (ids::tuneVibrato);
     pDblOn = p (ids::dblOn); pDblMix = p (ids::dblMix); pDblDetune = p (ids::dblDetune); pDblTiming = p (ids::dblTiming); pDblWidth = p (ids::dblWidth); pDblVoices = p (ids::dblVoices);
@@ -191,6 +192,8 @@ void MUProcessor::pullParameters()
     v.enabled = vsAllowed && pVsOn->load() > 0.5f;
     v.amount = pVsAmount->load() * 0.01f;
     v.speed = (int) pVsSpeed->load();
+    v.centreOnly = pVsCentre->load() > 0.5f;
+    for (int i = 0; i < 3; ++i) { v.freqHz[(size_t) i] = pVsFreq[(size_t) i]->load(); v.cutDb[(size_t) i] = pVsCut[(size_t) i]->load(); v.q[(size_t) i] = pVsQ[(size_t) i]->load(); }
     vocalSpace.setSettings (v);
 
     StereoSettings st;
@@ -750,8 +753,13 @@ void MUProcessor::applyMaskingCut (float hz, float db)
 
 float MUProcessor::cutDbNear (float hz) const
 {
-    if (getParam (ids::eqEnabled) < 0.5f) return 0.0f;
     float deepest = 0.0f;
+    // room already made for the vocal counts as a cut in place
+    if (getParam (ids::vsEnabled) > 0.5f)
+        for (int i = 0; i < 3; ++i)
+            if (std::abs (std::log2 (getParam (ids::vsFreq (i)) / juce::jmax (1.0f, hz))) <= 0.5f)
+                deepest = juce::jmin (deepest, getParam (ids::vsCut (i)) * getParam (ids::vsAmount) * 0.01f);
+    if (getParam (ids::eqEnabled) < 0.5f) return deepest;
     for (int b = 0; b < kNumEQBands; ++b)
     {
         const auto e = getBandSettings (b);
@@ -1116,7 +1124,9 @@ std::vector<Suggestion> MUProcessor::analyse (juce::String& status)
 
     if (! fromPass) fillBandsDb (bands);
     const auto role = getEffectiveRole();
-    out = analyseTone (bands, role, fromPass ? &swing : nullptr);
+    const auto source = getEqSource();
+    const int passes = juce::jlimit (1, kAllEqPasses, (int) getParam (ids::eqPasses));
+    out = analyseTone (bands, role, fromPass ? &swing : nullptr, source, passes);
 
     // Clashes with other tracks in the session that involve this one (the master sees all of them).
     const bool master = role == Role::Master;
@@ -1128,15 +1138,37 @@ std::vector<Suggestion> MUProcessor::analyse (juce::String& status)
         const auto roleA = (Role) bus->getSlot (c.slotA).role.load();
         const auto roleB = (Role) bus->getSlot (c.slotB).role.load();
         out.insert (out.begin() + clashes, describeClash (c, roleA, roleB, c.slotB == slot));
+        out[(size_t) clashes].stage = EqStage::Dynamic;
         ++clashes;
     }
-    if (out.size() > 6) out.resize (6);
+    // A beat with no stems cannot be remixed around the vocal, but it can step back where it covers the vocal
+    // while the vocal is singing. If that has not been set up for this track yet, it is the first thing offered.
+    const Role family = eqSourceRole (source, role);
+    if ((passes & 4) != 0 && family != Role::Vocal && family != Role::BackingVocal && ! master)
+    {
+        const auto plan = planVocalSpace();
+        // not offered again once Vocal space is on and already dipping in those places
+        bool alreadyThere = plan.found && getParam (ids::vsEnabled) > 0.5f;
+        for (int i = 0; i < plan.count && alreadyThere; ++i) alreadyThere = cutDbNear (plan.freqHz[(size_t) i]) <= -1.0f;
+        if (plan.found && ! alreadyThere)
+        {
+            Suggestion s; s.kind = Suggestion::Kind::VocalRoom; s.stage = EqStage::Dynamic; s.room = plan; s.freqHz = plan.freqHz[0]; s.amountDb = plan.cutDb[0];
+            s.title = "Make room for the vocal";
+            s.why = "Measured against the lead vocal in this session, this track is as loud as the vocal or louder in " + juce::String (plan.count) + (plan.count == 1 ? " place" : " places")
+                  + " where the vocal is strong. With no stems to turn down, the fix is to let this track dip there, only while the vocal is singing, and come back when it stops. That is Vocal space (Tone tab), set to where these two actually overlap.";
+            s.action = "Dip at " + plan.text + " while the vocal sings";
+            out.insert (out.begin(), s);
+        }
+    }
 
-    const juce::String basis = fromPass ? "Listened to " + juce::String (listened, 0) + " s of this track. " : juce::String();
+    const juce::String what = source == EqSource::TrackKind ? roleNames()[(int) role].toLowerCase() : eqSourceNames()[(int) source].toLowerCase();
+    const juce::String basis = fromPass ? "Listened to " + juce::String (listened, 0) + " s of this track as: " + what + ". " : juce::String();
+    juce::StringArray jobs;
+    if (passes & 1) jobs.add ("surgical"); if (passes & 2) jobs.add ("tonal"); if (passes & 4) jobs.add ("dynamic");
     if (out.empty())
-        status = basis + "Nothing stands out. The tone of this track is in the normal range for " + roleNames()[(int) role].toLowerCase() + ", so leave the EQ alone unless your ears say otherwise.";
+        status = basis + "Nothing stands out (" + jobs.joinIntoString (", ") + "). The tone of this track is in the normal range for " + what + ", so leave the EQ alone unless your ears say otherwise.";
     else
-        status = basis + juce::String ((int) out.size()) + (out.size() == 1 ? " thing" : " things") + " worth a look, most important first. Read why, then apply the ones you agree with.";
+        status = basis + juce::String ((int) out.size()) + (out.size() == 1 ? " thing" : " things") + " worth a look, in the order an engineer would do them: surgical cuts first, then tonal lifts, then dynamic. Read why, then apply the ones you agree with.";
     return out;
 }
 
@@ -1185,8 +1217,45 @@ juce::String MUProcessor::applySuggestion (const Suggestion& s)
             else bus->applyMaskingClash (s.clash);
             return "Done: " + s.action;
         }
+        case Suggestion::Kind::VocalRoom:
+            return fitVocalSpace();
     }
     return {};
+}
+
+VocalRoomPlan MUProcessor::planVocalSpace() const
+{
+    VocalRoomPlan none;
+    const auto tracks = bus->collectTracks();
+    const TrackInfo* vocal = nullptr; const TrackInfo* me = nullptr;
+    for (auto& t : tracks)
+    {
+        if (t.slot == slot) me = &t;
+        else if (t.role == Role::Vocal && t.hasBands && (vocal == nullptr || t.levelLufs > vocal->levelLufs)) vocal = &t;
+    }
+    if (vocal == nullptr) { none.text = "There is no lead vocal in this session yet (a track with the plugin on it, set to Lead vocal, that has played). Vocal space needs one to follow."; return none; }
+    BandArray mine {};
+    if (me != nullptr && me->hasBands) mine = me->bandsDb;
+    else if (! fillBandsDb (mine)) { none.text = "This track has not played yet. Play the song with the vocal in it and try again."; return none; }
+    return planVocalRoom (vocal->bandsDb, mine);
+}
+
+juce::String MUProcessor::fitVocalSpace()
+{
+    const auto role = getEffectiveRole();
+    if (role == Role::Vocal || role == Role::BackingVocal || role == Role::Master)
+        return "Vocal space is for the tracks around the vocal (the beat, instruments, FX), not for a vocal or the master.";
+    const auto plan = planVocalSpace();
+    if (! plan.found) return plan.text;
+    for (int i = 0; i < 3; ++i)
+    {
+        setParam (ids::vsFreq (i), plan.freqHz[(size_t) i]);
+        setParam (ids::vsCut (i), i < plan.count ? plan.cutDb[(size_t) i] : 0.0f);
+        setParam (ids::vsQ (i), plan.q[(size_t) i]);
+    }
+    setParam (ids::vsAmount, 100.0f);
+    setParam (ids::vsEnabled, 1.0f);
+    return "Room made for the vocal at " + plan.text + ", only while the vocal is singing. Amount (Tone tab) scales all of it; Centre only leaves the sides of the track alone.";
 }
 
 // ---- AI tutor ------------------------------------------------------------------------------------
@@ -1746,7 +1815,8 @@ std::vector<juce::String> MUProcessor::scopeParams (const juce::String& scope) c
                  ids::dsOn, ids::dsFreq, ids::dsThreshold, ids::dsRange, ids::dsMode };
     if (scope == "tone")
         return { ids::smOn, ids::smDepth, ids::smFocus, ids::smSpeed, ids::satOn, ids::satDrive, ids::satMix, ids::satType,
-                 ids::riderOn, ids::riderTarget, ids::riderRange, ids::riderSpeed, ids::stWidth, ids::stMonoBass, ids::stMonoFreq, ids::vsEnabled, ids::vsAmount, ids::vsSpeed };
+                 ids::riderOn, ids::riderTarget, ids::riderRange, ids::riderSpeed, ids::stWidth, ids::stMonoBass, ids::stMonoFreq, ids::vsEnabled, ids::vsAmount, ids::vsSpeed,
+                 ids::vsFreq (0), ids::vsFreq (1), ids::vsFreq (2), ids::vsCut (0), ids::vsCut (1), ids::vsCut (2), ids::vsQ (0), ids::vsQ (1), ids::vsQ (2), ids::vsCentre };
     if (scope == "master")
         return { ids::masterMode, ids::targetLufs, ids::targetTruePeak, ids::maxGain, ids::peakGuard };
     for (auto& preset : modulePresets())

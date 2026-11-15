@@ -40,6 +40,14 @@ private:
     IconButton deltaButton { "phase", "eq.delta" }, resetButton { "reset_settings", "eq.reset" };
     juce::ToggleButton showInput;
     juce::TextButton analyseButton, applyAllButton, captureButton, matchButton;
+    // what the track is (so the analysis knows what to look for) and which of the three EQ jobs to do
+    Segmented sourceGroup { juce::StringArray { "Track kind", "Vocal", "Instrument" } };
+    juce::ComboBox sourceBox;
+    std::array<juce::TextButton, 3> passButtons;
+    juce::Rectangle<int> sourceNoteArea;
+    int shownSource = -1, shownPasses = -1;
+    void syncSource();
+    void chooseGroup (int group);
     juce::Slider matchAmount;
     juce::String brainStatus, referenceText;
     juce::Rectangle<int> brainArea, statusArea, referenceArea, toolbarArea;
