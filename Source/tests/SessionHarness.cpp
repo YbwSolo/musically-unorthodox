@@ -109,7 +109,7 @@ int main()
     runSeconds (8.0);
     const float vL = vocal->getLoudness().getIntegrated(), bL = beat->getLoudness().getIntegrated(), mixL = master->getMixMeter().getIntegrated();
     std::printf ("   after: vocal %.2f  beat %.2f  808 %.2f  mix %.2f LUFS, mix peak %.2f dBTP\n", vL, bL, bass->getLoudness().getIntegrated(), mixL, master->getMixMeter().getTruePeakHold());
-    check (std::abs ((bL - vL) - (-1.5f)) < 1.0f, "Beat sits about 1.5 LU under the vocal", juce::String (bL - vL, 2));
+    check (std::abs ((bL - vL) - 2.9f) < 1.0f, "After balancing, the beat sits about 2.9 LU over the vocal, as on the reference records", juce::String (bL - vL, 2));
     check (mixL <= -18.0f + 1.0f && mixL > -30.0f, "Mix lands at or just under -18 LUFS", juce::String (mixL, 2));
     check (master->getMixMeter().getTruePeakHold() <= -6.0f + 1.0f, "Mix keeps its headroom", juce::String (master->getMixMeter().getTruePeakHold(), 2) + " dBTP");
 
@@ -449,7 +449,7 @@ int main()
             juce::File (dumpTo).getSiblingFile ("sample_tutor_facts.txt").replaceWithText (lines);
         }
         const auto balanceNotes = tutor::notesFor ("Is my mix balanced right now?", facts);
-        check (facts["balance"].contains ("should come") && balanceNotes.contains (facts["balance"]) && ! balanceNotes.containsChar ('{')
+        check ((facts["balance"].contains ("should come") || facts["balance"].contains ("balanced")) && balanceNotes.contains (facts["balance"]) && ! balanceNotes.containsChar ('{')
                && facts["mixloudness"].contains ("LUFS") && facts["width"].contains ("correlation"),
                "Measurements are turned into finished sentences for the tutor", facts["balance"]);
         check (trackNotes.contains ("Lead vocal") && trackNotes.contains ("LUFS") && trackNotes.contains ("THE WHOLE SESSION") && trackNotes.contains ("tracks have the plugin"),
@@ -1250,6 +1250,44 @@ int main()
         presetRoot.deleteRecursively();
         vocal->applyChainPreset (findChainPreset ("Clean slate"));
         vocal->setParam (ids::role, (float) Role::Auto);
+    }
+
+    // ---- Finish: a dry vocal in the middle is given the space the reference records have, and says what it did
+    {
+        using Stage = MUProcessor::FinishStage;
+        check (bass->startFinish().containsIgnoreCase ("works on") && bass->getFinishStage() == Stage::Idle, "Finish only runs on a vocal or a two-track beat");
+        vocal->setParam (ids::role, (float) Role::Vocal);
+        vocal->setParam (ids::rvOn, 0.0f); vocal->setParam (ids::dlOn, 0.0f); vocal->setParam (ids::tameOn, 0.0f);
+        runSeconds (1.0);
+        const float vocalTrim = vocal->getTrimDb();
+        vocal->startFinish();
+        check (vocal->getFinishStage() == Stage::Listening, "Finish starts by listening");
+        runSeconds (3.0);
+        vocal->cancelFinish();
+        check (vocal->getFinishStage() == Stage::Idle && vocal->getParam (ids::rvOn) < 0.5f && vocal->getParam (ids::dlOn) < 0.5f, "Stopping Finish while it listens changes nothing");
+        vocal->startFinish();
+        for (int i = 0; i < 60 && vocal->getFinishStage() != Stage::Done; ++i) runSeconds (2.0);
+        const auto text = vocal->getFinishText();
+        check (vocal->getFinishStage() == Stage::Done && text.contains ("Sides of the vocal") && text.contains ("Changed:"), "Finish listens, changes, listens again and reports", text.replace ("\n", " | "));
+        check (vocal->getParam (ids::rvOn) > 0.5f && vocal->getParam (ids::dlOn) > 0.5f && vocal->getParam (ids::dlMix) <= 18.01f && vocal->getParam (ids::rvMix) <= 24.01f,
+               "A dry vocal in the middle gets a short reverb and a quiet echo at the sides, inside their limits",
+               "reverb " + juce::String (vocal->getParam (ids::rvMix), 1) + " %, echo " + juce::String (vocal->getParam (ids::dlMix), 1) + " %");
+        check (std::abs (vocal->getTrimDb() - vocalTrim) <= 6.01f, "Finish never moves the vocal's level by more than 6 dB", juce::String (vocal->getTrimDb() - vocalTrim, 1) + " dB");
+        // a second press on a vocal that now has its space leaves the space alone
+        const float echoWas = vocal->getParam (ids::dlMix), verbWas = vocal->getParam (ids::rvMix);
+        vocal->startFinish();
+        for (int i = 0; i < 60 && vocal->getFinishStage() != Stage::Done; ++i) runSeconds (2.0);
+        check (std::abs (vocal->getParam (ids::dlMix) - echoWas) < 0.01f && std::abs (vocal->getParam (ids::rvMix) - verbWas) < 0.01f, "Pressed again on a finished vocal, Finish leaves its space as it is",
+               vocal->getFinishText().replace ("\n", " | "));
+        // the beat: checked against the records' instrumentals
+        beat->startFinish();
+        for (int i = 0; i < 60 && beat->getFinishStage() != Stage::Done; ++i) runSeconds (2.0);
+        check (beat->getFinishStage() == Stage::Done && beat->getFinishText().contains ("800 Hz"), "Finish on a two-track beat reports its width against the records", beat->getFinishText().replace ("\n", " | "));
+        vocal->setParam (ids::rvOn, 0.0f); vocal->setParam (ids::dlOn, 0.0f); vocal->setParam (ids::tameOn, 0.0f); vocal->setParam (ids::dsOn, 0.0f);
+        beat->setParam (ids::stWidth, 100.0f); beat->setParam (ids::stMonoBass, 0.0f);
+        vocal->setTrimDb (vocalTrim);
+        vocal->setParam (ids::role, (float) Role::Auto);
+        runSeconds (2.0);
     }
 
     // ---- the mastering assistant, on the master of this session

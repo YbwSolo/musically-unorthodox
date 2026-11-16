@@ -134,6 +134,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     p.push_back (std::make_unique<APC> (id (ids::satType), "Saturation type", juce::StringArray { "Tape", "Tube", "Warm" }, 0));
 
     // ---- rider
+    p.push_back (std::make_unique<APB> (id (ids::tameOn), "Syllable peaks", false));
+    p.push_back (std::make_unique<APF> (id (ids::tameAmount), "Syllable peaks amount", range (0.0f, 100.0f, 0.1f), 40.0f, pctAttr()));
     p.push_back (std::make_unique<APB> (id (ids::riderOn), "Rider", false));
     p.push_back (std::make_unique<APF> (id (ids::riderTarget), "Rider target", range (-40.0f, -6.0f, 0.1f), -20.0f,
         juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return juce::String (v, 1) + " dB"; })));

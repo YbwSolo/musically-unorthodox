@@ -10,6 +10,7 @@ TonePage::TonePage (MUProcessor& p, std::function<void (const juce::String&)> st
       smDepth (p, ids::smDepth, "Depth"), smFocus (p, ids::smFocus, { "Full range", "Low mids", "Harsh highs" }), smSpeed (p, ids::smSpeed, { "Slow", "Normal", "Fast" }),
       satType (p, ids::satType, { "Tape", "Tube", "Warm" }), satDrive (p, ids::satDrive, "Drive"), satMix (p, ids::satMix, "Mix"),
       riderTarget (p, ids::riderTarget, "Target"), riderRange (p, ids::riderRange, "Range"), riderSpeed (p, ids::riderSpeed, { "Slow", "Normal", "Fast" }),
+      tameAmount (p, ids::tameAmount, "Peaks"), tameOn (p, ids::tameOn, "Syllable peaks", "switch", "tame"),
       vsAmount (p, ids::vsAmount, "Amount"), vsSpeed (p, ids::vsSpeed, { "Smooth", "Normal", "Fast" }), vsCentre (p, ids::vsCentre, "Centre only", "switch", "vsCentre"),
       stWidth (p, ids::stWidth, "Width"), stMonoFreq (p, ids::stMonoFreq, "Mono below"), stMonoBass (p, ids::stMonoBass, "Mono bass"),
       outGain (p, ids::outputGain, "Output"), trim (p, ids::trim, "Balance trim")
@@ -18,7 +19,7 @@ TonePage::TonePage (MUProcessor& p, std::function<void (const juce::String&)> st
     addAndMakeVisible (presets);
     smooth.setPower (p, ids::smOn); sat.setPower (p, ids::satOn); rider.setPower (p, ids::riderOn); space.setPower (p, ids::vsEnabled);
     for (auto* c : std::initializer_list<juce::Component*> { &smooth, &sat, &rider, &space, &stereo, &output, &smDepth, &smFocus, &smSpeed, &smDelta, &satType, &satDrive, &satMix,
-                                                              &riderTarget, &riderRange, &riderSpeed, &vsAmount, &vsSpeed, &vsFit, &vsCentre, &stWidth, &stMonoFreq, &stMonoBass, &outGain, &trim })
+                                                              &riderTarget, &riderRange, &riderSpeed, &tameAmount, &tameOn, &vsAmount, &vsSpeed, &vsFit, &vsCentre, &stWidth, &stMonoFreq, &stMonoBass, &outGain, &trim })
         addAndMakeVisible (c);
     styleButton (vsFit, "Fit to the vocal", false, "vsFit");
     vsFit.onClick = [this] { setStatus (proc.fitVocalSpace()); };
@@ -282,9 +283,11 @@ void TonePage::resized()
     auto ri = inner (riderArea);
     riderWell = ri.removeFromTop (40);
     ri.removeFromTop (8);
+    tameOn.setBounds (ri.removeFromBottom (22));
+    ri.removeFromBottom (6);
     riderSpeed.setBounds (ri.removeFromBottom (26));
     ri.removeFromBottom (6);
-    layoutRow (ri, { &riderTarget, &riderRange }, 6);
+    layoutRow (ri, { &riderTarget, &riderRange, &tameAmount }, 6);
 
     auto si = inner (spaceArea);
     spaceWell = si.removeFromTop (40);

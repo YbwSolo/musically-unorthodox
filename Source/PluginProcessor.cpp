@@ -26,6 +26,7 @@ MUProcessor::MUProcessor()
     pSmOn = p (ids::smOn); pSmDepth = p (ids::smDepth); pSmFocus = p (ids::smFocus); pSmSpeed = p (ids::smSpeed);
     pSatOn = p (ids::satOn); pSatDrive = p (ids::satDrive); pSatMix = p (ids::satMix); pSatType = p (ids::satType);
     pRiderOn = p (ids::riderOn); pRiderTarget = p (ids::riderTarget); pRiderRange = p (ids::riderRange); pRiderSpeed = p (ids::riderSpeed);
+    pTameOn = p (ids::tameOn); pTameAmount = p (ids::tameAmount);
     pMbOn = p (ids::mbOn); pMbCrossLow = p (ids::mbCrossLow); pMbCrossHigh = p (ids::mbCrossHigh);
     pClipOn = p (ids::clipOn); pClipAmount = p (ids::clipAmount); pClipSoft = p (ids::clipSoft);
     for (int b = 0; b < 3; ++b)
@@ -121,6 +122,8 @@ void MUProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     smoother.prepare (sampleRate, samplesPerBlock, ch);
     saturator.prepare (sampleRate, samplesPerBlock, ch);
     rider.prepare (sampleRate, samplesPerBlock, ch);
+    tamer.prepare (sampleRate);
+    vocalProbe.prepare (sampleRate);
     vocalSpace.prepare (sampleRate, samplesPerBlock, ch);
     stereo.prepare (sampleRate, samplesPerBlock, ch);
     maximizer.prepare (sampleRate, samplesPerBlock, ch);
@@ -201,6 +204,8 @@ void MUProcessor::pullParameters()
     RiderSettings r;
     r.enabled = pRiderOn->load() > 0.5f; r.targetDb = pRiderTarget->load(); r.rangeDb = pRiderRange->load(); r.speed = (int) pRiderSpeed->load();
     rider.setSettings (r);
+    tamer.setEnabled (pTameOn->load() > 0.5f && ! isMasterInstance());
+    tamer.setAmount (pTameAmount->load() * 0.01f);
 
     VocalSpace::Settings v;
     const auto role = getEffectiveRole();
@@ -443,6 +448,7 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         if (! deltaOnly)
         {
             rider.process (buffer);
+            tamer.process (buffer);                      // the loudest syllables, after the level has been evened out
             vocalSpace.setKeyLevel (bus->getVocalKeyLevel());
             vocalSpace.process (buffer);
             // The doubler and the harmony and shift voices all need to hear the clean, single voice to follow its
@@ -485,6 +491,7 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
                 if (wantOrder != fxOrderNow && fxOrderGain <= 0.0f) { fxOrderNow = wantOrder; fxOrderList = fxorder::decode (wantOrder); }
             }
             stereo.process (buffer);
+            vocalProbe.process (buffer);                 // only while Finish is listening
             outGain.setTargetValue (juce::Decibels::decibelsToGain (pOut->load()));
             applySmoothedGain (outGain);
         }
@@ -592,6 +599,7 @@ void MUProcessor::timerCallback()
     mixMeter.readIntegrated();
     pumpAnalysis();
     masterTick();
+    finishTick();
     noteEqForMeasurement();
     updateLatency();
     lufsHistory.push (loudness.getShortTerm());
@@ -2313,6 +2321,216 @@ juce::String MUProcessor::undoMaster()
     masterTrimDb.store (0.0f); autoLevelHeld.store (false); masterLevelSet.store (false);
     loudness.resetIntegrated(); loudness.resetPeakHold();
     return "Back to how everything was before Analyse and master.";
+}
+
+// ---- Finish ----------------------------------------------------------------------------------------------
+// One button for a vocal or a two-track beat. It listens to twelve seconds of the track as it leaves the plugin,
+// compares what it hears with what was measured on the reference records (analysis/VocalReference.h), changes
+// only what is outside what those records do, listens again, corrects once or twice, and says what it did.
+// Everything it sets is an ordinary control. It is rules worked from measurements, not a trained model.
+namespace
+{
+    juce::String oneDp (float v) { return juce::String (v, 1); }
+}
+
+// Sets the de-esser when the loudest esses stand further above the vowels than on any of the records. The threshold
+// comes from the loudest ess the de-esser itself has heard, so it is in the de-esser's own units.
+bool MUProcessor::fitDeEsserTo (float essDb)
+{
+    const auto ref = vocalReference();
+    const float top = deEsser.getLoudestEssDb();
+    if (essDb <= ref.essMost + 0.5f || top < -90.0f) return false;
+    const float need = juce::jlimit (2.0f, 6.0f, essDb - ref.essDb);
+    if (getParam (ids::dsOn) < 0.5f) setParam (ids::dsFreq, 6500.0f);
+    setParam (ids::dsRange, juce::jlimit (3.0f, 8.0f, need + 1.0f));
+    setParam (ids::dsThreshold, juce::jlimit (-60.0f, 0.0f, top - 3.0f - need / 1.5f));
+    setParam (ids::dsOn, 1.0f);
+    return true;
+}
+
+juce::String MUProcessor::startFinish()
+{
+    const Role role = getEffectiveRole();
+    const bool voice = role == Role::Vocal || role == Role::BackingVocal;
+    if (! voice && role != Role::Beat)
+        return "Finish works on a lead or backing vocal and on a two-track beat. This track is set as " + roleNames()[(int) role] + ".";
+    finishBeat = ! voice; finishDid.clear(); finishSetReverb = finishSetTamer = finishSetWidth = finishSetEss = finishReverbWasOff = finishSetDelay = false; finishRound = 0;
+    deEsser.resetLoudestEss();
+    vocalProbe.start();
+    finishStage.store ((int) FinishStage::Listening);
+    return voice ? "Listening. Keep the song playing where the vocal is going: twelve seconds of it are needed."
+                 : "Listening. Keep the song playing: twelve seconds of the beat are needed.";
+}
+
+void MUProcessor::cancelFinish()
+{
+    vocalProbe.stop();
+    finishStage.store ((int) FinishStage::Idle);
+}
+
+void MUProcessor::finishTick()
+{
+    const auto stage = getFinishStage();
+    if (stage == FinishStage::Listening)
+    {
+        const auto f = vocalProbe.read();
+        if (f.seconds < kFinishListenSeconds) return;
+        finishBefore = f;
+        if (finishBeat) applyBeatFinish (f); else applyVocalFinish (f);
+        vocalProbe.start();
+        finishStage.store ((int) FinishStage::Checking);
+    }
+    else if (stage == FinishStage::Checking)
+    {
+        const auto f = vocalProbe.read();
+        if (f.seconds < kFinishCheckSeconds) return;
+        endFinish (f);
+    }
+}
+
+void MUProcessor::applyVocalFinish (const VocalFacts& f)
+{
+    const auto ref = vocalReference();
+    // 1. The loudest syllables. (Ten or twelve seconds hold few of them, so a short listen reads a little low:
+    //    it acts from just above the middle one of the records, gently, and the second listen decides the rest.)
+    if (f.peakSpreadDb > ref.peakSpreadDb + 0.4f)
+    {
+        setParam (ids::tameAmount, 100.0f * juce::jlimit (0.15f, 0.9f, (f.peakSpreadDb - ref.peakSpreadDb) / 5.5f));
+        setParam (ids::tameOn, 1.0f);
+        finishSetTamer = true;
+    }
+    // 2. Esses that stand out more than on any of the records.
+    finishSetEss = fitDeEsserTo (f.essDb);
+    // 3. Space and width: a vocal with less at its sides than any of the records is dry and in the middle. On the
+    //    records what is left a quarter to half a second after a phrase is only about 21 dB under the phrase,
+    //    which a short reverb cannot do by itself: that is an echo as well. So the space is a short reverb, as
+    //    the reverb advice chooses it, plus a quiet quarter-note echo out at the sides, and it is the echo that is
+    //    turned up or down to reach the width of the records.
+    if (f.sideDb < ref.sideNarrowest - 2.0f)
+    {
+        if (getParam (ids::rvOn) < 0.5f)
+        {
+            fitReverb();
+            setParam (ids::rvDuck, juce::jmin (getParam (ids::rvDuck), 50.0f));
+            finishReverbWasOff = getParam (ids::rvOn) > 0.5f;
+        }
+        if (getParam (ids::dlOn) < 0.5f)
+        {
+            setParam (ids::dlSync, 1.0f); setParam (ids::dlNote, 1.0f); setParam (ids::dlPattern, 0.0f); setParam (ids::dlStyle, 0.0f);
+            setParam (ids::dlFeedback, 22.0f); setParam (ids::dlWidth, 100.0f); setParam (ids::dlDuck, 55.0f); setParam (ids::dlTone, 40.0f);
+            setParam (ids::dlLowCut, 250.0f); setParam (ids::dlMix, 8.0f);
+            setParam (ids::dlOn, 1.0f);
+            finishSetDelay = true;
+        }
+        finishSetReverb = true;
+        if (! isStereoOut()) finishDid.add ("This track is mono in the host, so the echo and the reverb cannot reach the sides. Put the plugin on a stereo track for the width.");
+    }
+    // 4. The level against the rest of the song, for a lead vocal with other tracks to measure it against.
+    if (getEffectiveRole() == Role::Vocal)
+    {
+        float mine = -100.0f; double rest = 0.0; int others = 0;
+        for (auto& t : bus->collectTracks())
+        {
+            if (! t.active || t.levelLufs < -60.0f) continue;
+            if (t.slot == slot) { mine = t.levelLufs; continue; }
+            if (t.role == Role::Master || t.role == Role::Vocal || t.role == Role::BackingVocal) continue;
+            rest += std::pow (10.0, 0.1 * (double) t.levelLufs); ++others;
+        }
+        if (others > 0 && mine > -60.0f)
+        {
+            const float over = (float) (10.0 * std::log10 (rest)) - mine;
+            if (! acceptsBalance())
+                finishDid.add ("Level: the rest of the song is " + oneDp (over) + " LU over the vocal (" + oneDp (ref.beatOverVocalLeast) + " to " + oneDp (ref.beatOverVocalMost) + " on the records). This track is locked on the Mix tab, so its level was left.");
+            else if (over < ref.beatOverVocalLeast - 0.3f || over > ref.beatOverVocalMost + 0.3f)
+            {
+                const float move = juce::jlimit (-6.0f, 6.0f, over - ref.beatOverVocalLu);
+                setTrimDb (getTrimDb() + move);
+                finishDid.add ("Level: the rest of the song was " + oneDp (std::abs (over)) + (over >= 0.0f ? " LU over" : " LU under") + " the vocal (" + oneDp (ref.beatOverVocalLeast) + " to " + oneDp (ref.beatOverVocalMost)
+                               + " LU over on the records). The vocal was turned " + (move > 0.0f ? "up" : "down") + " " + oneDp (std::abs (move)) + " dB.");
+            }
+        }
+        else finishDid.add ("Level: no other track with the plugin on it was heard, so the vocal's level against the beat was not checked.");
+    }
+}
+
+void MUProcessor::applyBeatFinish (const VocalFacts& f)
+{
+    const auto ref = vocalReference();
+    if (! isStereoOut() || f.bandSideDb < -35.0f)
+        finishDid.add ("This beat is mono: there is nothing at its sides to turn up, and widening cannot invent it. Ask for the stereo bounce of the beat.");
+    else if (f.bandSideDb < ref.beatBandSideNarrowest - 3.0f)
+    {
+        const float lift = juce::jmin (6.0f, ref.beatBandSideNarrowest - f.bandSideDb);
+        setParam (ids::stWidth, juce::jmax (getParam (ids::stWidth), juce::jlimit (100.0f, 200.0f, 100.0f * std::pow (10.0f, lift / 20.0f))));
+        setParam (ids::stMonoBass, 1.0f);
+        finishSetWidth = true;
+    }
+}
+
+void MUProcessor::endFinish (const VocalFacts& after)
+{
+    const auto ref = vocalReference();
+    // One or two corrections from what was heard after the change, then a second listen.
+    bool again = false;
+    if (! finishBeat)
+    {
+        if (! finishSetTamer && after.peakSpreadDb > ref.peakSpreadMost + 0.4f && getParam (ids::tameOn) < 0.5f) { setParam (ids::tameAmount, 30.0f); setParam (ids::tameOn, 1.0f); finishSetTamer = true; again = true; }
+        else if (finishSetTamer && after.peakSpreadDb > ref.peakSpreadMost + 0.4f && getParam (ids::tameAmount) < 99.0f) { setParam (ids::tameAmount, juce::jmin (100.0f, getParam (ids::tameAmount) + 20.0f)); again = true; }
+        else if (finishSetTamer && after.peakSpreadDb < ref.peakSpreadLeast - 0.4f && getParam (ids::tameAmount) > 12.0f) { setParam (ids::tameAmount, juce::jmax (10.0f, getParam (ids::tameAmount) - 15.0f)); again = true; }
+        // the space: towards the middle one of the records, not just inside their range
+        if (finishSetReverb && isStereoOut())
+        {
+            const float step = std::pow (10.0f, juce::jlimit (-6.0f, 6.0f, ref.sideDb - after.sideDb) / 20.0f);
+            const bool low = after.sideDb < ref.sideDb - 2.0f, high = after.sideDb > ref.sideDb + 3.0f;
+            const float echo = getParam (ids::dlMix), verb = getParam (ids::rvMix);
+            if (finishSetDelay && ((low && echo < 17.5f) || (high && echo > 3.0f))) { setParam (ids::dlMix, juce::jlimit (2.0f, 18.0f, echo * step)); again = true; }
+            else if ((low && verb < 23.5f) || (high && verb > 5.0f))                { setParam (ids::rvMix, juce::jlimit (4.0f, 24.0f, verb * step)); again = true; }
+        }
+        // holding the loud syllables leaves the esses standing higher against them: looked at again here
+        if (! finishSetEss && fitDeEsserTo (after.essDb)) { finishSetEss = true; again = true; }
+    }
+    else if (finishSetWidth && isStereoOut() && stereo.getCorrelation() < 0.2f && getParam (ids::stWidth) > 110.0f)
+    {
+        // wide enough that the two sides hardly agree: it would lose level in mono, so half of the widening is taken back
+        setParam (ids::stWidth, 100.0f + 0.5f * (getParam (ids::stWidth) - 100.0f)); again = true;
+    }
+    if (again && finishRound < 3)
+    {
+        ++finishRound;
+        vocalProbe.start();
+        return;                                   // still Checking: listen once more
+    }
+    vocalProbe.stop();
+
+    juce::StringArray text;
+    const auto& b = finishBefore;
+    auto side = [] (float db) { return db < -60.0f ? juce::String ("nothing at the sides") : juce::String (-db, 1) + " dB below the middle"; };
+    if (! finishBeat)
+    {
+        text.add ("Measured against the vocals of the five reference records, on " + juce::String (juce::roundToInt (b.seconds)) + " s of this vocal.");
+        text.add ("Loudest syllables above the usual level: " + oneDp (b.peakSpreadDb) + " dB, now " + oneDp (after.peakSpreadDb) + " (records " + oneDp (ref.peakSpreadLeast) + " to " + oneDp (ref.peakSpreadMost) + ").");
+        text.add ("Sides of the vocal: " + side (b.sideDb) + ", now " + side (after.sideDb) + " (records " + oneDp (-ref.sideWidest) + " to " + oneDp (-ref.sideNarrowest) + ").");
+        if (b.essDb > -99.0f && after.essDb > -99.0f)
+            text.add ("Loudest esses against the vowels: " + oneDp (b.essDb) + " dB, now " + oneDp (after.essDb) + " (records up to " + oneDp (ref.essMost) + ").");
+    }
+    else
+    {
+        text.add ("Measured against the instrumentals of the five reference records, on " + juce::String (juce::roundToInt (b.seconds)) + " s of this beat.");
+        text.add ("Sides between 800 Hz and 5 kHz: " + side (b.bandSideDb) + ", now " + side (after.bandSideDb) + " (records " + oneDp (-ref.beatBandSideDb) + ", the narrowest " + oneDp (-ref.beatBandSideNarrowest) + ").");
+        if (after.bandSideDb > -35.0f && after.bandSideDb < ref.beatBandSideNarrowest - 3.0f)
+            text.add ("It is still narrower than the records: a width control only turns up what is already at the sides. The rest is in how the beat was made.");
+    }
+    // what was set, as it stands now (the corrections included)
+    if (finishSetTamer) finishDid.insert (0, "Syllable peaks switched on at " + juce::String (juce::roundToInt (getParam (ids::tameAmount))) + " % (Tone tab, with the level rider).");
+    if (finishSetEss)   finishDid.add ("De-esser set to take up to " + oneDp (getParam (ids::dsRange)) + " dB off the loudest esses (Dynamics tab).");
+    if (finishSetReverb && finishReverbWasOff) finishDid.add ("Reverb switched on and fitted to this track, at " + juce::String (juce::roundToInt (getParam (ids::rvMix))) + " % (FX tab).");
+    else if (finishSetReverb && ! finishSetDelay) finishDid.add ("Reverb set to " + juce::String (juce::roundToInt (getParam (ids::rvMix))) + " % (FX tab).");
+    if (finishSetDelay) finishDid.add ("Quarter-note echo switched on out at the sides, at " + juce::String (juce::roundToInt (getParam (ids::dlMix))) + " % (FX tab).");
+    if (finishSetWidth) finishDid.add ("Width set to " + juce::String (juce::roundToInt (getParam (ids::stWidth))) + " % with the low end kept in the middle (Tone tab).");
+    if (finishDid.isEmpty()) text.add (finishBeat ? "Nothing was changed: this beat is already as wide as the records." : "Nothing was changed: this vocal is already inside what the records do.");
+    else { text.add ("Changed:"); for (auto& d : finishDid) text.add ("- " + d); }
+    apvts.state.setProperty ("finishText", text.joinIntoString ("\n"), nullptr);
+    finishStage.store ((int) FinishStage::Done);
 }
 
 // How much louder the master came out than the mix went in over the measurement that has just run: from the loud

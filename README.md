@@ -474,6 +474,70 @@ came out 2.4 LU under its target for that reason). It is corrected twice, after 
 Loading a reference **file** was tested on real FLAC and WAV files at 44.1 kHz for the first time (same
 figures as measuring the samples directly); MP3 and M4A still depend on the computer and are untested.
 
+### Finish, and the mix measured against the records' stems (build 23)
+
+The five reference records were split into vocals, bass, drums and music with a stem splitter (the four stems
+of each add back up to the full song with the difference 17 to 27 dB below it), and the stems were measured.
+The audio is not in this repository; the figures are in `Source/analysis/VocalReference.h`.
+
+| Measured on the records (middle of five, and range) | | What the plugin did before build 23 |
+|---|---|---|
+| Whole instrumental against the vocal, integrated loudness | 2.9 LU **over** (1.5 to 5.2) | balance target: two-track beat 1.5 LU *under* the vocal; the five test mixes came out with the vocal 0 to 6 LU over the beat |
+| 808 / bass stem against the vocal | level (1.9 under to 0.6 over) | target 2.5 under |
+| Drums against the vocal | 1.0 under (4.5 under to 4.1 over) | target 4.5 under |
+| Melody against the vocal | 5.9 under (8.7 to 2.0 under) | target 8 under |
+| Loudest syllables above the usual level of the voice | 5.0 dB (4.0 to 5.5) | 6.5 to 8.5 out of the vocal preset |
+| Sides of the vocal against its middle | 21.8 dB under (13.3 to 25.3) | nothing: the vocal presets leave the vocal dry and in the middle |
+| What is left 0.2 to 0.5 s after a phrase | about 21 dB under the phrase (13 to 27; rough) | nothing |
+| Instrumental's tone | sub 34 to 66 Hz 14 to 18 dB above its own 60 Hz to 9 kHz average | the beat target sat 9 to 15 dB lower there, so Analyse called such a beat bass-heavy |
+| Vocal's tone | within about 3 dB of the plugin's vocal target from 80 Hz to 12 kHz | the one reasoned target that was right |
+
+What changed:
+
+- **Balance targets** (Learn and balance, Balance now) are the measured ones: two-track beat +2.9 LU, 808 0,
+  drums -1, melody -6 against the lead vocal (kick, not measured by itself, -1). Songs keep the targets they
+  were saved with; the Settings panel still edits them.
+- **Syllable peaks** (Tone tab, with the level rider): a new processor that follows the usual level of the
+  voice by itself and briefly turns down what stands 2 to 3.5 dB or more above it, by 6 dB at most, with no
+  delay. It does nothing for the first half second of sound and follows a louder passage in about half a second.
+- **Finish this track** (Mix tab). On a vocal it listens to 12 s of singing as it leaves the plugin, and changes
+  only what is outside what the records do: Syllable peaks; the de-esser, with its threshold taken from the
+  loudest ess the de-esser itself heard (it now listens when switched off); a short reverb as the reverb advice
+  chooses it plus a quiet quarter-note echo out at the sides when the vocal is dry and in the middle (the
+  measured tail is too long for a short reverb alone, so it is taken to be an echo as well); and the vocal's
+  level against the rest of the song, by 6 dB at most, when it is outside the records' range. It then listens
+  again for 10 s, corrects up to three times (the echo first, then the reverb; echo at most 18 %, reverb 24 %),
+  and lists the figures before and after and every control it set. On a two-track beat it measures the sides
+  between 800 Hz and 5 kHz against the records' instrumentals (4.6 dB under the middle, the narrowest 8.1) and
+  widens a narrow one up to 200 % with the low end kept in the middle, or says that a mono beat is mono.
+- **The two-track beat's target tone** for EQ Analyse is the measured average of the records' instrumentals.
+- Rumble on a track, as on the master in build 22, now has to stand within 3 dB of the sub above it.
+
+The five studio sessions, same preset as before, then Finish on the vocal and on the beat (40 s each, measured
+independently of the plugin):
+
+| | Build 22 | Build 23 | Records |
+|---|---|---|---|
+| Vocal against the beat while it sings (LU) | 0.0, +2.6, +1.6, +6.0, +1.7 | -4.5, -2.2, -3.8, -2.9, -3.5 | -5.2 to -1.4 |
+| Loudest syllables above the usual level (dB) | 6.3, 6.5, 8.0, 7.4, 8.1 | 4.8, 4.8, 5.0, 4.9, 5.4 | 4.1 to 5.8 |
+| Sides of the vocal against its middle (dB) | none | -23.4, -23.1, -23.6, -23.9, -23.5 | -25.3 to -13.3 |
+| Whole mix, sides against the middle 800 Hz to 5 kHz (dB) | -15.1, -14.5, -18.7, mono, -24.1 | -12.8, -8.4, -12.8, -23.3, -13.8 | -10.4 to -7.0 |
+
+**Two things said about build 22 were wrong and are corrected here.** The comparison then took the vocal out of
+each test mix without lining it up first (it leads the mix by 246 samples), which left vocal in what was
+measured as "the beat". Measured properly: three of the five beats are as wide as the records' instrumentals
+(one is narrower and one is mono), so the width missing from those mixes was the dry, centred vocal sitting too
+loud, not the beats; and the vocals were 0 to 6 LU *over* their beats, not under. The build 22 statement that
+the mixes were narrower than the records as whole mixes stands.
+
+Limits. Stem splitters are not clean: reverb tails and the top of a vocal smear, and lead, doubles and ad-libs
+come out as one stem, so the vocal's width and tail are what all of those add up to, not the lead's alone. The
+space Finish adds is one way to reach those figures (a short reverb and a quarter-note echo), chosen by
+reasoning; on the records it may be doubles and ad-libs instead. The copies were cut off at 15.8 kHz. Five
+records, one family of genres. A 12 s listen holds few of the loudest syllables, so the first reading runs a
+little low and the second listen decides. Nobody has listened to any of it yet: every figure here is a
+measurement, and whether the echo and reverb sit right is a question for ears.
+
 ### Checked on real recordings (build 18): Tune
 
 Tune was reported as glitchy on real vocals. Three sung takes from the same sessions (a woman, two men, one of

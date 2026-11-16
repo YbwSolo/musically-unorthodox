@@ -1,4 +1,6 @@
 // Console test runner for the DSP and balance engine. Build target: MUTests.
+#include "../dsp/VocalProbe.h"
+#include "../dsp/PeakTamer.h"
 #include <juce_core/juce_core.h>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
@@ -236,22 +238,23 @@ int main()
         for (auto& m : plan.moves) { if (m.slot == 0) dVocal = m.deltaDb; if (m.slot == 1) dBeat = m.deltaDb; if (m.slot == 2) d808 = m.deltaDb; }
         check (dBeat < dVocal, "Beat pulled down relative to vocal", "vocal " + juce::String (dVocal, 1) + " beat " + juce::String (dBeat, 1));
         check (d808 > dBeat, "808 brought up relative to beat", juce::String (d808, 1));
-        // after the moves the relative spacing matches the role table: beat = vocal - 1.5, 808 = vocal - 2.5
-        check (near ((-14.0f + dBeat) - (-20.0f + dVocal), -1.5f, 0.05f), "Beat sits 1.5 LU under vocal");
-        check (near ((-24.0f + d808) - (-20.0f + dVocal), -2.5f, 0.05f), "808 sits 2.5 LU under vocal");
+        // after the moves the relative spacing matches the role table, which from build 23 is what was measured on the
+        // reference records: a two-track beat 2.9 LU over the vocal, an 808 level with it
+        check (near ((-14.0f + dBeat) - (-20.0f + dVocal), 2.9f, 0.05f), "A two-track beat sits 2.9 LU over the vocal, as on the reference records");
+        check (near ((-24.0f + d808) - (-20.0f + dVocal), 0.0f, 0.05f), "An 808 sits level with the vocal, as on the reference records");
         check (plan.projectedMasterLufs <= -18.0f + 0.3f, "Projected master at or under target", juce::String (plan.projectedMasterLufs, 2));
         check (plan.projectedMasterTruePeak <= -6.0f + 0.3f, "Projected true peak under ceiling", juce::String (plan.projectedMasterTruePeak, 2));
         check (plan.moves.size() == 3, "Master never gets a move");
         // A vocal whose own peaks would end up over the top of its channel: the whole song comes down to make room,
         // the balance between the tracks stays exactly the same, and nothing is asked to compress harder.
         auto spiky = tracks;
-        spiky[0].truePeakDb = 2.0f;                  // a vocal with 22 dB between its average and its peaks: over the top already
+        spiky[0].truePeakDb = 7.0f;                  // a vocal with 27 dB between its average and its peaks: over the top already
         const auto roomy = computeBalance (spiky, tg);
         float rVocal = 0, rBeat = 0;
         for (auto& m : roomy.moves) { if (m.slot == 0) rVocal = m.deltaDb; if (m.slot == 1) rBeat = m.deltaDb; }
-        check (roomy.headroomDb > 0.5f && spiky[0].truePeakDb + rVocal <= tg.trackTruePeak + 0.11f && near (rBeat - rVocal, dBeat - dVocal, 0.05f),
+        check (roomy.headroomDb > 0.5f && spiky[0].truePeakDb + rVocal <= tg.trackTruePeak + 0.11f && near (rBeat - rVocal, dBeat - dVocal, 0.11f),       // (moves are in steps of 0.1 dB)
                "A track whose peaks would clip its channel makes the balance turn the whole song down, not that track alone",
-               "song " + juce::String (roomy.headroomDb, 1) + " dB lower, vocal peaks at " + juce::String (spiky[0].truePeakDb + rVocal, 1) + " dB, balance unchanged");
+               "song " + juce::String (roomy.headroomDb, 1) + " dB lower, vocal peaks at " + juce::String (spiky[0].truePeakDb + rVocal, 1) + " dB (limit " + juce::String (tg.trackTruePeak, 1) + "), beat against vocal " + juce::String (rBeat - rVocal, 2) + " for " + juce::String (dBeat - dVocal, 2));
         check (near (plan.headroomDb, 0.0f, 0.01f), "With room on every channel nothing is turned down for headroom");
 
         // locked track stays put
@@ -849,7 +852,7 @@ int main()
 
         // room for the vocal: found where the beat covers it, not found where it does not
         auto vocalDb = roleTargetCurve (Role::Vocal), beatDb = roleTargetCurve (Role::Beat);
-        for (int b = 0; b < kAnalysisBands; ++b) { vocalDb[(size_t) b] -= 20.0f; beatDb[(size_t) b] -= 30.0f; }
+        for (int b = 0; b < kAnalysisBands; ++b) { vocalDb[(size_t) b] -= 20.0f; beatDb[(size_t) b] -= 35.0f; }
         check (! planVocalRoom (vocalDb, beatDb).found, "A beat that sits well under the vocal is left alone");
         for (int b = 0; b < kAnalysisBands; ++b) if (centres[(size_t) b] > 2000.0f && centres[(size_t) b] < 3500.0f) beatDb[(size_t) b] += 16.0f;
         const auto plan = planVocalRoom (vocalDb, beatDb);
@@ -1183,6 +1186,59 @@ int main()
         check (an.hasLongTerm(), "Analyser builds its long-term average");
         an.resetLongTerm();
         check (! an.hasLongTerm(), "Long-term average can be restarted");
+    }
+
+    // --- Syllable peaks and the vocal probe (Finish)
+    {
+        // a voice-like test signal: bursts of noise of uneven loudness, 200 ms on and 80 ms off, some of them 9 dB hotter
+        const int n = (int) fs * 12;
+        juce::AudioBuffer<float> words (2, n);
+        juce::Random rng (3);
+        const int on = (int) (fs * 0.2), off = (int) (fs * 0.08);
+        float lp = 0.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            const int k = i / (on + off), at = i % (on + off);
+            const float level = (k % 7 == 3) ? 0.28f : 0.1f;           // every seventh word jumps out by 9 dB
+            const float env = at < on ? juce::jmin (1.0f, (float) at / (0.01f * (float) fs), (float) (on - at) / (0.02f * (float) fs)) : 0.0f;
+            lp += 0.2f * ((rng.nextFloat() * 2.0f - 1.0f) - lp);
+            const float x = level * env * lp * 3.0f;
+            words.setSample (0, i, x); words.setSample (1, i, x);
+        }
+        auto measure = [&] (juce::AudioBuffer<float> buf, float amount, float* reduced = nullptr)
+        {
+            VocalProbe probe; probe.prepare (fs); probe.start();
+            PeakTamer tamer; tamer.prepare (fs); tamer.setEnabled (amount > 0.0f); tamer.setAmount (amount);
+            float worst = 0.0f;
+            for (int pos = 0; pos < buf.getNumSamples(); pos += 512)
+            {
+                juce::AudioBuffer<float> view (buf.getArrayOfWritePointers(), 2, pos, juce::jmin (512, buf.getNumSamples() - pos));
+                tamer.process (view); worst = juce::jmin (worst, tamer.getReductionDb());
+                probe.process (view);
+            }
+            if (reduced != nullptr) *reduced = worst;
+            return probe.read();
+        };
+        float reduced = 0.0f;
+        const auto raw = measure (words, 0.0f), held = measure (words, 0.6f, &reduced);
+        check (raw.enough() && raw.peakSpreadDb > 7.0f && raw.sideDb < -90.0f, "The vocal probe reads words that jump out, and a mono voice as having nothing at its sides",
+               juce::String (raw.peakSpreadDb, 1) + " dB spread, sides " + juce::String (raw.sideDb, 0) + " dB, " + juce::String (raw.seconds, 1) + " s");
+        check (held.peakSpreadDb < raw.peakSpreadDb - 2.0f && reduced >= -6.01f && reduced < -2.0f && near (held.typicalDb, raw.typicalDb, 1.0f),
+               "Syllable peaks holds the words that jump out, by 6 dB at the very most, and leaves the usual level of the voice where it was",
+               juce::String (raw.peakSpreadDb, 1) + " -> " + juce::String (held.peakSpreadDb, 1) + " dB, most " + juce::String (reduced, 1) + " dB, usual level " + juce::String (raw.typicalDb, 1) + " -> " + juce::String (held.typicalDb, 1));
+        // an even voice is left alone, and silence does nothing
+        juce::AudioBuffer<float> even (2, n);
+        for (int i = 0; i < n; ++i) { const float x = 0.1f * std::sin (juce::MathConstants<float>::twoPi * 220.0f * (float) i / (float) fs); even.setSample (0, i, x); even.setSample (1, i, x); }
+        float evenReduced = 0.0f; measure (even, 1.0f, &evenReduced);
+        juce::AudioBuffer<float> quiet (2, n); quiet.clear();
+        float quietReduced = 0.0f; const auto none = measure (quiet, 1.0f, &quietReduced);
+        check (evenReduced > -0.3f && quietReduced > -0.01f && ! none.enough(), "Syllable peaks leaves an even voice alone and does nothing in silence", juce::String (evenReduced, 2) + " / " + juce::String (quietReduced, 2) + " dB");
+        // width is read where it is: the same words with a decorrelated copy 20 dB down at the sides
+        auto wide = words;
+        juce::Random rng2 (8);
+        for (int i = 0; i < n; ++i) { const float s = 0.1f * words.getSample (0, juce::jmax (0, i - 1500)); wide.setSample (0, i, words.getSample (0, i) + s); wide.setSample (1, i, words.getSample (1, i) - s); }
+        const auto w = measure (wide, 0.0f);
+        check (near (w.sideDb, -20.0f, 1.5f), "The vocal probe reads how far the sides are below the middle", juce::String (w.sideDb, 1) + " dB");
     }
 
     // --- Notes are not resonances: a held note and its harmonics are found as the notes they are, and a

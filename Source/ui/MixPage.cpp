@@ -21,6 +21,12 @@ MixPage::MixPage (MUProcessor& p, std::function<void (const juce::String&)> stat
         proc.balanceNow();
         setStatus (plan.usable ? "Balanced. " + plan.summary.replace ("Balanced. ", "") : juce::String ("Nothing to balance yet. Play the song so every track can be measured."));
     };
+    styleButton (finishButton, "Finish this track", false, "mix.finish");
+    finishButton.onClick = [this]
+    {
+        if (proc.getFinishStage() == MUProcessor::FinishStage::Listening || proc.getFinishStage() == MUProcessor::FinishStage::Checking) { proc.cancelFinish(); setStatus ("Finish stopped. Nothing further was changed."); return; }
+        setStatus (proc.startFinish());
+    };
     styleButton (bounceButton, "Bounce check", false, "mix.check");
     bounceButton.onClick = [this]
     {
@@ -44,7 +50,7 @@ MixPage::MixPage (MUProcessor& p, std::function<void (const juce::String&)> stat
     keepBalanced.setToggleState (proc.getBus().isAutoBalance(), juce::dontSendNotification);
     keepBalanced.onClick = [this] { proc.setAutoBalanceMode (keepBalanced.getToggleState()); proc.getBus().setAutoBalance (keepBalanced.getToggleState(), proc.currentTargets()); };
     setHelp (keepBalanced, "mix.auto");
-    for (auto* c : std::initializer_list<juce::Component*> { &learnButton, &balanceButton, &keepBalanced, &bounceButton, &keyButton }) addAndMakeVisible (c);
+    for (auto* c : std::initializer_list<juce::Component*> { &learnButton, &balanceButton, &keepBalanced, &bounceButton, &keyButton, &finishButton }) addAndMakeVisible (c);
     for (size_t i = 0; i < fixButtons.size(); ++i)
     {
         styleButton (fixButtons[i], "Fix", true, "mix.collisions");
@@ -119,6 +125,15 @@ void MixPage::refreshData()
 
     for (size_t i = 0; i < fixButtons.size(); ++i) fixButtons[i].setVisible (i < fixes.size());
     learnButton.setButtonText (learn.active ? "Stop listening" : "Learn and balance");
+    {
+        const auto stage = proc.getFinishStage();
+        const int heard = (int) proc.finishSeconds();
+        finishButton.setButtonText (stage == MUProcessor::FinishStage::Listening ? "Listening " + juce::String (juce::jmin (heard, (int) MUProcessor::kFinishListenSeconds)) + " / " + juce::String ((int) MUProcessor::kFinishListenSeconds) + " s (stop)"
+                                    : stage == MUProcessor::FinishStage::Checking ? "Checking " + juce::String (juce::jmin (heard, (int) MUProcessor::kFinishCheckSeconds)) + " / " + juce::String ((int) MUProcessor::kFinishCheckSeconds) + " s (stop)"
+                                    : juce::String ("Finish this track"));
+        if (stage == MUProcessor::FinishStage::Done && ! finishShown) { finishShown = true; setStatus ("Finished. What was measured and what was changed is listed on the Mix tab."); }
+        if (stage != MUProcessor::FinishStage::Done) finishShown = false;
+    }
     resized();
 }
 
@@ -469,8 +484,9 @@ void MixPage::paint (juce::Graphics& g)
     auto strip = a.removeFromTop (4).toFloat();
     g.setColour (control); g.fillRoundedRectangle (strip, 2.0f);
     if (learnProgress > 0.004f) { g.setColour (yellow); g.fillRoundedRectangle (strip.withWidth (strip.getWidth() * learnProgress), 2.0f); }
-    a.removeFromTop (8 + 28 + 10 + 22 + 10);
-    juce::String msg = learn.message;
+    a.removeFromTop (8 + 28 + 10 + 22 + 8 + 28 + 10);
+    // what Finish measured and changed stays up until the next Learn and balance
+    juce::String msg = learn.active ? learn.message : (proc.getFinishStage() == MUProcessor::FinishStage::Done ? proc.getFinishText() : learn.message);
     if (msg.isEmpty()) msg = plan.usable ? plan.summary : juce::String ("Play the loudest part of the song, then press Learn and balance. Every track is measured for 20 seconds and set to the level its role needs.");
     drawWrapped (g, msg, a.toFloat(), body (12.0f), textDim);
 
@@ -496,6 +512,8 @@ void MixPage::resized()
     bounceButton.setBounds (pair);
     a.removeFromTop (10);
     keepBalanced.setBounds (a.removeFromTop (22));
+    a.removeFromTop (8);
+    finishButton.setBounds (a.removeFromTop (28));
 
     const int collisionH = 38 + juce::jmax (1, (int) fixes.size()) * 34 + 10;
     collisionArea = r.removeFromBottom (collisionH);

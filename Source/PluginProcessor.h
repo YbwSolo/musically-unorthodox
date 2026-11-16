@@ -13,6 +13,9 @@
 #include "dsp/DeEsser.h"
 #include "dsp/Smoother.h"
 #include "dsp/Saturator.h"
+#include "dsp/PeakTamer.h"
+#include "dsp/VocalProbe.h"
+#include "analysis/VocalReference.h"
 #include "dsp/Rider.h"
 #include "dsp/StereoTool.h"
 #include "dsp/Maximizer.h"
@@ -280,6 +283,16 @@ public:
 
     // ---- Mastering assistant (master instance). One pass listens to the mix as it arrives; the engine then
     // decides which processors this song needs and sets them; a second pass measures the result.
+    // ---- Finish: one button that brings a vocal, or a two-track beat, to what was measured on the reference records
+    enum class FinishStage { Idle = 0, Listening, Checking, Done };
+    juce::String startFinish();
+    void cancelFinish();
+    FinishStage getFinishStage() const { return (FinishStage) finishStage.load(); }
+    float finishSeconds() const { return vocalProbe.read().seconds; }        // of the listening or the check in progress
+    static constexpr float kFinishListenSeconds = 12.0f, kFinishCheckSeconds = 10.0f;
+    juce::String getFinishText() const { return apvts.state.getProperty ("finishText", juce::String()).toString(); }
+    PeakTamer& getTamer() { return tamer; }
+
     enum class MasterStage { Idle = 0, Listening, Settling, Checking, Done };
     static constexpr float kMasterMinSeconds = 20.0f;         // the least a decision is made from
     static constexpr float kMasterCheckSeconds = 30.0f;       // how much of the master is measured for the report
@@ -358,6 +371,8 @@ private:
     Smoother smoother;
     Saturator saturator;
     Rider rider;
+    PeakTamer tamer;                              // holds the loudest syllables (tracks only)
+    VocalProbe vocalProbe;                        // what Finish measures a track's output by
     VocalSpace vocalSpace;
     StereoTool stereo;
     Maximizer maximizer;
@@ -381,6 +396,16 @@ private:
     void applyMasterPlan (const MasterPlan& plan);
     void storeMasterText();
     void masterTick();
+    void finishTick();
+    void applyVocalFinish (const VocalFacts& heard);
+    void applyBeatFinish (const VocalFacts& heard);
+    void endFinish (const VocalFacts& after);
+    std::atomic<int> finishStage { 0 };
+    VocalFacts finishBefore;
+    juce::StringArray finishDid;                  // what Finish changed, in sentences
+    bool finishBeat = false, finishSetReverb = false, finishSetTamer = false, finishSetWidth = false, finishSetEss = false, finishReverbWasOff = false, finishSetDelay = false;
+    bool fitDeEsserTo (float essDb);
+    int finishRound = 0;
     float masterGainHeard() const;
     Tuner tuner;
     Doubler doubler;
@@ -452,6 +477,7 @@ private:
     AF pSmOn = nullptr, pSmDepth = nullptr, pSmFocus = nullptr, pSmSpeed = nullptr;
     AF pSatOn = nullptr, pSatDrive = nullptr, pSatMix = nullptr, pSatType = nullptr;
     AF pRiderOn = nullptr, pRiderTarget = nullptr, pRiderRange = nullptr, pRiderSpeed = nullptr;
+    AF pTameOn = nullptr, pTameAmount = nullptr;
     AF pMbOn = nullptr, pMbCrossLow = nullptr, pMbCrossHigh = nullptr, pClipOn = nullptr, pClipAmount = nullptr, pClipSoft = nullptr;
     std::array<AF, 3> pMbBandOn {}, pMbThr {}, pMbRatio {}, pMbAtt {}, pMbRel {}, pMbGain {};
     AF pVsOn = nullptr, pVsAmount = nullptr, pVsSpeed = nullptr, pVsCentre = nullptr;

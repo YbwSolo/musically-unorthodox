@@ -47,13 +47,26 @@ void DeEsser::process (juce::AudioBuffer<float>& buffer) noexcept
     const int n = buffer.getNumSamples();
     const int ch = juce::jmin (channels, buffer.getNumChannels());
     if (n == 0 || ch == 0) return;
-    if (! settings.enabled) { gainDb = 0.0f; grMeter.store (0.0f, std::memory_order_relaxed); return; }
+    if (! settings.enabled)
+    {
+        // off: nothing is changed, but the esses are still listened for
+        float top = loudest.load (std::memory_order_relaxed);
+        for (int i = 0; i < n; ++i)
+        {
+            float det = 0.0f;
+            for (int c = 0; c < ch; ++c) det = juce::jmax (det, std::abs (detFilters[(size_t) c].run (buffer.getSample (c, i), detCoeffs)));
+            top = juce::jmax (top, det);
+        }
+        loudest.store (top, std::memory_order_relaxed);
+        gainDb = 0.0f; grMeter.store (0.0f, std::memory_order_relaxed); return;
+    }
 
     const float att = std::exp (-1.0f / (float) (fs * 0.0005));
     const float rel = std::exp (-1.0f / (float) (fs * 0.040));
     const float gAtt = std::exp (-1.0f / (float) (fs * 0.0008));
     const float gRel = std::exp (-1.0f / (float) (fs * 0.060));
     float minGain = 0.0f;
+    float top = loudest.load (std::memory_order_relaxed);
 
     for (int i = 0; i < n; ++i)
     {
@@ -61,6 +74,7 @@ void DeEsser::process (juce::AudioBuffer<float>& buffer) noexcept
         for (int c = 0; c < ch; ++c)
             det = juce::jmax (det, std::abs (detFilters[(size_t) c].run (buffer.getSample (c, i), detCoeffs)));
         envelope = det > envelope ? att * envelope + (1.0f - att) * det : rel * envelope + (1.0f - rel) * det;
+        if (det > top) top = det;
         const float lvl = juce::Decibels::gainToDecibels (envelope, -120.0f);
         const float over = lvl - settings.thresholdDb;
         const float target = over > 0.0f ? -juce::jmin (settings.rangeDb, over * 1.5f) : 0.0f;
@@ -83,5 +97,6 @@ void DeEsser::process (juce::AudioBuffer<float>& buffer) noexcept
         }
     }
     grMeter.store (minGain, std::memory_order_relaxed);
+    loudest.store (top, std::memory_order_relaxed);
 }
 }

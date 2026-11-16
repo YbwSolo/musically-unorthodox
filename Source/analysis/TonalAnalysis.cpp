@@ -146,7 +146,14 @@ BandArray roleTargetCurve (Role role)
             return curveFrom ({ { 50, -3 }, { 70, 0 }, { 100, -1 }, { 200, -4 }, { 500, -8 }, { 1000, -9 }, { 3000, -10 }, { 8000, -12 }, { 12000, -16 } });
         case Role::Melody: case Role::FX:
             return curveFrom ({ { 100, -10 }, { 200, -3 }, { 400, 0 }, { 1000, -2 }, { 2000, -5 }, { 4000, -9 }, { 8000, -14 }, { 12000, -19 } });
-        default:   // beat, master, anything full-range
+        // A two-track beat. From build 23 this is measured: the average tone of the instrumentals of the five
+        // reference records (each record with its vocal taken out by a stem splitter), lightly smoothed above
+        // 125 Hz, the two bands above 12 kHz continuing the slope because the copies were cut off at 15.8 kHz.
+        // The reasoned shape it replaces (the one below) sat 9 to 15 dB lower between 34 and 66 Hz and 2 to 5 dB
+        // higher from 500 Hz to 2 kHz, so a beat with the low end of a finished record was called bass-heavy.
+        case Role::Beat:
+            return BandArray { 8.3f, 8.1f, 15.8f, 17.8f, 16.7f, 14.4f, 11.5f, 10.4f, 8.7f, 7.1f, 5.2f, 3.1f, 1.5f, 0.7f, 0.1f, -0.8f, -1.9f, -3.5f, -4.7f, -5.6f, -6.5f, -6.1f, -5.4f, -5.6f, -6.0f, -5.5f, -5.1f, -6.3f, -8.6f, -10.5f, -12.0f, -13.5f };
+        default:   // master, anything full-range
             return curveFrom ({ { 35, -4 }, { 50, 0 }, { 100, 0 }, { 200, -2 }, { 500, -4 }, { 1000, -6 }, { 2000, -8 }, { 4000, -11 }, { 8000, -15 }, { 12000, -19 }, { 16000, -25 } });
     }
 }
@@ -613,7 +620,10 @@ std::vector<Suggestion> analyseToneOnce (const BandArray& m, Role role, EqSource
     else
     {
         const bool fullRange = role == Role::Beat || role == Role::Master || role == Role::Auto;
-        if (fullRange && meanOver (m, centres, 20.0f, 28.0f) > meanOver (m, centres, 45.0f, 110.0f) - 6.0f)
+        // (a strong 808 at 35 to 45 Hz also shows in the two lowest bands, a few dB under it: rumble is the bottom
+        // standing as high as the sub right above it, which none of the reference records does)
+        if (fullRange && meanOver (m, centres, 20.0f, 28.0f) > meanOver (m, centres, 45.0f, 110.0f) - 6.0f
+            && meanOver (m, centres, 20.0f, 28.0f) > meanOver (m, centres, 33.0f, 55.0f) - 3.0f)
             out.push_back (lowCut ("Sub rumble below 30 Hz",
                 "There is strong energy below 30 Hz that most systems cannot play. It uses up headroom and makes limiters work harder for nothing.",
                 28.0f, 1));

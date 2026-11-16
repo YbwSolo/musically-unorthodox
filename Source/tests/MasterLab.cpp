@@ -1,6 +1,8 @@
 // Runs a finished mix through a real master instance of the plugin and lets the mastering assistant do its job,
 // so the decisions and the result can be read and measured outside a host.
 //   MUMasterLab <mix.f32 stereo, 48 kHz> <outFolder> [style=0..5] [intensity=0..100] [ref=<reference.f32 stereo>]
+#include "../dsp/VocalProbe.h"
+#include "../dsp/PeakTamer.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_events/juce_events.h>
 #include <cstdio>
@@ -33,6 +35,26 @@ int main (int argc, char** argv)
     for (int i = 3; i < argc; ++i) { const juce::String a (argv[i]); opt.set (a.upToFirstOccurrenceOf ("=", false, false), a.fromFirstOccurrenceOf ("=", false, false)); }
     const juce::File folder (argv[2]); folder.createDirectory();
 
+    // vocal=1: put the file through the vocal probe (optionally through the peak tamer first, tame=0..100) and
+    // print what a finished vocal is measured by
+    if (opt.getValue ("vocal", "0").getIntValue() != 0)
+    {
+        juce::AudioBuffer<float> whole (2, frames);
+        for (int i = 0; i < frames; ++i) { whole.setSample (0, i, mixData[2 * i]); whole.setSample (1, i, mixData[2 * i + 1]); }
+        VocalProbe probe; probe.prepare (fs); probe.start();
+        PeakTamer tamer; tamer.prepare (fs); tamer.setEnabled (opt.containsKey ("tame")); tamer.setAmount (opt.getValue ("tame", "0").getFloatValue() / 100.0f);
+        float worst = 0.0f;
+        for (int pos = 0; pos < frames; pos += 512)
+        {
+            juce::AudioBuffer<float> view (whole.getArrayOfWritePointers(), 2, pos, juce::jmin (512, frames - pos));
+            tamer.process (view); worst = juce::jmin (worst, tamer.getReductionDb());
+            probe.process (view);
+        }
+        const auto f = probe.read();
+        std::printf ("VOCAL seconds=%.1f typical=%.1f spread=%.1f side=%.1f bandside=%.1f ess=%.1f tamed=%.1f\n", f.seconds, f.typicalDb, f.peakSpreadDb, f.sideDb, f.bandSideDb, f.essDb, worst);
+        return 0;
+    }
+
     // measure=1: only measure the file, the way a reference file is measured, and print the figures (one line of
     // "BANDS" in the analysis bands, for working out targets from finished records)
     if (opt.getValue ("measure", "0").getIntValue() != 0)
@@ -48,6 +70,12 @@ int main (int argc, char** argv)
         std::printf ("CENTRES"); for (int b = 0; b < kAnalysisBands; ++b) std::printf (" %.1f", centres[(size_t) b]); std::printf ("\n");
         std::printf ("BANDS");   for (int b = 0; b < kAnalysisBands; ++b) std::printf (" %.2f", f.bandsDb[(size_t) b]); std::printf ("\n");
         std::printf ("SWING");   for (int b = 0; b < kAnalysisBands; ++b) std::printf (" %.2f", f.swingDb[(size_t) b]); std::printf ("\n");
+        {
+            const auto v = sourceTargetCurve (EqSource::LeadVocal, Role::Vocal);
+            std::printf ("VOCALTARGET"); for (int b = 0; b < kAnalysisBands; ++b) std::printf (" %.2f", v[(size_t) b]); std::printf ("\n");
+            const auto bt = roleTargetCurve (Role::Beat);
+            std::printf ("BEATTARGET"); for (int b = 0; b < kAnalysisBands; ++b) std::printf (" %.2f", bt[(size_t) b]); std::printf ("\n");
+        }
         for (int st = 0; st < (int) MasterStyle::Count; ++st)
         {
             const auto t = masterTargetCurve ((MasterStyle) st);

@@ -134,6 +134,14 @@ int main (int argc, char** argv)
         for (auto& s : beat->analyse (status)) std::printf ("beat, %s: %s -> %s\n", s.stage == EqStage::Surgical ? "surgical" : s.stage == EqStage::Tonal ? "tonal" : "dynamic", s.title.toRawUTF8(), s.action.toRawUTF8());
         std::printf ("beat analysis: %s\n", status.toRawUTF8());
     }
+    // finish=1: the Finish button on the vocal; finishbeat=1: on the beat
+    for (auto* who : { opt["finish"] == "1" ? vocal.get() : nullptr, opt["finishbeat"] == "1" ? beat.get() : nullptr })
+    {
+        if (who == nullptr) continue;
+        std::printf ("finish: %s\n", who->startFinish().toRawUTF8());
+        for (int i = 0; i < 80 && who->getFinishStage() != MUProcessor::FinishStage::Done && who->getFinishStage() != MUProcessor::FinishStage::Idle; ++i) { runSeconds (2.0); waitFor (0.25); }
+        std::printf ("%s\n", who->getFinishText().toRawUTF8());
+    }
     applyOverrides();
     runSeconds (2.0);
     {

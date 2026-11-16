@@ -293,6 +293,8 @@ namespace ids
     inline juce::String mbAttack (int b)   { return "mbAtt" + juce::String (b + 1); }
     inline juce::String mbRelease (int b)  { return "mbRel" + juce::String (b + 1); }
     inline juce::String mbMakeup (int b)   { return "mbGain" + juce::String (b + 1); }
+    inline const juce::String tameOn       { "tameOn" };        // holds the loudest syllables (tracks)
+    inline const juce::String tameAmount   { "tameAmount" };
     inline const juce::String clipOn       { "clipOn" };
     inline const juce::String clipAmount   { "clipAmount" };
     inline const juce::String clipSoft     { "clipSoft" };
@@ -305,11 +307,14 @@ inline float defaultRoleOffsetLu (Role r)
     {
         case Role::Vocal:        return 0.0f;
         case Role::BackingVocal: return -6.0f;
-        case Role::Kick:         return -3.5f;
-        case Role::Bass808:      return -2.5f;
-        case Role::Drums:        return -4.5f;
-        case Role::Melody:       return -8.0f;
-        case Role::Beat:         return -1.5f;
+        // From build 23 the four below are the middle of what was measured on the stems of the five reference
+        // records (analysis/VocalReference.h): there the whole instrumental is 1.5 to 5.2 LU louder than the vocal,
+        // never quieter. They were reasoned before: beat -1.5, 808 -2.5, drums -4.5, melody -8, kick -3.5.
+        case Role::Kick:         return -1.0f;       // not measured by itself: kept level with the drums
+        case Role::Bass808:      return 0.0f;
+        case Role::Drums:        return -1.0f;
+        case Role::Melody:       return -6.0f;
+        case Role::Beat:         return 2.9f;
         case Role::FX:           return -12.0f;
         default:                 return -4.0f;
     }

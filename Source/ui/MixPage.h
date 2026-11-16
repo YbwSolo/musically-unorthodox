@@ -33,7 +33,7 @@ private:
 
     MUProcessor& proc;
     std::function<void (const juce::String&)> setStatus;
-    juce::TextButton learnButton, balanceButton, bounceButton, keyButton;
+    juce::TextButton learnButton, balanceButton, bounceButton, keyButton, finishButton;
     std::vector<Fix> fixes;
     SongKey songKey;
     std::vector<CheckItem> checkItems;
@@ -49,7 +49,7 @@ private:
     LearnState learn;
     juce::Rectangle<int> dialArea, actionArea, lanesArea, collisionArea;
     float march = 0.0f, refreshTimer = 0.0f, dialValue = -60.0f, dialPeak = -60.0f, learnProgress = 0.0f, pulse = 0.0f;
-    bool hasMaster = false;
+    bool hasMaster = false, finishShown = false;
     float mixLufs = -100.0f, mixPeak = -100.0f, targetLufs = -18.0f, targetPeak = -6.0f, liveLufs = -100.0f, fixedShow = 0.0f;
     juce::String fixedNote;
 };

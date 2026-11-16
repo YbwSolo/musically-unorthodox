@@ -23,6 +23,7 @@ private:
     Knob smDepth; Segmented smFocus, smSpeed; IconButton smDelta { "phase", "sm.delta" };
     Segmented satType; Knob satDrive, satMix;
     Knob riderTarget, riderRange; Segmented riderSpeed;
+    Knob tameAmount; ParamToggle tameOn;          // the loudest syllables: lives with the rider, which evens out the phrases
     Knob vsAmount; Segmented vsSpeed;
     juce::TextButton vsFit; ParamToggle vsCentre;
     Knob stWidth, stMonoFreq; ParamToggle stMonoBass;
