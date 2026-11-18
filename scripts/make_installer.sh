@@ -53,6 +53,8 @@ rm -rf pkgroot pkgscripts
 # Update feed read by the plugin: which build is newest, where its bundles are, and a checksum.
 # Stable names so "releases/latest/download/<name>" always points at the newest build.
 cp "dist/$ZIP" dist/MusicallyUnorthodox-bundles.zip
+# the installer under a name that does not change, for the download button on the install guide (docs/install.html)
+cp "dist/MusicallyUnorthodox-$VERSION-build$BUILD.pkg" dist/MusicallyUnorthodox-Mac.pkg
 SHA="$(shasum -a 256 "dist/$ZIP" | cut -d' ' -f1)"
 BUILDNUM="$BUILD"; [ "$BUILD" = "local" ] && BUILDNUM=0
 

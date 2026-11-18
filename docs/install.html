@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install the Musically Unorthodox plugin</title>
+<style>
+  :root {
+    --black: #0a0a0a;
+    --panel: #161616;
+    --line: #2c2c2c;
+    --white: #ffffff;
+    --soft: #b9b9b9;
+    --yellow: #FBF20D;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0;
+    background: var(--black);
+    color: var(--white);
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 17px;
+    line-height: 1.55;
+  }
+  a { color: var(--yellow); }
+  a:focus-visible, .button:focus-visible { outline: 3px solid var(--white); outline-offset: 3px; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 0 22px; }
+
+  header { padding: 56px 0 40px; border-bottom: 4px solid var(--yellow); }
+  .brand { font-weight: 800; letter-spacing: 0.02em; color: var(--yellow); margin: 0 0 14px; font-size: 15px; }
+  h1 { font-size: clamp(34px, 6vw, 56px); line-height: 1.04; margin: 0 0 16px; font-weight: 800; letter-spacing: -0.02em; }
+  .lead { color: var(--soft); max-width: 60ch; margin: 0 0 28px; }
+  .downloads { display: flex; flex-wrap: wrap; gap: 14px; }
+  .button {
+    display: inline-block; text-decoration: none; font-weight: 800; font-size: 17px;
+    padding: 15px 22px; border-radius: 6px; border: 2px solid var(--yellow);
+    background: var(--yellow); color: var(--black);
+  }
+  .button.second { background: transparent; color: var(--yellow); }
+  .button small { display: block; font-weight: 500; font-size: 13px; margin-top: 2px; }
+  .jump { margin: 22px 0 0; color: var(--soft); font-size: 15px; }
+
+  section { padding: 54px 0 10px; }
+  h2 { font-size: clamp(26px, 4vw, 36px); margin: 0 0 6px; font-weight: 800; letter-spacing: -0.01em; }
+  .why { color: var(--soft); max-width: 64ch; margin: 0 0 30px; }
+
+  ol.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+  ol.steps > li {
+    counter-increment: step;
+    display: grid; grid-template-columns: 54px 1fr; gap: 0 18px;
+    padding: 26px 0; border-top: 1px solid var(--line);
+  }
+  ol.steps > li::before {
+    content: counter(step);
+    width: 46px; height: 46px; border-radius: 50%;
+    background: var(--yellow); color: var(--black);
+    font-weight: 800; font-size: 22px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step h3 { margin: 6px 0 6px; font-size: 21px; font-weight: 800; }
+  .step p { margin: 0 0 12px; color: var(--soft); max-width: 62ch; }
+  .step p strong { color: var(--white); }
+
+  /* A plain sketch of what is on screen at that step, with the thing to click in yellow. */
+  .screen {
+    margin: 14px 0 4px; max-width: 520px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  }
+  .screen .bar { padding: 9px 14px; font-size: 13px; color: var(--soft); border-bottom: 1px solid var(--line); }
+  .screen .body { padding: 16px 16px 18px; font-size: 15px; }
+  .screen .body p { color: var(--white); margin: 0 0 12px; max-width: none; }
+  .screen .dim { color: var(--soft); }
+  .screen .row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+  .key {
+    display: inline-block; padding: 7px 14px; border-radius: 6px; font-size: 14px; font-weight: 700;
+    border: 1px solid #4a4a4a; color: var(--white); background: #262626;
+  }
+  .key.press { background: var(--yellow); color: var(--black); border-color: var(--yellow); }
+  .list { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; }
+  .list div { padding: 8px 12px; border-top: 1px solid var(--line); color: var(--soft); }
+  .list div:first-child { border-top: 0; }
+  .list div.here { color: var(--black); background: var(--yellow); font-weight: 700; }
+  .caption { font-size: 13px; color: var(--soft); margin: 6px 0 0; }
+
+  .note {
+    margin: 26px 0 0; padding: 16px 18px; border-left: 4px solid var(--yellow); background: var(--panel);
+    color: var(--soft); max-width: 66ch;
+  }
+  .note strong { color: var(--white); }
+  footer { padding: 46px 0 60px; color: var(--soft); font-size: 15px; border-top: 1px solid var(--line); margin-top: 54px; }
+
+  @media (max-width: 560px) {
+    ol.steps > li { grid-template-columns: 40px 1fr; gap: 0 12px; }
+    ol.steps > li::before { width: 36px; height: 36px; font-size: 18px; }
+    .button { width: 100%; text-align: center; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <p class="brand">Musically Unorthodox</p>
+    <h1>Install the plugin</h1>
+    <p class="lead">It is free. Download the installer for your computer, then follow the steps for it below. The first time, your computer will ask you to confirm that you trust it. That takes about a minute and you only do it once.</p>
+    <div class="downloads">
+      <a class="button" href="https://github.com/YbwSolo/musically-unorthodox/releases/latest/download/MusicallyUnorthodox-Mac.pkg">Download for Mac<small>Logic Pro and other music software</small></a>
+      <a class="button second" href="https://github.com/YbwSolo/musically-unorthodox/releases/latest/download/MusicallyUnorthodox-Windows-Setup.exe">Download for Windows<small>FL Studio, Ableton and other music software</small></a>
+    </div>
+    <p class="jump">Jump to the steps: <a href="#mac">Mac</a> · <a href="#windows">Windows</a> · <a href="#find">Finding it in your music software</a></p>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section id="mac">
+  <h2>On a Mac</h2>
+  <p class="why">Apple shows a warning for any software that has not paid to be registered with Apple. The plugin is safe to install: it is made by the studio. These steps tell your Mac you trust it.</p>
+
+  <ol class="steps">
+    <li><div class="step">
+      <h3>Close your music software and download the installer</h3>
+      <p>Quit Logic Pro (or whatever you make music in). Press <strong>Download for Mac</strong> at the top of this page. The file lands in your <strong>Downloads</strong> folder and its name ends in <strong>.pkg</strong>.</p>
+    </div></li>
+
+    <li><div class="step">
+      <h3>Double-click the file, then press Done</h3>
+      <p>Your Mac says it could not check the file. This is expected. Press <strong>Done</strong>. Do not move it to the Bin.</p>
+      <div class="screen" role="img" aria-label="A warning window with two buttons. Press Done.">
+        <div class="bar">Warning from your Mac</div>
+        <div class="body">
+          <p>"MusicallyUnorthodox-Mac.pkg" was not opened.</p>
+          <p class="dim">Apple could not check it for software that might harm your Mac.</p>
+          <div class="row"><span class="key">Move to Bin</span><span class="key press">Done</span></div>
+        </div>
+      </div>
+    </div></li>
+
+    <li><div class="step">
+      <h3>Open System Settings and choose Privacy &amp; Security</h3>
+      <p>Click the Apple logo in the top left corner of the screen, then <strong>System Settings</strong>. In the list on the left, click <strong>Privacy &amp; Security</strong>.</p>
+      <div class="screen" role="img" aria-label="The list on the left of System Settings, with Privacy and Security picked.">
+        <div class="bar">System Settings</div>
+        <div class="body">
+          <div class="list">
+            <div>General</div>
+            <div>Appearance</div>
+            <div class="here">Privacy &amp; Security</div>
+            <div>Desktop &amp; Dock</div>
+          </div>
+        </div>
+      </div>
+    </div></li>
+
+    <li><div class="step">
+      <h3>Scroll to the bottom and press Open Anyway</h3>
+      <p>Scroll all the way down to the part called <strong>Security</strong>. You will see a line saying the installer was blocked. Press <strong>Open Anyway</strong> next to it.</p>
+      <div class="screen" role="img" aria-label="The Security part of the page, with a line about the blocked installer and an Open Anyway button.">
+        <div class="bar">Privacy &amp; Security, at the very bottom</div>
+        <div class="body">
+          <p><strong>Security</strong></p>
+          <p class="dim">"MusicallyUnorthodox-Mac.pkg" was blocked to protect your Mac.</p>
+          <div class="row"><span class="key press">Open Anyway</span></div>
+        </div>
+      </div>
+      <p class="caption">Cannot see the button? Go back to step 2 and double-click the file again. The button only shows for a while after you have tried to open it.</p>
+    </div></li>
+
+    <li><div class="step">
+      <h3>Confirm, and type your Mac password</h3>
+      <p>The warning comes back with a new button. Press <strong>Open Anyway</strong>, then type the password you use to log in to your Mac (or use Touch ID).</p>
+      <div class="screen" role="img" aria-label="The warning again, now with an Open Anyway button to press.">
+        <div class="bar">Warning from your Mac</div>
+        <div class="body">
+          <p>Open "MusicallyUnorthodox-Mac.pkg"?</p>
+          <div class="row"><span class="key">Move to Bin</span><span class="key">Done</span><span class="key press">Open Anyway</span></div>
+        </div>
+      </div>
+    </div></li>
+
+    <li><div class="step">
+      <h3>Click through the installer</h3>
+      <p>The installer opens. Press <strong>Continue</strong>, then <strong>Install</strong>, type your Mac password once more, and press <strong>Close</strong> when it says the installation was successful.</p>
+    </div></li>
+  </ol>
+
+  <p class="note"><strong>You only do this once.</strong> After that, the plugin tells you when there is a new version and updates itself from inside the plugin. No warning, no Settings.</p>
+  <p class="note"><strong>On an older Mac</strong> (macOS 14 or earlier) there is a shortcut: hold Control, click the file, choose Open, then press Open.</p>
+</section>
+
+<section id="windows">
+  <h2>On Windows</h2>
+  <p class="why">Windows shows a blue warning for software from a publisher it has not seen much of. The plugin is safe to install: it is made by the studio.</p>
+
+  <ol class="steps">
+    <li><div class="step">
+      <h3>Close your music software and download the installer</h3>
+      <p>Press <strong>Download for Windows</strong> at the top of this page. If your browser says the file is not commonly downloaded, choose <strong>Keep</strong>.</p>
+    </div></li>
+
+    <li><div class="step">
+      <h3>Run the file and press More info</h3>
+      <p>Open your <strong>Downloads</strong> folder and double-click <strong>MusicallyUnorthodox-Windows-Setup</strong>. A blue window says Windows protected your PC. Click the words <strong>More info</strong>.</p>
+      <div class="screen" role="img" aria-label="A blue warning window. Click the words More info.">
+        <div class="bar">Warning from Windows</div>
+        <div class="body">
+          <p>Windows protected your PC</p>
+          <p class="dim">It stopped an app it does not recognise from starting. <span class="key press">More info</span></p>
+          <div class="row"><span class="key">Don't run</span></div>
+        </div>
+      </div>
+    </div></li>
+
+    <li><div class="step">
+      <h3>Press Run anyway</h3>
+      <p>A new button appears. Press <strong>Run anyway</strong>. If Windows asks whether to let the app make changes, press <strong>Yes</strong>.</p>
+      <div class="screen" role="img" aria-label="The same window, now with a Run anyway button to press.">
+        <div class="bar">Warning from Windows</div>
+        <div class="body">
+          <p>Windows protected your PC</p>
+          <p class="dim">App: MusicallyUnorthodox-Windows-Setup.exe</p>
+          <div class="row"><span class="key press">Run anyway</span><span class="key">Don't run</span></div>
+        </div>
+      </div>
+    </div></li>
+
+    <li><div class="step">
+      <h3>Click through the installer</h3>
+      <p>Follow the installer to the end and press <strong>Finish</strong>.</p>
+    </div></li>
+  </ol>
+
+  <p class="note"><strong>Updates on Windows.</strong> When the plugin says there is a new version, it downloads a new installer in your browser. Close your music software, run it, and follow steps 2 to 4 again.</p>
+</section>
+
+<section id="find">
+  <h2>Finding it in your music software</h2>
+  <p class="why">Open your music software again after installing. The plugin is called <strong>Musically Unorthodox</strong>.</p>
+  <ol class="steps">
+    <li><div class="step">
+      <h3>Logic Pro</h3>
+      <p>On a track, click an empty <strong>Audio FX</strong> slot, then <strong>Audio Units</strong>, then <strong>Musically Unorthodox</strong>. If it is not in the list, quit Logic completely and open it again.</p>
+    </div></li>
+    <li><div class="step">
+      <h3>FL Studio, Ableton Live and others</h3>
+      <p>It installs as a <strong>VST3</strong> plugin. Look under VST3 plugins for <strong>Musically Unorthodox</strong>. If it is not there, use your software's option to scan for new plugins.</p>
+    </div></li>
+    <li><div class="step">
+      <h3>Put it on every track, and on the master</h3>
+      <p>Add it to each vocal and to the beat, and once more on the master (the stereo output). The copies talk to each other, which is how it balances and finishes the song.</p>
+    </div></li>
+  </ol>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    Stuck on a step? Ask at the studio and bring your laptop.
+  </div>
+</footer>
+
+</body>
+</html>

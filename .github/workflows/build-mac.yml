@@ -84,8 +84,10 @@ jobs:
           tag_name: build-${{ github.run_number }}
           name: Musically Unorthodox build ${{ github.run_number }}
           body: |
-            Mac: download the .pkg, double-click it, click through the installer. Then restart Logic.
-            If macOS says it can't be opened: right-click the .pkg > Open > Open.
+            Mac: download MusicallyUnorthodox-Mac.pkg, double-click it, click through the installer. Then restart Logic.
+            The first time, macOS says it could not check the file: press Done, open System Settings >
+            Privacy & Security, scroll to the bottom and press Open Anyway. Step-by-step guide with pictures:
+            docs/install.html in this repository.
 
             Windows (VST3 and standalone, added a few minutes after the Mac files): download
             MusicallyUnorthodox-Windows-Setup.exe and run it with your music software closed.
