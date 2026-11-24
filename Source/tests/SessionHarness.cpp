@@ -7,6 +7,8 @@
 #include "PluginProcessor.h"
 #include "state/UserPresets.h"
 #include "ai/TutorKnowledge.h"
+#include "ui/LearnPage.h"
+#include "ui/learn/BeatScenes.h"
 #include "SyntheticStems.h"
 #include <unistd.h>
 
@@ -1348,6 +1350,64 @@ int main()
         check (closeTo (master->getParam (ids::clipOn), clipBefore, 0.01f) && closeTo (master->getParam (ids::targetLufs), trimParamBefore, 0.01f) && master->masterText ("processing").isEmpty() && ! master->canUndoMaster()
                && master->getMasterStage() == Stage::Idle, "Undo puts every control back to how it was before Analyse and master", undone);
         runSeconds (6.0);
+    }
+
+    // ---- the Learn section: every step of every lesson draws, the exercises can be solved, and its sound stays out of a bounce
+    {
+        int steps = 0; bool drew = true; juce::String where;
+        {
+            LearnPage page (*vocal, [] (const juce::String&) {}, [] (int) {});
+            page.setSize (1000, 640);
+            const auto& all = course::tracks();
+            for (int t = 0; t < (int) all.size(); ++t)
+                for (int l = 0; l < (int) all[(size_t) t].lessons.size(); ++l)
+                    for (int s = 0; s < (int) all[(size_t) t].lessons[(size_t) l].steps.size(); ++s)
+                    {
+                        page.open (t, l, s);
+                        for (int i = 0; i < 8; ++i) page.tick (0.05f);
+                        const auto shot = page.createComponentSnapshot (page.getLocalBounds(), false, 1.0f);
+                        // the example's well is black; a step that drew something has brighter pixels inside it
+                        int lit = 0;
+                        for (int y = 60; y < 330; y += 6) for (int x = 330; x < 950; x += 6) if (shot.getPixelAt (x, y).getBrightness() > 0.2f) ++lit;
+                        if (lit < 20) { drew = false; where = juce::String (all[(size_t) t].lessons[(size_t) l].id) + " step " + juce::String (s + 1); }
+                        ++steps;
+                    }
+        }
+        check (drew && steps >= 190, "Every step of every lesson draws its example", juce::String (steps) + " steps" + (where.isNotEmpty() ? ", empty: " + where : juce::String()));
+
+        LessonSound& sound = vocal->getLessonSound();
+        BeatScenes scenes (sound);
+        const auto area = juce::Rectangle<float> (0.0f, 0.0f, 760.0f, 300.0f);
+        juce::Image canvas (juce::Image::ARGB, 760, 300, true);
+        auto draw = [&] { juce::Graphics g (canvas); scenes.paint (g, area); };
+        // the drum exercise: the grid starts empty; a snare on two and four, a kick on the one and four hats solve it
+        scenes.enter (course::Scene::Grid, 9);
+        draw();
+        const float x0 = 78.0f, cw = (760.0f - 78.0f) / 16.0f, y0 = 58.0f, rh = juce::jmin (58.0f, (300.0f - 58.0f) / 4.0f);
+        auto cell = [&] (int row, int step) { scenes.mouseDown ({ x0 + ((float) step + 0.5f) * cw, y0 + ((float) row + 0.5f) * rh }); draw(); };
+        const bool emptyAtFirst = ! scenes.beatExerciseSolved();
+        cell (2, 4); cell (2, 12); cell (3, 0);
+        const bool notYet = ! scenes.beatExerciseSolved();
+        for (int s : { 0, 4, 8, 12 }) cell (1, s);
+        check (emptyAtFirst && notYet && scenes.beatExerciseSolved(), "The build-a-beat exercise is solved by a snare on two and four, a kick on the one and four hats, and not before");
+        // the scale exercise names a key; clicking the keys is covered by the drawing pass above
+        scenes.enter (course::Scene::Keys, 9);
+        check (scenes.quizKeyName() == "A minor", "The scale exercise starts on the key with no black keys", scenes.quizKeyName());
+
+        // a pattern left playing is heard while working and is never written into a bounce
+        scenes.enter (course::Scene::Grid, 2);
+        draw();
+        scenes.mouseDown ({ 40.0f, 14.0f });                     // the play button
+        const bool playing = sound.isPlaying();
+        juce::AudioBuffer<float> silence (2, 512); juce::MidiBuffer midi;
+        float live = 0.0f, bounced = 0.0f;
+        for (int n = 0; n < 200; ++n) { silence.clear(); vocal->processBlock (silence, midi); live = juce::jmax (live, silence.getMagnitude (0, 512)); }
+        vocal->setNonRealtime (true);
+        for (int n = 0; n < 200; ++n) { silence.clear(); vocal->processBlock (silence, midi); if (n > 100) bounced = juce::jmax (bounced, silence.getMagnitude (0, 512)); }
+        vocal->setNonRealtime (false);
+        scenes.leave();
+        check (playing && live > 0.05f && bounced < 1.0e-4f && ! sound.isPlaying(), "A lesson's pattern is heard while working, is left out of a bounce, and stops when the step is left",
+               "live peak " + juce::String (live, 3) + ", in a bounce " + juce::String (bounced, 6));
     }
 
     // ---- tear down in a mixed order to exercise slot reuse

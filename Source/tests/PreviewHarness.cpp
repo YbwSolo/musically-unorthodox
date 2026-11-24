@@ -4,6 +4,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 #include "SyntheticStems.h"
 
 using namespace mu;
@@ -93,6 +94,19 @@ public:
         window->setContentOwned (proc.createEditor(), true);
         window->setTopLeftPosition (0, 0);
         window->setVisible (true);
+        if (presetName.startsWith ("learn"))
+        {
+            // "learn:track,lesson,step" opens that step; "learnai:..." also connects the mock tutor
+            if (presetName.startsWith ("learnai"))
+            {
+                proc.getAI().setAddressForTesting (juce::SystemStats::getEnvironmentVariable ("MU_TEST_AI_URL", "http://127.0.0.1:11599"));
+                proc.getAI().refresh();
+            }
+            const auto where = juce::StringArray::fromTokens (presetName.fromFirstOccurrenceOf (":", false, false), ",", "");
+            if (auto* editor = dynamic_cast<mu::MUEditor*> (window->getContentComponent()))
+                editor->getLearnPage().open (where[0].getIntValue(), where[1].getIntValue(), where[2].getIntValue());
+            presetName.clear();
+        }
         if (presetName == "graph")
         {
             // capture six seconds of the vocal, then put the notes on the scale

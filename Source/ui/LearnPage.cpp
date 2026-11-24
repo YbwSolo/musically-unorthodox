@@ -1,123 +1,16 @@
 #include "LearnPage.h"
 #include "../PluginProcessor.h"
 #include "HeaderBar.h"
+#include "learn/BeatScenes.h"
+#include "../learn/LearnTutor.h"
 
 namespace mu
 {
 using namespace theme;
+using course::Scene;
 
 namespace
 {
-    enum class Scene { Wave, EqShapes, EqMove, FreqMap, Masking, Levels, Envelope, Saturation, Stereo, Loudness, TruePeak, Chain };
-    struct Step { const char* title; const char* text; Scene scene; int variant; };
-    struct Lesson { const char* chapter; const char* title; std::vector<Step> steps; const char* tryLabel; int tab; const char* preset; };
-
-    const std::vector<Lesson>& lessons()
-    {
-        static const std::vector<Lesson> all = {
-        { "Foundations", "How sound works", {
-            { "A sound is a vibration",
-              "Every sound is air moving back and forth. Slow vibrations are low notes and fast ones are high notes. The speed is called the frequency and is measured in hertz (Hz): 100 Hz means 100 swings every second. Each time the frequency doubles, the note goes up one octave.", Scene::Wave, 0 },
-            { "Height is level",
-              "How far the wave swings is its level, measured in decibels (dB). Decibels are a ratio, not a fixed amount: 6 dB less is half the height of the wave. Around 10 dB less is what most people hear as half as loud.", Scene::Wave, 1 },
-            { "Real sounds are many frequencies at once",
-              "A voice, a snare or an 808 is many of these waves added together. The lowest one is the note you hear. The ones above it, the harmonics, give the sound its character. The picture underneath is a spectrum: low notes on the left, high notes on the right, taller means louder.", Scene::Wave, 2 },
-            { "The frequency map",
-              "Engineers use the same few words for the same areas of the spectrum. Move the mouse across the map to read what lives in each area, what too much of it sounds like and what too little sounds like. Once you can name a problem you know where to reach.", Scene::FreqMap, 0 } },
-          "Open the EQ", HeaderBar::EQ, nullptr },
-
-        { "EQ", "What an EQ is", {
-            { "A volume knob for one part of the sound",
-              "An equaliser turns one range of frequencies up or down and leaves the rest alone. Watch the middle wave: the EQ pulls it down and only that part of the sound changes. That is all an EQ ever does.", Scene::Wave, 3 },
-            { "The bell",
-              "The most used shape is the bell. It has three controls: where it acts (frequency), how much (gain) and how wide (Q). The white line is what the EQ is doing. Grey is the sound going in, yellow is the sound coming out.", Scene::EqShapes, 0 },
-            { "Width, or Q",
-              "Q is the width of the band: the centre frequency divided by how wide the band is, so a bigger number means a narrower band. A low Q is wide and gentle and changes the overall tone. A high Q is narrow and precise and removes one ringing note without touching its neighbours.", Scene::EqShapes, 1 },
-            { "Shelves and cuts",
-              "A shelf raises or lowers everything above or below a point, like a treble or bass control. A cut filter removes everything beyond a point. Its slope says how steeply: 12 dB per octave is gentle, 24 is the usual low cut on a vocal to clear rumble below 80 to 100 Hz.", Scene::EqShapes, 2 },
-            { "Your turn: cut first, then boost",
-              "This vocal has a build-up in the low mids that makes it cloudy. Boosting the highs would only make everything louder and leave the cloud in place. Drag the band onto the hump and pull it down until the yellow line is smooth. Scroll to change the width.", Scene::EqMove, 0 } },
-          "Analyse my track", HeaderBar::EQ, nullptr },
-
-        { "EQ", "Making room", {
-            { "Masking",
-              "When two sounds are loud in the same range, the ear follows the louder one and loses the other. This is called masking. It is why a vocal can disappear under a beat even though each sounded fine on its own.", Scene::Masking, 0 },
-            { "Carve a pocket",
-              "Turning the vocal up only starts a volume war. The better fix is a pocket: dip the beat a few decibels in the range where the words are understood, around 2 to 4 kHz, and only while the vocal is there. Vocal space on the Tone tab and the collision fixes on the Mix tab both do this.", Scene::Masking, 1 },
-            { "Dynamic bands",
-              "A dynamic band is an EQ cut that waits. It does nothing until its range gets louder than a threshold, then it dips, then it lets go again. Use it for problems that come and go, such as a boomy word or a harsh note, so the track is untouched the rest of the time.", Scene::EqShapes, 4 } },
-          "Find collisions", HeaderBar::Mix, nullptr },
-
-        { "Dynamics", "What a compressor is", {
-            { "No performance is even",
-              "Some words are loud and some are almost lost. Turn the whole track up so the quiet words are heard and the loud ones jump out. Turn it down for the loud ones and the quiet ones vanish.", Scene::Levels, 0 },
-            { "Threshold",
-              "A compressor is an automatic volume control. You choose a level called the threshold. Anything below it is left alone. Only the part of the sound that goes above it, shown in yellow, gets turned down.", Scene::Levels, 1 },
-            { "Ratio",
-              "The ratio sets how firmly. At 4:1, a word that goes 8 dB over the threshold comes out only 2 dB over. 2:1 is gentle, 4:1 is a firm vocal setting, and around 10:1 and above it is acting as a limiter.", Scene::Levels, 2 },
-            { "Makeup gain",
-              "The loud words are now quieter, so the whole track can be turned back up. That is makeup gain. The loud words finish where they started and the quiet words are much closer behind them. The track sounds fuller and stays in front of the beat.", Scene::Levels, 3 },
-            { "Your turn",
-              "Drag up and down to move the threshold, left and right to change the ratio. Grey is what goes in, yellow is what comes out. On a vocal, aim for the loud words to be turned down by about 3 to 6 dB.", Scene::Levels, 4 } },
-          "Open Dynamics", HeaderBar::Dynamics, nullptr },
-
-        { "Dynamics", "Attack and release", {
-            { "It does not happen instantly",
-              "A compressor starts turning down the moment the sound crosses the threshold, but it takes time to get there. The attack time is how long it takes to do about two thirds of the job. The release time is how long it takes to give two thirds of it back once the sound drops again.", Scene::Envelope, 0 },
-            { "Attack shapes the hit",
-              "With a fast attack the level is already down while the hit is still happening, so the crack of a drum or the front of a word is flattened. With a slower attack, 20 to 30 ms, the hit gets through before the level drops, and the sound comes out punchier than it went in.", Scene::Envelope, 1 },
-            { "Release shapes the tail",
-              "A fast release brings the level straight back up between hits, which sounds loud and energetic. Too fast and you hear the volume pumping. A slow release is smoother and suits singing and bass, but if it is too slow the level is still held down when the next hit arrives.", Scene::Envelope, 2 },
-            { "Your turn",
-              "Drag left and right for the attack, up and down for the release, and watch what happens to the front of each hit and to the gap between them.", Scene::Envelope, 3 } },
-          "Open Dynamics", HeaderBar::Dynamics, nullptr },
-
-        { "Dynamics", "Gate and de-esser", {
-            { "What is between the words",
-              "A microphone keeps listening when the singer stops. Headphone bleed, breaths and room noise sit between the phrases, and compression makes them louder.", Scene::Levels, 10 },
-            { "The gate",
-              "A gate is the opposite of a compressor: it turns the track down when the level falls below its threshold. Set the threshold just above the noise, and check that it is not cutting the starts and ends of words. A range of 10 to 20 dB sounds more natural than silence.", Scene::Levels, 11 },
-            { "The de-esser",
-              "S and T sounds are short bursts of energy, usually between 5 and 8 kHz. A de-esser is a compressor that only listens to that range and dips it for the moment the S lasts. It goes after the compressor, because compression makes those sounds louder. Three to six decibels is normally enough.", Scene::EqShapes, 5 } },
-          "Open Dynamics", HeaderBar::Dynamics, nullptr },
-
-        { "Tone", "Saturation", {
-            { "Bending the wave",
-              "Push a signal harder than tape or a valve can handle cleanly and the tops of the wave get rounded off. That bend adds new frequencies above the note that was played. They are harmonics, and they make a sound feel thicker and closer without making it much louder.", Scene::Saturation, 0 },
-            { "Which harmonics",
-              "The shape of the bend decides which harmonics appear. Bend both halves of the wave the same way and you get odd harmonics: the 3rd, the 5th, edge and bite. Bend one half more than the other, as valves tend to, and even harmonics appear too. The strongest of those are octaves of the note, so the sound gets fuller instead of edgier.", Scene::Saturation, 1 },
-            { "Why an 808 needs it",
-              "The note of an 808 sits around 40 to 60 Hz. Phone and laptop speakers play almost nothing that low, so a clean 808 simply disappears. Saturation adds harmonics at two, three and four times the note. Those are high enough to be heard, and the ear fills in the bass from them.", Scene::Saturation, 2 } },
-          "Open Tone", HeaderBar::Tone, nullptr },
-
-        { "Tone", "Stereo and mono", {
-            { "Width",
-              "Stereo is two speakers. A sound that is the same in both appears in the middle. The more the two sides differ, the wider it feels. Spread pads and backing vocals out to the sides and keep the lead vocal, kick and bass in the centre, where they are solid on every system.", Scene::Stereo, 0 },
-            { "The mono check",
-              "Plenty of playback is close to mono: a phone, a club's subwoofers, a speaker across the room. In mono the two sides are added together. Anything that is opposite in the left and right cancels out and vanishes. The correlation meter warns you: towards +1 is safe, below zero is trouble.", Scene::Stereo, 1 } },
-          "Open Tone", HeaderBar::Tone, nullptr },
-
-        { "Finishing", "Loudness and mastering", {
-            { "Peak is not loudness",
-              "These two sounds reach exactly the same peak. One is a short hit, the other is held. The held one is far louder to the ear. Peak level tells you whether the signal will clip. Loudness, measured in LUFS, tells you how loud it feels.", Scene::Loudness, 0 },
-            { "What streaming does to a loud master",
-              "Streaming services measure every song and play them at a similar loudness: about -14 LUFS on Spotify and YouTube, -16 on Apple Music. A master pushed much louder is simply turned down. It gains nothing, and keeps the flattened peaks it paid to get there.", Scene::Loudness, 1 },
-            { "True peak",
-              "Digital audio is a row of samples, and the real wave runs between them. It can rise higher than any single sample. That is the true peak. Leave about 1 dB spare so the song does not distort when it is converted for streaming.", Scene::TruePeak, 0 },
-            { "The limiter",
-              "A limiter is a compressor with a very high ratio and a ceiling that nothing passes. It lets you raise the level until the loudest peaks touch the ceiling. A few decibels on the biggest hits is normal. Push further and every hit is shaved to the same height: louder, but flat.", Scene::Levels, 21 },
-            { "Where to aim",
-              "Before mastering, a mix should sit around -18 LUFS with peaks under -6 dB. That headroom is what the master uses. For streaming, finish at about -14 LUFS with true peak under -1 dB.", Scene::Loudness, 2 } },
-          "Open Master", HeaderBar::Master, nullptr },
-
-        { "Finishing", "Putting it together", {
-            { "The order of a mix",
-              "Work from big decisions to small ones. Balance first: most of a good mix is simply every track at the right level against the vocal. Then space: decide who wins where two tracks collide. Then tone and control on single tracks. The master comes last. It makes a good mix louder; it does not rescue a bad one.", Scene::Chain, 0 },
-            { "A vocal chain, in order",
-              "Each stage hears the result of the one before it, so the order matters. Clean up first, remove problems before the compressor reacts to them, control the level, tame the S sounds the compressor has raised, and only then add brightness and colour. The vocal presets are built in this order.", Scene::Chain, 1 } },
-          "Load a vocal chain", HeaderBar::Dynamics, "Rap vocal - punchy" } };
-        return all;
-    }
 
     struct Region { float lo, hi; const char* name; const char* lives; const char* tooMuch; const char* tooLittle; };
     const Region kRegions[] = {
@@ -161,23 +54,27 @@ namespace
 class LessonStage : public juce::Component
 {
 public:
-    LessonStage() { setOpaque (false); }
+    explicit LessonStage (LessonSound& s) : beat (s) { setOpaque (false); }
+    BeatScenes beat;
+    void silence() { beat.leave(); }
 
     void show (Scene s, int v)
     {
         if (s == scene && v == variant && started) return;
         nextScene = s; nextVariant = v;
-        if (! started) { scene = s; variant = v; started = true; fade = 0.0f; fadingOut = false; t = 0.0f; }
+        beat.leave();                                   // whatever the last step was playing stops as soon as it is left
+        if (! started) { scene = s; variant = v; started = true; fade = 0.0f; fadingOut = false; t = 0.0f; arrive(); }
         else fadingOut = true;
-        setMouseCursor (interactive (s, v) ? juce::MouseCursor::CrosshairCursor : juce::MouseCursor::NormalCursor);
+        setMouseCursor (BeatScenes::handles (s) ? juce::MouseCursor::NormalCursor : interactive (s, v) ? juce::MouseCursor::CrosshairCursor : juce::MouseCursor::NormalCursor);
     }
 
     void tick (float dt)
     {
         t += dt;
-        if (fadingOut) { fade -= dt * 9.0f; if (fade <= 0.0f) { fade = 0.0f; fadingOut = false; scene = nextScene; variant = nextVariant; t = 0.0f; chainPick = -1; } }
+        if (fadingOut) { fade -= dt * 9.0f; if (fade <= 0.0f) { fade = 0.0f; fadingOut = false; scene = nextScene; variant = nextVariant; t = 0.0f; chainPick = -1; arrive(); } }
         else if (fade < 1.0f) fade = juce::jmin (1.0f, fade + dt * 6.0f);
         idle += dt;
+        if (BeatScenes::handles (scene)) beat.tick (dt);
         repaint();
     }
 
@@ -202,15 +99,17 @@ public:
             case Scene::Loudness:   paintLoudness (g, r); break;
             case Scene::TruePeak:   paintTruePeak (g, r); break;
             case Scene::Chain:      paintChain (g, r); break;
+            default:                beat.paint (g, r); break;
         }
         g.endTransparencyLayer();
         g.restoreState();
-        if (interactive (scene, variant))
+        const auto beatHint = BeatScenes::handles (scene) ? beat.hint() : juce::String();
+        if (interactive (scene, variant) || beatHint.isNotEmpty())
         {
             const auto pill = juce::Rectangle<float> ((float) getWidth() - 122.0f, 12.0f, 110.0f, 20.0f);
             g.setColour (yellow.withAlpha (fade)); g.fillRoundedRectangle (pill, 10.0f);
             g.setFont (bodyBold (11.0f)); g.setColour (onYellow.withAlpha (fade));
-            g.drawText (scene == Scene::FreqMap ? "Move the mouse" : scene == Scene::Chain ? "Click a stage" : "Drag to try it", pill, juce::Justification::centred);
+            g.drawText (beatHint.isNotEmpty() ? beatHint : scene == Scene::FreqMap ? "Move the mouse" : scene == Scene::Chain ? "Click a stage" : "Drag to try it", pill, juce::Justification::centred);
         }
     }
 
@@ -221,6 +120,7 @@ public:
     }
     void mouseMove (const juce::MouseEvent& e) override
     {
+        if (BeatScenes::handles (scene)) { beat.mouseMove (e.position); return; }
         if (scene != Scene::FreqMap) return;
         const auto r = getLocalBounds().toFloat().reduced (22.0f, 18.0f);
         const float hz = xToFreq ((float) e.x, r.getX(), r.getWidth());
@@ -229,6 +129,7 @@ public:
     }
     void mouseDown (const juce::MouseEvent& e) override
     {
+        if (BeatScenes::handles (scene)) { if (! fadingOut) beat.mouseDown (e.position); return; }
         if (scene == Scene::Chain)
         {
             const auto r = getLocalBounds().toFloat().reduced (22.0f, 18.0f);
@@ -240,6 +141,7 @@ public:
     }
     void mouseDrag (const juce::MouseEvent& e) override
     {
+        if (BeatScenes::handles (scene)) { beat.mouseDrag (e.position); return; }
         const auto r = getLocalBounds().toFloat().reduced (22.0f, 18.0f);
         const float nx = juce::jlimit (0.0f, 1.0f, ((float) e.x - r.getX()) / r.getWidth()), ny = juce::jlimit (0.0f, 1.0f, ((float) e.y - r.getY()) / r.getHeight());
         if (scene == Scene::EqMove)
@@ -258,6 +160,8 @@ public:
     }
 
 private:
+    void arrive() { if (BeatScenes::handles (scene)) beat.enter (scene, variant); }
+
     // ---- sound as waves ------------------------------------------------------------------------------
     void paintWave (juce::Graphics& g, juce::Rectangle<float> r)
     {
@@ -1030,7 +934,15 @@ private:
                                        { "De-ess", "Tames the S sounds, which the compressor has just made louder." },
                                        { "Brighten", "Presence around 3 kHz and air above 10 kHz, added last so it is not fighting the problems." },
                                        { "Saturate", "A little colour and thickness." }, { "Ride", "Keeps every line sitting in the same place." } };
-        return variant == 0 ? mix : vocal;
+        static const Block making[] = { { "Tempo and key", "Set the BPM for the style and choose a minor key. Everything else follows these two." },
+                                        { "Melody", "A short motif on a sound with the right mood. Repeat it, then change the ending." },
+                                        { "Chords", "One or two chords under the melody, quieter than it, or none at all." },
+                                        { "Drums", "Snare first, then kicks, then hats. Then velocity and a roll." },
+                                        { "808", "On the root note, starting with the kick, in tune." },
+                                        { "Layers", "A counter melody in the gaps, an octave layer, a percussion sound." },
+                                        { "Arrange", "Hook first with everything in, then verses by taking parts away." },
+                                        { "Mix", "Levels, a slot for each sound, a little space. Then export." } };
+        return variant == 0 ? mix : variant == 2 ? making : vocal;
     }
     int chainCount() const { return variant == 0 ? 4 : 8; }
     void paintChain (juce::Graphics& g, juce::Rectangle<float> r)
@@ -1075,92 +987,243 @@ private:
     float userThr = -16.0f, userRatio = 4.0f, userAttack = 1.0f, userRelease = 120.0f;
 };
 
+
 // =====================================================================================================
+namespace
+{
+    const std::vector<course::Track>& tracks() { return course::tracks(); }
+    constexpr int kRowH = 30, kChapterH = 22;
+}
+
 LearnPage::LearnPage (MUProcessor& p, std::function<void (const juce::String&)> status, std::function<void (int)> go)
     : proc (p), setStatus (std::move (status)), goToTab (std::move (go))
 {
-    stage = std::make_unique<LessonStage>();
+    stage = std::make_unique<LessonStage> (proc.getLessonSound());
+    stage->beat.audioRunning = [this] { return audioRuns; };
     addAndMakeVisible (*stage);
     styleButton (prevButton, "Back", false);
     styleButton (nextButton, "Next", true);
     styleButton (tryButton, "Try it", false);
+    styleButton (askButton, "Ask", true);
+    styleButton (backButton, "Back to the step", false);
+    styleButton (getTutorButton, "Open Mix Brain", false);
+    styleButton (starters[0], "Explain this another way", false);
+    styleButton (starters[1], "Quiz me on this step", false);
     prevButton.onClick = [this] { if (step > 0) showStep (step - 1); };
     nextButton.onClick = [this]
     {
-        const auto& all = lessons();
-        if (step + 1 < (int) all[(size_t) lesson].steps.size()) showStep (step + 1);
-        else showLesson ((lesson + 1) % (int) all.size(), 0);
+        const auto& list = tracks()[(size_t) track].lessons;
+        if (step + 1 < (int) list[(size_t) lesson].steps.size()) showStep (step + 1);
+        else if (lesson + 1 < (int) list.size()) showLesson (lesson + 1, 0);
+        else showTrack ((track + 1) % (int) tracks().size());
     };
     tryButton.onClick = [this]
     {
-        const auto& l = lessons()[(size_t) lesson];
+        const auto& l = tracks()[(size_t) track].lessons[(size_t) lesson];
         if (l.preset != nullptr)
         {
             const int i = findChainPreset (l.preset);
             if (i >= 0) setStatus (proc.applyChainPreset (i) + " Switch each module off and on to hear what it adds.");
         }
-        if (goToTab) goToTab (l.tab);
+        if (goToTab && l.tab >= 0) goToTab (l.tab);
     };
-    for (auto* b : { &prevButton, &nextButton, &tryButton }) addAndMakeVisible (b);
-    showLesson (juce::jlimit (0, (int) lessons().size() - 1, settings->getInt ("lessonLast", 0)), 0);
+    askBox.setFont (body (12.5f));
+    askBox.setTextToShowWhenEmpty ("Ask about this step", textMute);
+    askBox.setIndents (8, 6);
+    askBox.onReturnKey = [this] { askTutor (askBox.getText()); juce::Component::unfocusAllComponents(); };
+    askBox.onEscapeKey = [this] { askBox.clear(); juce::Component::unfocusAllComponents(); };
+    askButton.onClick = [this] { askTutor (askBox.getText()); };
+    starters[0].onClick = [this] { askTutor ("Explain this step another way, with a different example."); };
+    starters[1].onClick = [this] { askTutor ("Ask me one short question to check I understood this step. Do not give the answer yet."); };
+    backButton.onClick = [this] { showAnswer (false); };
+    getTutorButton.onClick = [this] { if (goToTab) goToTab (HeaderBar::Brain); };
+    answerView.setMultiLine (true, true);
+    answerView.setReadOnly (true);
+    answerView.setScrollbarsShown (true);
+    answerView.setCaretVisible (false);
+    answerView.setFont (body (14.0f));
+    answerView.setColour (juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
+    answerView.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+    answerView.setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
+    answerView.setColour (juce::TextEditor::textColourId, text.withAlpha (0.9f));
+    for (auto* b : { &prevButton, &nextButton, &tryButton, &askButton, &getTutorButton, &starters[0], &starters[1] }) addAndMakeVisible (b);
+    addAndMakeVisible (askBox);
+    addChildComponent (answerView);
+    addChildComponent (backButton);
+
+    // lessons finished in builds before the course had tracks were saved as one bit each
+    doneIds.addTokens (settings->get ("lessonsDoneIds"), ",", "");
+    doneIds.removeEmptyStrings();
+    if (doneIds.isEmpty())
+    {
+        const int old = settings->getInt ("lessonsDone", 0);
+        for (int i = 0; i < 10; ++i) if ((old & (1 << i)) != 0) doneIds.add (course::legacyLessonId (i));
+        if (! doneIds.isEmpty()) settings->set ("lessonsDoneIds", doneIds.joinIntoString (","));
+    }
+    lastAnswerId = proc.getAI().getStatus().answerId;
+    track = juce::jlimit (0, (int) tracks().size() - 1, settings->getInt ("learnTrack", 0));
+    showLesson (settings->getInt ("learnLesson" + juce::String (track), 0), 0);
 }
 
-LearnPage::~LearnPage() = default;
+LearnPage::~LearnPage() { stage->silence(); }
 
-bool LearnPage::isDone (int l) const { return (settings->getInt ("lessonsDone", 0) & (1 << l)) != 0; }
+void LearnPage::visibilityChanged() { if (! isVisible() && stage != nullptr) stage->silence(); }
+
+void LearnPage::open (int t, int l, int s)
+{
+    track = juce::jlimit (0, (int) tracks().size() - 1, t);
+    showLesson (l, s);
+    resized();
+}
+
+bool LearnPage::isDone (int t, int l) const { return doneIds.contains (tracks()[(size_t) t].lessons[(size_t) l].id); }
+
+void LearnPage::markDone()
+{
+    const juce::String id = tracks()[(size_t) track].lessons[(size_t) lesson].id;
+    if (doneIds.contains (id)) return;
+    doneIds.add (id);
+    settings->set ("lessonsDoneIds", doneIds.joinIntoString (","));
+}
+
+void LearnPage::showTrack (int t)
+{
+    track = juce::jlimit (0, (int) tracks().size() - 1, t);
+    settings->set ("learnTrack", track);
+    scrollY = 0.0f;
+    showLesson (settings->getInt ("learnLesson" + juce::String (track), 0), 0);
+    blockY = (float) lessonRow (lesson).getY();
+}
 
 void LearnPage::showLesson (int l, int s)
 {
-    lesson = juce::jlimit (0, (int) lessons().size() - 1, l);
-    settings->set ("lessonLast", lesson);
-    tryButton.setButtonText (lessons()[(size_t) lesson].tryLabel);
+    const auto& list = tracks()[(size_t) track].lessons;
+    lesson = juce::jlimit (0, (int) list.size() - 1, l);
+    settings->set ("learnLesson" + juce::String (track), lesson);
+    const auto& now = list[(size_t) lesson];
+    tryButton.setVisible (now.tryLabel != nullptr);
+    if (now.tryLabel != nullptr) tryButton.setButtonText (now.tryLabel);
+    // keep the chosen lesson in view when the list is longer than its panel
+    if (! rowsArea.isEmpty())
+    {
+        const auto row = lessonRow (lesson);
+        if (row.getY() < rowsArea.getY() + kChapterH) scrollY -= (float) (rowsArea.getY() + kChapterH - row.getY());
+        if (row.getBottom() > rowsArea.getBottom()) scrollY += (float) (row.getBottom() - rowsArea.getBottom());
+        scrollY = juce::jlimit (0.0f, (float) juce::jmax (0, listHeight() - rowsArea.getHeight()), scrollY);
+    }
     showStep (s);
     repaint();
 }
 
 void LearnPage::showStep (int s)
 {
-    const auto& l = lessons()[(size_t) lesson];
+    const auto& l = tracks()[(size_t) track].lessons[(size_t) lesson];
     step = juce::jlimit (0, (int) l.steps.size() - 1, s);
     const auto& st = l.steps[(size_t) step];
     stage->show (st.scene, st.variant);
     const bool last = step + 1 == (int) l.steps.size();
-    if (last) settings->set ("lessonsDone", settings->getInt ("lessonsDone", 0) | (1 << lesson));
+    if (last) markDone();
     prevButton.setEnabled (step > 0);
-    nextButton.setButtonText (last ? "Next lesson" : "Next");
+    const bool lastLesson = lesson + 1 == (int) tracks()[(size_t) track].lessons.size();
+    nextButton.setButtonText (! last ? "Next" : lastLesson ? "Next track" : "Next lesson");
     textFade = 0.0f;
+    showAnswer (false);
     repaint();
 }
 
-juce::Rectangle<int> LearnPage::lessonRow (int index) const
+// ---- the tutor ----------------------------------------------------------------------------------------
+void LearnPage::askTutor (const juce::String& raw)
 {
-    const auto& all = lessons();
-    int y = listArea.getY() + 50;
-    const char* chapter = nullptr;
+    const auto question = raw.trim();
+    auto& ai = proc.getAI();
+    if (question.isEmpty() || ai.getStatus().busy) return;
+    if (! ai.getStatus().available) { setStatus ("The tutor is not set up on this computer yet. It is free: open the Mix Brain tab to get it."); return; }
+    const auto& t = tracks()[(size_t) track];
+    const auto& l = t.lessons[(size_t) lesson];
+    const auto& st = l.steps[(size_t) step];
+    askedQuestion = question;
+    ai.forgetConversation();                             // each question stands on the step it was asked from
+    ai.ask (learn::prompt (t.name, l.title, st.title, st.text, question), question, (int) (juce::pointer_sized_int) this);
+    waiting = true;
+    askBox.clear();
+    answerView.setText ("You asked: " + question + "\n\nThe tutor is thinking. The first answer after a break takes a little longer while it wakes up.", false);
+    showAnswer (true);
+}
+
+void LearnPage::showAnswer (bool show)
+{
+    answerShown = show;
+    answerView.setVisible (show);
+    backButton.setVisible (show);
+    if (! show) waiting = false;
+    repaint (contentArea);
+}
+
+// ---- the list -----------------------------------------------------------------------------------------
+juce::Rectangle<int> LearnPage::trackTab (int index) const
+{
+    const auto& all = tracks();
+    float total = 0.0f;
+    std::vector<float> widths;
+    for (auto& t : all) { widths.push_back (bodyBold (11.5f).getStringWidthFloat (t.shortName) + 16.0f); total += widths.back(); }
+    const float gap = 3.0f, scale = ((float) tabsArea.getWidth() - gap * (float) (all.size() - 1)) / total;
+    float x = (float) tabsArea.getX();
     for (int i = 0; i < (int) all.size(); ++i)
     {
-        if (chapter == nullptr || juce::String (chapter) != all[(size_t) i].chapter) { chapter = all[(size_t) i].chapter; y += 24; }
-        if (i == index) return { listArea.getX() + 8, y, listArea.getWidth() - 16, 32 };
-        y += 34;
+        const float w = widths[(size_t) i] * scale;
+        if (i == index) return juce::Rectangle<float> (x, (float) tabsArea.getY(), w, (float) tabsArea.getHeight()).toNearestInt();
+        x += w + gap;
     }
     return {};
 }
 
+int LearnPage::trackAt (juce::Point<int> p) const
+{
+    for (int i = 0; i < (int) tracks().size(); ++i) if (trackTab (i).contains (p)) return i;
+    return -1;
+}
+
+juce::Rectangle<int> LearnPage::lessonRow (int index) const
+{
+    const auto& list = tracks()[(size_t) track].lessons;
+    int y = rowsArea.getY() - juce::roundToInt (scrollY);
+    const char* chapter = nullptr;
+    for (int i = 0; i < (int) list.size(); ++i)
+    {
+        if (chapter == nullptr || juce::String (chapter) != list[(size_t) i].chapter) { chapter = list[(size_t) i].chapter; y += kChapterH; }
+        if (i == index) return { rowsArea.getX(), y, rowsArea.getWidth(), kRowH - 2 };
+        y += kRowH;
+    }
+    return {};
+}
+
+int LearnPage::listHeight() const
+{
+    const auto& list = tracks()[(size_t) track].lessons;
+    int h = 6;
+    const char* chapter = nullptr;
+    for (auto& l : list) { if (chapter == nullptr || juce::String (chapter) != l.chapter) { chapter = l.chapter; h += kChapterH; } h += kRowH; }
+    return h;
+}
+
 int LearnPage::lessonAt (juce::Point<int> p) const
 {
-    for (int i = 0; i < (int) lessons().size(); ++i) if (lessonRow (i).contains (p)) return i;
+    if (! rowsArea.contains (p)) return -1;
+    for (int i = 0; i < (int) tracks()[(size_t) track].lessons.size(); ++i) if (lessonRow (i).contains (p)) return i;
     return -1;
 }
 
 int LearnPage::stepDotAt (juce::Point<int> p) const
 {
     if (! dotsArea.expanded (0, 8).contains (p)) return -1;
-    const int n = (int) lessons()[(size_t) lesson].steps.size();
+    const int n = (int) tracks()[(size_t) track].lessons[(size_t) lesson].steps.size();
     return juce::jlimit (0, n - 1, (p.x - dotsArea.getX()) * n / juce::jmax (1, dotsArea.getWidth()));
 }
 
 void LearnPage::mouseDown (const juce::MouseEvent& e)
 {
+    const int t = trackAt (e.getPosition());
+    if (t >= 0) { if (t != track) showTrack (t); return; }
     const int l = lessonAt (e.getPosition());
     if (l >= 0 && l != lesson) { showLesson (l, 0); return; }
     const int d = stepDotAt (e.getPosition());
@@ -1169,11 +1232,19 @@ void LearnPage::mouseDown (const juce::MouseEvent& e)
 
 void LearnPage::mouseMove (const juce::MouseEvent& e)
 {
-    const int h = lessonAt (e.getPosition());
-    if (h != hover) { hover = h; repaint (listArea); }
-    setMouseCursor (h >= 0 || stepDotAt (e.getPosition()) >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+    const int h = lessonAt (e.getPosition()), th = trackAt (e.getPosition());
+    if (h != hover || th != tabHover) { hover = h; tabHover = th; repaint (listArea); }
+    setMouseCursor (h >= 0 || th >= 0 || stepDotAt (e.getPosition()) >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
 }
-void LearnPage::mouseExit (const juce::MouseEvent&) { hover = -1; repaint (listArea); }
+void LearnPage::mouseExit (const juce::MouseEvent&) { hover = -1; tabHover = -1; repaint (listArea); }
+
+void LearnPage::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    if (! listArea.contains (e.getPosition())) return;
+    scrollY = juce::jlimit (0.0f, (float) juce::jmax (0, listHeight() - rowsArea.getHeight()), scrollY - w.deltaY * 220.0f);
+    blockY = (float) lessonRow (lesson).getY();
+    repaint (listArea);
+}
 
 void LearnPage::tick (float dt)
 {
@@ -1181,41 +1252,82 @@ void LearnPage::tick (float dt)
     if (std::abs (blockY - target) > 0.3f) { blockY = approach (blockY, target, dt, 0.05f); repaint (listArea); }
     if (textFade < 1.0f) { textFade = juce::jmin (1.0f, textFade + dt * 4.5f); repaint (textArea.expanded (0, 12)); }
     if (std::abs (dotAnim - (float) step) > 0.004f) { dotAnim = approach (dotAnim, (float) step, dt, 0.07f); repaint (dotsArea.expanded (0, 6)); }
+
+    // is the host running the plugin's audio? If not, an example that should be heard says how to wake it
+    const auto samples = proc.getSamplesProcessed();
+    if (samples != lastSamples) { lastSamples = samples; stillFor = 0.0f; } else stillFor += dt;
+    audioRuns = stillFor < 0.6f;
+
+    aiCheck += dt;
+    if (aiCheck > 0.25f)
+    {
+        aiCheck = 0.0f;
+        const auto ai = proc.getAI().getStatus();
+        if (ai.available != tutorReady) { tutorReady = ai.available; resized(); repaint (contentArea); }
+        askButton.setEnabled (! ai.busy);
+        if (ai.answerId != lastAnswerId)
+        {
+            lastAnswerId = ai.answerId;
+            if (waiting)
+            {
+                waiting = false;
+                answerView.setText ("You asked: " + askedQuestion + "\n\n"
+                                    + (ai.answer.isNotEmpty() ? ai.answer + "\n\nThis answer is from an AI model (" + ai.model + ") running on this computer. It can be wrong: check it against the lesson and with your ears."
+                                                              : "The tutor could not answer: " + ai.error), false);
+                answerView.setCaretPosition (0);
+            }
+        }
+    }
     stage->tick (dt);
 }
 
 void LearnPage::paint (juce::Graphics& g)
 {
     g.fillAll (black);
-    const auto& all = lessons();
+    const auto& all = tracks();
+    const auto& tr = all[(size_t) track];
 
-    // ---- lesson list
+    // ---- tracks and lessons
     fillPanel (g, listArea.toFloat());
-    auto head = listArea.reduced (16, 0).removeFromTop (50);
+    auto head = listArea.reduced (16, 0).removeFromTop (44);
     g.setFont (headline (20.0f)); g.setColour (text);
-    g.drawText ("LESSONS", head, juce::Justification::centredLeft);
-    int doneCount = 0;
-    for (int i = 0; i < (int) all.size(); ++i) if (isDone (i)) ++doneCount;
+    g.drawText ("LEARN", head, juce::Justification::centredLeft);
+    int doneCount = 0, total = 0;
+    for (int t = 0; t < (int) all.size(); ++t) for (int i = 0; i < (int) all[(size_t) t].lessons.size(); ++i) { ++total; if (isDone (t, i)) ++doneCount; }
     g.setFont (body (11.5f)); g.setColour (textMute);
-    g.drawText (juce::String (doneCount) + " of " + juce::String ((int) all.size()) + " done", head, juce::Justification::centredRight);
+    g.drawText (juce::String (doneCount) + " of " + juce::String (total) + " lessons done", head, juce::Justification::centredRight);
 
+    for (int t = 0; t < (int) all.size(); ++t)
+    {
+        const auto tab = trackTab (t).toFloat();
+        const bool on = t == track;
+        g.setColour (on ? yellow : (t == tabHover ? control.brighter (0.15f) : control)); g.fillRoundedRectangle (tab, 5.0f);
+        g.setFont (bodyBold (11.5f)); g.setColour (on ? onYellow : text);
+        g.drawText (all[(size_t) t].shortName, tab, juce::Justification::centred);
+    }
+    auto about = juce::Rectangle<int> (tabsArea.getX(), tabsArea.getBottom() + 8, tabsArea.getWidth(), 30);
+    g.setFont (body (11.5f)); g.setColour (textDim);
+    g.drawFittedText (tr.about, about, juce::Justification::topLeft, 2, 0.95f);
+
+    g.saveState();
+    g.reduceClipRegion (rowsArea);
     g.setColour (yellow);
-    g.fillRect (juce::Rectangle<float> ((float) listArea.getX() + 8.0f, blockY, (float) listArea.getWidth() - 16.0f, 32.0f));
+    g.fillRoundedRectangle (juce::Rectangle<float> ((float) rowsArea.getX(), blockY, (float) rowsArea.getWidth(), (float) kRowH - 2.0f), 3.0f);
     const char* chapter = nullptr;
-    for (int i = 0; i < (int) all.size(); ++i)
+    for (int i = 0; i < (int) tr.lessons.size(); ++i)
     {
         const auto row = lessonRow (i);
-        if (chapter == nullptr || juce::String (chapter) != all[(size_t) i].chapter)
+        if (chapter == nullptr || juce::String (chapter) != tr.lessons[(size_t) i].chapter)
         {
-            chapter = all[(size_t) i].chapter;
+            chapter = tr.lessons[(size_t) i].chapter;
             g.setFont (bodyBold (10.5f)); g.setColour (textMute);
-            g.drawText (chapter, row.translated (8, -22).withHeight (18), juce::Justification::centredLeft);
+            g.drawText (chapter, row.translated (8, -kChapterH + 2).withHeight (18), juce::Justification::centredLeft);
         }
-        const bool on = std::abs (blockY - (float) row.getY()) < 16.0f;
+        const bool on = std::abs (blockY - (float) row.getY()) < 14.0f && i == lesson;
         g.setFont (on ? bodyBold (12.5f) : body (12.5f));
         g.setColour (on ? onYellow : (i == hover ? text : textDim));
-        g.drawText (all[(size_t) i].title, row.withTrimmedLeft (12).withTrimmedRight (26), juce::Justification::centredLeft);
-        if (isDone (i))
+        g.drawText (tr.lessons[(size_t) i].title, row.withTrimmedLeft (12).withTrimmedRight (26), juce::Justification::centredLeft);
+        if (isDone (track, i))
         {
             const auto dot = juce::Rectangle<float> ((float) row.getRight() - 22.0f, (float) row.getCentreY() - 6.0f, 12.0f, 12.0f);
             juce::Path tick; tick.startNewSubPath (dot.getX() + 2.0f, dot.getCentreY()); tick.lineTo (dot.getX() + 5.0f, dot.getBottom() - 2.5f); tick.lineTo (dot.getRight() - 1.5f, dot.getY() + 2.5f);
@@ -1223,19 +1335,45 @@ void LearnPage::paint (juce::Graphics& g)
             g.strokePath (tick, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
     }
+    g.restoreState();
+    if (listHeight() > rowsArea.getHeight())               // more below or above: a thin bar shows where the list is
+    {
+        const float frac = (float) rowsArea.getHeight() / (float) listHeight(), pos = scrollY / (float) listHeight();
+        g.setColour (lineHi);
+        g.fillRoundedRectangle ((float) listArea.getRight() - 5.0f, (float) rowsArea.getY() + pos * (float) rowsArea.getHeight(), 3.0f, frac * (float) rowsArea.getHeight(), 1.5f);
+    }
 
     // ---- step text
     fillPanel (g, contentArea.toFloat());
-    const auto& l = all[(size_t) lesson];
+    const auto& l = tr.lessons[(size_t) lesson];
     const auto& st = l.steps[(size_t) step];
     auto tArea = textArea.toFloat().translated (0.0f, (1.0f - textFade) * 8.0f);
     g.setFont (bodyBold (11.5f)); g.setColour (yellow.withAlpha (textFade));
     g.drawText (juce::String (l.title) + "    step " + juce::String (step + 1) + " of " + juce::String ((int) l.steps.size()), tArea.removeFromTop (16.0f), juce::Justification::centredLeft);
-    tArea.removeFromTop (2.0f);
-    g.setFont (headline (28.0f)); g.setColour (text.withAlpha (textFade));
-    g.drawText (juce::String (st.title).toUpperCase(), tArea.removeFromTop (36.0f), juce::Justification::centredLeft);
-    tArea.removeFromTop (6.0f);
-    drawWrapped (g, st.text, tArea, body (14.0f), text.withAlpha (0.88f * textFade), 1.45f);
+    if (! answerShown)
+    {
+        tArea.removeFromTop (2.0f);
+        g.setFont (headline (26.0f)); g.setColour (text.withAlpha (textFade));
+        g.drawText (juce::String (st.title).toUpperCase(), tArea.removeFromTop (34.0f), juce::Justification::centredLeft);
+        tArea.removeFromTop (6.0f);
+        drawWrapped (g, st.text, tArea, body (14.0f), text.withAlpha (0.88f * textFade), 1.45f);
+    }
+
+    // ---- the tutor
+    auto tu = tutorArea;
+    g.setColour (line); g.fillRect (tu.getX() - 12, tu.getY(), 1, tu.getHeight());
+    g.setFont (bodyBold (10.5f)); g.setColour (textMute);
+    g.drawText ("ASK THE TUTOR", tu.removeFromTop (16), juce::Justification::centredLeft);
+    if (! tutorReady)
+    {
+        tu.removeFromTop (40);
+        drawWrapped (g, "The tutor is a free AI model that runs on this computer and knows which step you are on. It needs setting up once.", tu.toFloat().withHeight (70.0f), body (12.0f), textDim, 1.35f);
+    }
+    else
+    {
+        tu.removeFromTop (36 + 62);
+        drawWrapped (g, "It is told which step you are reading. Answers come from an AI model on this computer and can be wrong.", tu.toFloat(), body (11.0f), textMute, 1.3f);
+    }
 
     // ---- step progress
     const int n = (int) l.steps.size();
@@ -1252,10 +1390,13 @@ void LearnPage::paint (juce::Graphics& g)
 void LearnPage::resized()
 {
     auto r = getLocalBounds().reduced (12);
-    listArea = r.removeFromLeft (252);
+    listArea = r.removeFromLeft (262);
     r.removeFromLeft (10);
     contentArea = r;
-    if (blockY <= 0.0f) blockY = (float) lessonRow (lesson).getY();
+    tabsArea = listArea.reduced (8, 0).withTop (listArea.getY() + 44).withHeight (26);
+    rowsArea = listArea.reduced (8, 0).withTop (tabsArea.getBottom() + 42).withBottom (listArea.getBottom() - 8);
+    scrollY = juce::jlimit (0.0f, (float) juce::jmax (0, listHeight() - rowsArea.getHeight()), scrollY);
+    blockY = (float) lessonRow (lesson).getY();
 
     auto c = contentArea.reduced (18, 16);
     stage->setBounds (c.removeFromTop (juce::jmin (350, c.getHeight() * 60 / 100)));
@@ -1269,6 +1410,33 @@ void LearnPage::resized()
     bottom.removeFromRight (24);
     dotsArea = bottom.withSizeKeepingCentre (bottom.getWidth(), 12);
     c.removeFromBottom (10);
-    textArea = c.withWidth (juce::jmin (c.getWidth(), 590));
+
+    tutorArea = c.removeFromRight (juce::jmin (236, c.getWidth() / 3));
+    c.removeFromRight (24);
+    textArea = c;
+    auto tu = tutorArea.withTrimmedTop (20);
+    getTutorButton.setVisible (! tutorReady);
+    askBox.setVisible (tutorReady); askButton.setVisible (tutorReady);
+    for (auto& s : starters) s.setVisible (tutorReady);
+    if (tutorReady)
+    {
+        auto askRow = tu.removeFromTop (28);
+        askButton.setBounds (askRow.removeFromRight (52));
+        askRow.removeFromRight (6);
+        askBox.setBounds (askRow);
+        tu.removeFromTop (6);
+        starters[0].setBounds (tu.removeFromTop (26));
+        tu.removeFromTop (4);
+        starters[1].setBounds (tu.removeFromTop (26));
+    }
+    else getTutorButton.setBounds (tu.removeFromTop (28).withWidth (juce::jmin (tu.getWidth(), 170)));
+    layoutText();
+}
+
+void LearnPage::layoutText()
+{
+    auto a = textArea.withTrimmedTop (20);
+    backButton.setBounds (textArea.getRight() - 132, textArea.getY() - 6, 132, 24);
+    answerView.setBounds (a.expanded (4, 0));
 }
 }

@@ -56,8 +56,64 @@ Logic: Audio Units > Musically Unorthodox. Also installs the VST3 and a standalo
    with **Listen as** Mono and Phone speaker, and run the **Bounce check** on the Mix tab before exporting.
 
 Hover over any control and the bar along the bottom says what it does, when to use it and typical settings.
-The **Learn** tab has ten lessons, each a few steps long. Every step has an animated example drawn from the same
-maths the plugin uses, and several end with a "your turn" exercise.
+The **Learn** tab is a course: see "Learn: a course in beat making" below.
+
+## Learn: a course in beat making (build 25)
+
+The Learn tab teaches making a beat from nothing, not only mixing. It has five tracks, chosen along the top
+of the lesson list:
+
+| Track | Lessons |
+|---|---|
+| Theory | Beat, bar and BPM; counting the BPM yourself; note lengths and rhythm; the twelve notes; keys and scales; more scales; building chords; progressions; what makes a melody; notes that work and notes that clash; call, response and counter melodies |
+| Beats | Plan the beat; write the main melody; chords, pads and a second melody; kick, snare and hats; drum patterns by style; rolls, velocity and bounce; 808s; from a loop to a song; levels; space; effects; finish and export |
+| Logic | Find your way around; tempo, key and metronome; instruments and the piano roll; kits and the Step Sequencer; 808s; arrange, mix and bounce |
+| FL | Find your way around; tempo, metronome and patterns; instruments and the Piano roll; drums in the Channel rack; 808s; arrange, mix and export |
+| Mixing | The ten lessons the tab had before |
+
+Every step is two to four sentences under an example. The new examples can be played:
+
+- **Keyboard**: two octaves. Click a key to hear it. It shows a scale for any root (major, minor, pentatonic,
+  harmonic minor, Phrygian, Dorian, blues), the tones and semitones between its notes, the seven chords of a
+  key, and which notes are outside the key, heard against the home chord. One step is an exercise: find the
+  seven notes of a named minor key.
+- **Step grid**: kick, snare, hats and open hat over one or two bars. Click a step to change it. It holds the
+  patterns the lessons describe (boom bap with swing, trap, drill's three-three-two hats, R&B, rolls with
+  velocity, triplets, kick with 808), and one step is an exercise: build a working beat on an empty grid.
+- **Piano roll**: plays the melodies the lessons describe (a motif, repeated, varied, call and response, a
+  counter melody, a clash and its fix, a progression, an arpeggio, an 808 line with slides), and one step is a
+  sketch pad where every row is a note of C minor pentatonic over drums and an 808.
+- **Tempo**: a metronome with a tempo slider, a 15 second counting exercise that reveals the tempo afterwards,
+  a tap pad that reads the tempo of the taps (it works on any song playing in the room), and the same two bars
+  counted at 140 and at 70.
+- Pictures: a song laid out in sections with what plays in each, where each part of a beat sits in frequency
+  and across left and right, what reverb, delay, a filter sweep and sidechain do, a map of each DAW's window,
+  and reference cards of key commands.
+
+**The sounds.** Notes, the 808 and the drums are made by the plugin (`learn/LessonSound.h`: a plucked tone, a
+sine with a little second harmonic, sine sweeps and noise). They are not samples and are not meant to sound like
+a finished kit; they are there so a student hears what they clicked. They are mixed in after every meter and
+measurement, so they never change what the plugin measures, and they are left out of a bounce. A DAW only runs
+a plugin's audio when it has a reason to, so if nothing is heard the example says so: press play in the DAW or
+select the track.
+
+**The tutor.** Each step has an Ask box. The question goes to the same AI model as the Mix Brain tab (free,
+running on the student's computer, set up once on that tab). It is told which step is on screen. Note names,
+the chords of a key and tempo sums are worked out by the plugin (`learn/MusicTheory.h`) and handed to the model
+as facts, because small models get them wrong. Twenty short guide notes cover the course, and the two or three
+that match the question are sent with it. What the model writes is still a model's answer, and the page says so
+under every answer.
+
+**Where the content comes from.** The theory is standard. The level figures in the mixing lessons are the
+ones measured on the stems of the five reference records (see "Finish" below). Logic Pro and FL Studio key
+commands and menu names were checked against Apple's and Image-Line's own manuals when the lessons were
+written; both programs move things between versions, and each track's first lesson says how to find something
+that has moved.
+
+**Not done.** Nobody has sat a student in front of it yet. The lessons have not been checked by a teacher,
+and the DAW lessons have not been followed step by step in Logic or FL Studio on a real machine. There are no
+videos or screenshots of the DAWs: the window maps are drawings. Progress is kept per computer, not per
+student. The tutor's answers have only been tested for what it is told, not for how good its explanations are.
 
 ## Tune tab
 
@@ -197,7 +253,7 @@ that and no download is needed.
 | FX | Doubler, Delay (four styles), Reverb (nine spaces), Harmony, Shift, Phone, Lo-fi, Motion, Chop; presets for each, your own presets, and combined Sounds |
 | Master | Target modes (-18 / -14 / -9 LUFS), true-peak limiter with look-ahead, auto level, loudness history, release check, Mono and Phone speaker listening checks |
 | Mix Brain | Ask the AI tutor about the track or about mixing; model download with sizes |
-| Learn | Animated lessons: how sound works, what an EQ is, masking, what a compressor is, attack and release, gate and de-esser, saturation, stereo and mono, loudness and mastering, putting it together |
+| Learn | A course in five tracks: music theory, making a beat, Logic Pro, FL Studio and mixing. 45 lessons, 200 steps, each under an example that can be clicked and heard; the AI tutor can be asked about the step on screen |
 
 ## Presets of your own
 
@@ -647,6 +703,11 @@ Source/
   update/Updater.*               in-plugin updates: feed check, download, checksum, in-place install
   ai/LocalAI.*                   optional AI tutor: built-in helper and model, or a local Ollama server
   ai/TutorKnowledge.*            what the tutor is told: core facts, mixing notes, lookup by question
+  learn/Course*.{h,cpp}          the Learn course: five tracks of lessons, one file per track
+  learn/MusicTheory.h            scales, chords of a key, tempo sums; also the facts handed to the tutor
+  learn/LessonSound.h            the notes, 808 and drums the lessons play, and their step sequencer
+  learn/LearnTutor.h             what the tutor is told for a question asked from a lesson
+  ui/learn/BeatScenes*.{h,cpp}   the playable examples: keyboard, step grid, piano roll, tempo, pictures
   state/LocalSettings.h          per-computer settings (update checks, lesson progress)
   ui/                            theme, icons, look and feel, widgets, help text, pages
   tests/TestMain.cpp             DSP and analysis tests

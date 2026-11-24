@@ -14,6 +14,7 @@
 #include "dsp/Smoother.h"
 #include "dsp/Saturator.h"
 #include "dsp/PeakTamer.h"
+#include "learn/LessonSound.h"
 #include "dsp/VocalProbe.h"
 #include "analysis/VocalReference.h"
 #include "dsp/Rider.h"
@@ -137,6 +138,9 @@ public:
     SessionBus& getBus() { return *bus; }
     Updater& getUpdater() { return *updater; }
     LocalAI& getAI() { return *ai; }
+    // The Learn section's own sounds (notes, an 808, drums), mixed in after everything is measured and never into a bounce.
+    LessonSound& getLessonSound() { return lessonSound; }
+    uint64_t getSamplesProcessed() const { return samplesProcessed.load (std::memory_order_relaxed); }     // stands still when the host is not running the plugin
     LocalSettings& getSettings() { return *settings; }
     juce::String tutorPrompt (const juce::String& question);   // everything the AI tutor is told before it answers
     juce::String tutorTrackNotes();                            // the measured part: this track and the session
@@ -372,6 +376,7 @@ private:
     Saturator saturator;
     Rider rider;
     PeakTamer tamer;                              // holds the loudest syllables (tracks only)
+    LessonSound lessonSound;
     VocalProbe vocalProbe;                        // what Finish measures a track's output by
     VocalSpace vocalSpace;
     StereoTool stereo;

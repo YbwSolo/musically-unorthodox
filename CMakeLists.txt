@@ -125,6 +125,14 @@ target_sources(MusicallyUnorthodox PRIVATE
     Source/ui/MasterPage.cpp
     Source/ui/MasterAssistant.cpp
     Source/ui/LearnPage.cpp
+    Source/ui/learn/BeatScenes.cpp
+    Source/ui/learn/BeatScenesNotes.cpp
+    Source/ui/learn/BeatScenesPictures.cpp
+    Source/learn/Course.cpp
+    Source/learn/CourseTheory.cpp
+    Source/learn/CourseBeat.cpp
+    Source/learn/CourseDaw.cpp
+    Source/learn/CourseMixing.cpp
     Source/ui/SettingsPanel.cpp)
 
 target_include_directories(MusicallyUnorthodox PRIVATE Source)
@@ -154,6 +162,11 @@ endif()
 if(MU_BUILD_TESTS)
     add_executable(MUTests
         Source/tests/TestMain.cpp
+        Source/learn/Course.cpp
+        Source/learn/CourseTheory.cpp
+        Source/learn/CourseBeat.cpp
+        Source/learn/CourseDaw.cpp
+        Source/learn/CourseMixing.cpp
         Source/dsp/SpectrumAnalyzer.cpp
         ${MU_DSP_SOURCES})
     target_include_directories(MUTests PRIVATE Source)

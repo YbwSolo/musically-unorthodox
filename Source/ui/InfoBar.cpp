@@ -41,7 +41,7 @@ HelpEntry InfoBar::coach (int tab) const
         case 5: return { "FX", "Pick a tool on the left, step through its presets with the arrows, then adjust. The Sounds button at the top loads several tools at once." };
         case 8: return { "Mix Brain", "Ask in your own words. It reads this track's measurements before it answers, and it runs on this computer, so nothing you type leaves it." };
         case 6: return { "Master", "Choose where the song is going, play the loudest section, and let the level settle. Then read the release check." };
-        default: return { "Learn", "Pick a lesson on the left. The diagrams are live: drag them, then press Try it to use the idea on your own track." };
+        default: return { "Learn", "Pick a track, then a lesson. The examples are live: click the keys and steps, press play to hear them, and ask the tutor about any step." };
     }
 }
 

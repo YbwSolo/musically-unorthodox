@@ -26,6 +26,7 @@ public:
     ~MUEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
+    LearnPage& getLearnPage() { return learnPage; }       // so the preview harness can open a lesson
 
 private:
     void timerCallback() override;

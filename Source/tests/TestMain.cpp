@@ -1,6 +1,9 @@
 // Console test runner for the DSP and balance engine. Build target: MUTests.
 #include "../dsp/VocalProbe.h"
 #include "../dsp/PeakTamer.h"
+#include "../learn/Course.h"
+#include "../learn/LessonSound.h"
+#include "../learn/LearnTutor.h"
 #include <juce_core/juce_core.h>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
@@ -2888,6 +2891,99 @@ int main()
             }
             check (ok && peak < 40.0f, "Delay stays stable with repeats, drive and wobble at their limits", "peak " + juce::String (peak, 1));
         }
+    }
+
+    // ---- the Learn course: theory worked out by the plugin, the lesson sounds, and what the tutor is told ----
+    {
+        using namespace mu::theory;
+        check (scaleNotes (60, Scale::Minor) == "C D Eb F G Ab Bb" && scaleNotes (65, Scale::Minor) == "F G Ab Bb C Db Eb" && scaleNotes (64, Scale::Minor) == "E F# G A B C D"
+               && scaleNotes (60, Scale::Major) == "C D E F G A B" && scaleNotes (57, Scale::MinorPentatonic) == "A C D E G",
+               "Scales are spelled the way a musician writes them: flats in flat keys, sharps in sharp keys", scaleNotes (65, Scale::Minor) + " | " + scaleNotes (64, Scale::Minor));
+        const auto chords = chordsOfKey (0, Scale::Minor);
+        juce::String names; for (auto& c : chords) names << c.numeral << " " << c.name << " (" << c.notes << "), ";
+        check (chords.size() == 7 && chords[0].name == "C minor" && chords[1].diminished && chords[2].name == "Eb major" && chords[3].name == "F minor" && chords[4].name == "G minor"
+               && chords[5].name == "Ab major" && chords[5].notes == "Ab C Eb" && chords[6].name == "Bb major" && chords[5].numeral == "VI" && chords[0].numeral == "i",
+               "The seven chords of a minor key: minor on 1, 4 and 5, major on 3, 6 and 7, diminished on 2", names);
+        check (std::abs (bpmFromTaps ({ 0.0, 0.5, 1.0, 1.5, 2.0 }) - 120.0) < 0.01 && std::abs (bpmFromTaps ({ 0.0, 0.5, 1.0, 1.72, 2.22, 2.72 }) - 120.0) < 0.01 && bpmFromTaps ({ 0.0, 0.5 }) == 0.0,
+               "Tap tempo reads the tempo from the taps, is not thrown by one late tap, and waits for three taps");
+        const auto f1 = factsFor ("what are the notes of F minor?"), f2 = factsFor ("how long is a bar at 140 bpm"), f3 = factsFor ("can I get a better melody, and is a minor change enough?"), f4 = factsFor ("which notes are in a minor?");
+        check (f1.contains ("F G Ab Bb C Db Eb") && f1.contains ("VI Db major (Db F Ab)") && f1.contains ("relative major") && f1.contains ("Ab major"),
+               "A question that names a key gets that key's notes, chords and relative worked out for the tutor", f1);
+        check (f2.contains ("1.71 seconds") && f2.contains ("429 ms") && f2.contains ("Half of 140 is 70"), "A question that names a tempo gets the bar and note lengths worked out", f2);
+        check (f3.isEmpty(), "A question with no key or tempo in it gets no invented facts", f3);
+        check (f4.contains ("A B C D E F G"), "A key typed in lower case is still understood when the question is about notes", f4);
+    }
+    {
+        using namespace mu::course;
+        juce::StringArray ids; bool unique = true, shaped = true, fits = true, inRange = true; int lessons = 0, steps = 0; juce::String worst;
+        for (auto& t : tracks())
+            for (auto& l : t.lessons)
+            {
+                ++lessons;
+                if (ids.contains (l.id)) unique = false;
+                ids.add (l.id);
+                if (l.steps.size() < 2 || l.steps.size() > 7 || juce::String (l.title).length() > 36) { shaped = false; worst = l.id; }
+                for (auto& st : l.steps)
+                {
+                    ++steps;
+                    if (juce::String (st.text).length() > 450 || juce::String (st.title).length() > 44) { fits = false; worst = juce::String (l.id) + ": " + st.title; }
+                    const int most = st.scene == Scene::Pulse ? 5 : st.scene == Scene::Grid ? 10 : st.scene == Scene::Keys ? 14 : st.scene == Scene::Roll ? 15 : st.scene == Scene::Song ? 2
+                                   : st.scene == Scene::Layers ? 3 : st.scene == Scene::Fx ? 3 : st.scene == Scene::Daw ? 1 : st.scene == Scene::Card ? 10 : 99;
+                    if (st.variant < 0 || st.variant > most) { inRange = false; worst = juce::String (l.id) + ": " + st.title; }
+                }
+            }
+        check (tracks().size() == 5 && lessons >= 45 && steps >= 190, "The course has its five tracks and all their lessons", juce::String (lessons) + " lessons, " + juce::String (steps) + " steps");
+        check (unique && shaped, "Every lesson has its own id, two to seven steps and a title that fits the list", worst);
+        check (fits && inRange, "Every step's text fits under its example, and its example exists", worst);
+        bool legacy = true;
+        for (int i = 0; i < 10; ++i) if (legacyLessonId (i) == nullptr || ! ids.contains (legacyLessonId (i))) legacy = false;
+        check (legacy && legacyLessonId (10) == nullptr, "Lessons finished in earlier builds still count: each old lesson maps to a lesson that exists");
+    }
+    {
+        mu::LessonSound sound; sound.prepare (48000.0);
+        juce::AudioBuffer<float> b (2, 480);
+        auto run = [&] (double seconds, float& peak, bool& finite)
+        {
+            peak = 0.0f; finite = true;
+            for (int n = 0; n < (int) (seconds * 100.0); ++n)
+            {
+                b.clear(); sound.process (b);
+                for (int i = 0; i < b.getNumSamples(); ++i) { const float v = b.getSample (0, i); finite = finite && std::isfinite (v); peak = juce::jmax (peak, std::abs (v)); }
+            }
+        };
+        float peak; bool finite;
+        run (0.5, peak, finite);
+        check (peak == 0.0f && ! sound.isSounding(), "The lesson sounds add nothing at all until a lesson asks for them");
+        sound.playNote (60, 0.4f);
+        run (0.3, peak, finite); const float during = peak;
+        run (2.0, peak, finite); run (0.2, peak, finite);
+        check (during > 0.02f && during < 0.9f && peak == 0.0f && finite, "A clicked key is heard, then dies away to exact silence", "peak " + juce::String (during, 3) + " then " + juce::String (peak, 6));
+        mu::LessonPattern p; p.bpm = 120.0f; p.click = true;
+        for (int s = 0; s < 16; s += 4) p.kick[(size_t) s] = 100;
+        for (int s = 0; s < 16; s += 2) p.hat[(size_t) s] = 80;
+        p.snare[4] = p.snare[12] = 100; p.bass[0] = 36; p.bassLen[0] = 6; p.bass[8] = 36; p.bassLen[8] = 6; p.bassSlide[8] = 48; p.lead[0] = 72; p.lead2[0] = 75; p.lead3[0] = 79; p.leadLen[0] = p.lead2Len[0] = p.lead3Len[0] = 8;
+        sound.setPattern (p); sound.start();
+        run (0.95, peak, finite);                             // 120 BPM: eight sixteenth steps a second
+        const int at = sound.currentStep();
+        run (1.0, peak, finite);
+        check (at == 7 && sound.currentStep() == 15, "A pattern steps in time with its tempo", "step " + juce::String (at) + " after 0.95 s, " + juce::String (sound.currentStep()) + " after 1.95 s");
+        check (finite && peak > 0.1f && peak <= 0.95f, "Drums, an 808 with a slide, a chord and the click together stay below full scale", "peak " + juce::String (peak, 3));
+        sound.stop();
+        run (3.0, peak, finite); run (0.2, peak, finite);
+        check (peak == 0.0f && sound.currentStep() == -1, "Stopping a pattern lets the last notes ring out and then leaves silence");
+        mu::LessonPattern once; once.once = true; once.stepsPerBeat = 2; once.bpm = 120.0f; once.steps = 4; once.lead[0] = 60; once.lead[1] = 62; once.lead[2] = 64;
+        sound.setPattern (once); sound.start();
+        run (2.0, peak, finite);
+        check (! sound.isPlaying(), "A scale played once stops by itself at the end");
+    }
+    {
+        const auto p = mu::learn::prompt ("Music theory", "Keys and scales", "The minor scale", "Minor sounds dark, serious or sad.", "what are the notes of F minor and which chords can I use?");
+        check (p.contains ("Minor sounds dark, serious or sad.") && p.contains ("F G Ab Bb C Db Eb") && p.contains ("GUIDE NOTES") && p.contains ("Keys and scales:") && p.length() < 4200,
+               "The tutor is told the step being read, the worked-out notes and chords of the key asked about, and the matching guide notes", juce::String (p.length()) + " characters");
+        const auto titles = [] (const juce::String& q) { juce::StringArray t; for (auto* n : mu::learn::notesFor (q)) t.add (n->title); return t.joinIntoString (", "); };
+        check (titles ("how do I count the bpm of a song").startsWith ("Counting tempo") && titles ("my 808 sounds out of tune").contains ("808s") && titles ("how do I make hi hat rolls").contains ("Rolls")
+               && titles ("where is the piano roll in fl studio").contains ("FL Studio") && titles ("hello").isEmpty(),
+               "Questions about tempo, 808s, hi-hat rolls and FL Studio each find their own guide note", titles ("how do I count the bpm of a song") + " | " + titles ("my 808 sounds out of tune") + " | " + titles ("how do I make hi hat rolls"));
     }
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED", failures, failures == 1 ? "" : "s");

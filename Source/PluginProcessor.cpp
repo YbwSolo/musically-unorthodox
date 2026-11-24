@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "learn/MusicTheory.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "ai/TutorKnowledge.h"
 #include "PluginEditor.h"
@@ -103,6 +104,7 @@ bool MUProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 void MUProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     const int ch = juce::jmax (1, getTotalNumOutputChannels());
+    lessonSound.prepare (sampleRate);
     loudness.prepare (sampleRate, samplesPerBlock, ch);
     mixMeter.prepare (sampleRate, samplesPerBlock, ch);
     inMeter.prepare (sampleRate, samplesPerBlock, ch);
@@ -568,6 +570,8 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             l[i] = r[i] = m;
         }
     }
+    // The Learn section's examples, last of all: after every meter and measurement, and never in a bounce.
+    if (! isNonRealtime()) lessonSound.process (buffer);
 }
 
 void MUProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -1427,7 +1431,10 @@ juce::String MUProcessor::fitVocalSpace()
 // ---- AI tutor ------------------------------------------------------------------------------------
 juce::String MUProcessor::tutorPrompt (const juce::String& question)
 {
-    return tutor::corePrompt() + tutor::notesFor (question, tutorFacts()) + tutorTrackNotes();
+    // a question that names a key or a tempo gets the notes, chords and note lengths worked out, so the model does not have to
+    const auto music = theory::factsFor (question);
+    return tutor::corePrompt() + tutor::notesFor (question, tutorFacts())
+         + (music.isNotEmpty() ? "MUSIC FACTS (worked out by the plugin, correct; use them exactly)\n" + music + "\n\n" : juce::String()) + tutorTrackNotes();
 }
 
 // The comparisons a small model gets wrong are made here, and handed over as plain sentences.
