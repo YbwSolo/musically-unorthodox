@@ -128,6 +128,8 @@ target_sources(MusicallyUnorthodox PRIVATE
     Source/ui/learn/BeatScenes.cpp
     Source/ui/learn/BeatScenesNotes.cpp
     Source/ui/learn/BeatScenesPictures.cpp
+    Source/ui/learn/BeatScenesPractice.cpp
+    Source/learn/CoursePractice.cpp
     Source/learn/Course.cpp
     Source/learn/CourseTheory.cpp
     Source/learn/CourseBeat.cpp
@@ -167,6 +169,7 @@ if(MU_BUILD_TESTS)
         Source/learn/CourseBeat.cpp
         Source/learn/CourseDaw.cpp
         Source/learn/CourseMixing.cpp
+        Source/learn/CoursePractice.cpp
         Source/dsp/SpectrumAnalyzer.cpp
         ${MU_DSP_SOURCES})
     target_include_directories(MUTests PRIVATE Source)
@@ -189,6 +192,10 @@ if(MU_BUILD_TESTS)
     target_include_directories(MUVoiceLab PRIVATE Source)
     target_compile_definitions(MUVoiceLab PRIVATE JUCE_STANDALONE_APPLICATION=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODULE_AVAILABLE_juce_dsp=1)
     target_link_libraries(MUVoiceLab PRIVATE juce::juce_dsp juce::juce_audio_basics juce::juce_core juce::juce_recommended_config_flags)
+
+    add_executable(MUTempoLab Source/tests/TempoLab.cpp)
+    target_compile_definitions(MUTempoLab PRIVATE JUCE_STANDALONE_APPLICATION=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0 JUCE_MODULE_AVAILABLE_juce_dsp=1)
+    target_link_libraries(MUTempoLab PRIVATE juce::juce_dsp juce::juce_audio_basics juce::juce_core juce::juce_recommended_config_flags)
     # Optional: a folder holding an earlier version of a tool (OldCompressor.h/.cpp), to compare old against new.
     if(MU_LAB_OLD_DIR)
         target_sources(MUVoiceLab PRIVATE ${MU_LAB_OLD_DIR}/OldCompressor.cpp)

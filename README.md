@@ -58,62 +58,91 @@ Logic: Audio Units > Musically Unorthodox. Also installs the VST3 and a standalo
 Hover over any control and the bar along the bottom says what it does, when to use it and typical settings.
 The **Learn** tab is a course: see "Learn: a course in beat making" below.
 
-## Learn: a course in beat making (build 25)
+## Learn: a course in beat making (builds 25 and 26)
 
-The Learn tab teaches making a beat from nothing, not only mixing. It has five tracks, chosen along the top
-of the lesson list:
+The Learn tab teaches making a beat from nothing, not only mixing. It opens on a home page with a card for each
+of seven courses (what is in it, how much is done), a search box over every lesson and step, and a button that
+carries on where the student stopped. Inside a course the lessons are listed by chapter; advanced ones are
+marked.
 
-| Track | Lessons |
+| Course | What is in it |
 |---|---|
-| Theory | Beat, bar and BPM; counting the BPM yourself; note lengths and rhythm; the twelve notes; keys and scales; more scales; building chords; progressions; what makes a melody; notes that work and notes that clash; call, response and counter melodies |
-| Beats | Plan the beat; write the main melody; chords, pads and a second melody; kick, snare and hats; drum patterns by style; rolls, velocity and bounce; 808s; from a loop to a song; levels; space; effects; finish and export |
-| Logic | Find your way around; tempo, key and metronome; instruments and the piano roll; kits and the Step Sequencer; 808s; arrange, mix and bounce |
-| FL | Find your way around; tempo, metronome and patterns; instruments and the Piano roll; drums in the Channel rack; 808s; arrange, mix and export |
+| Music theory | Beat, bar and BPM; counting the BPM yourself, ending on a real song; note lengths and rhythm; the twelve notes; keys and scales; more scales; building chords; progressions; what makes a melody; notes that work and notes that clash; call, response and counter melodies. Advanced: intervals, seventh chords, the circle of fifths |
+| Make a beat | Plan the beat; melody; chords and a second melody; kick, snare and hats; patterns by style; rolls, velocity and bounce; three guided builds (trap, drill, R&B) where the loop is put together one layer per step and heard at each stage; 808s; arrangement; levels; space; effects; finish and export |
+| In Logic Pro, In FL Studio | The same beat step by step in each program, six lessons each |
 | Mixing | The ten lessons the tab had before |
+| Practice | Guess the tempo; major or minor; hear the distance between two notes; count for fifteen seconds; copy a hidden drum pattern by ear; find the notes of a key; build a beat on an empty grid; sketch a melody |
+| Tools | Tempo of your song; key of your song; tap tempo; metronome; delay and reverb times for a tempo; scale finder; chord finder with sevenths; circle of fifths |
 
-Every step is two to four sentences under an example. The new examples can be played:
+67 lessons, exercises and tools; about 250 steps. Every step is two to four sentences under an example, and
+most examples can be played: a keyboard (scales, chords, sevenths, intervals named as two keys are clicked), a
+step grid, a piano roll, a tempo counter, the circle of fifths, and pictures for arrangement, layering, effects
+and the two DAWs' windows.
 
-- **Keyboard**: two octaves. Click a key to hear it. It shows a scale for any root (major, minor, pentatonic,
-  harmonic minor, Phrygian, Dorian, blues), the tones and semitones between its notes, the seven chords of a
-  key, and which notes are outside the key, heard against the home chord. One step is an exercise: find the
-  seven notes of a named minor key.
-- **Step grid**: kick, snare, hats and open hat over one or two bars. Click a step to change it. It holds the
-  patterns the lessons describe (boom bap with swing, trap, drill's three-three-two hats, R&B, rolls with
-  velocity, triplets, kick with 808), and one step is an exercise: build a working beat on an empty grid.
-- **Piano roll**: plays the melodies the lessons describe (a motif, repeated, varied, call and response, a
-  counter melody, a clash and its fix, a progression, an arpeggio, an 808 line with slides), and one step is a
-  sketch pad where every row is a note of C minor pentatonic over drums and an 808.
-- **Tempo**: a metronome with a tempo slider, a 15 second counting exercise that reveals the tempo afterwards,
-  a tap pad that reads the tempo of the taps (it works on any song playing in the room), and the same two bars
-  counted at 140 and at 70.
-- Pictures: a song laid out in sections with what plays in each, where each part of a beat sits in frequency
-  and across left and right, what reverb, delay, a filter sweep and sidechain do, a map of each DAW's window,
-  and reference cards of key commands.
+**The sounds, and why nothing has to be playing.** Notes, the 808 and the drums are made by the plugin
+(`learn/LessonSound.h`: a plucked tone, a sine with a little second harmonic, sine sweeps and noise). They are
+not samples and are not meant to sound like a finished kit; they are there so a student hears what they
+clicked. A DAW that is stopped does not run an effect plugin at all, so the examples have two ways out:
 
-**The sounds.** Notes, the 808 and the drums are made by the plugin (`learn/LessonSound.h`: a plucked tone, a
-sine with a little second harmonic, sine sweeps and noise). They are not samples and are not meant to sound like
-a finished kit; they are there so a student hears what they clicked. They are mixed in after every meter and
-measurement, so they never change what the plugin measures, and they are left out of a bounce. A DAW only runs
-a plugin's audio when it has a reason to, so if nothing is heard the example says so: press play in the DAW or
-select the track.
+- While the DAW is running the plugin, they are mixed into the track, after every meter and measurement, and
+  left out of a bounce.
+- While it is not, the Learn page opens the computer's default sound output itself (`learn/LessonOutput.h`,
+  output only, so it never asks for the microphone) and plays there. The page hands back to the track the moment
+  the DAW runs the plugin again, and closes the output when Learn is left or has been quiet for 20 seconds.
+- If no output can be opened, the pattern is stepped along silently so the picture still moves, and the example
+  says why it is quiet.
+
+So the first lesson is: open Learn, press Play, hear a click and watch the count. No song, no transport.
+
+**Tempo of your song.** `dsp/TempoDetector.h` listens to the track only while a step asks it to. 200 times a
+second it measures the spectrum in 24 bands and adds up how much each has risen: the onset strength. For every
+tempo from 60 to 180 BPM in tenths it scores how well the last 20 seconds of onsets repeat on that tempo's
+whole sixteenth-note grid, with beats and bars counting most. The page shows its reading, the same pulse
+counted at half or double, a tap pad for the student's own count, and the project's tempo with what to change.
+
+What was measured (`MUTempoLab`):
+
+- Drum patterns made by the lesson sounds at ten tempos from 70 to 160 BPM, in three styles (plain, trap with
+  an 808, drill with three-three-two hats): all 30 within 0.6 BPM, 20 as the tempo itself and 10 as its half
+  with the full tempo given as the other reading. An earlier version that scored only the beat, not the grid,
+  read the drill pattern a third too fast; that is a test now.
+- The five studio beats and the five reference records (two 20 second windows each). There are no labelled
+  tempos for these, so they were compared with a separate offline analysis. Nine of the ten gave the same
+  tempo family as that analysis and held it steadily: 128, 138 (shown as 69 or 138), 82.5 (or 165), 126, 143
+  (71.5), 100, 146 (73), 107, and 132 with low confidence and a rival of 88 shown. One studio beat read 130
+  for most of its length and lost it in its last, sparse seconds, with confidence at zero, which the page
+  reports as "not certain".
+- It always offers half or double. Which of the two a producer would set the project to is a matter of style
+  that it does not decide.
+
+**Key of your song** uses the key finder the plugin already had for Tune (`dsp/KeyFinder.h`) and lists the
+key's notes and chords.
 
 **The tutor.** Each step has an Ask box. The question goes to the same AI model as the Mix Brain tab (free,
 running on the student's computer, set up once on that tab). It is told which step is on screen. Note names,
 the chords of a key and tempo sums are worked out by the plugin (`learn/MusicTheory.h`) and handed to the model
-as facts, because small models get them wrong. Twenty short guide notes cover the course, and the two or three
-that match the question are sent with it. What the model writes is still a model's answer, and the page says so
-under every answer.
+as facts, because small models get them wrong. Twenty-three short guide notes cover the course, and the two or
+three that match the question are sent with it. What the model writes is still a model's answer, and the page
+says so under every answer.
 
 **Where the content comes from.** The theory is standard. The level figures in the mixing lessons are the
 ones measured on the stems of the five reference records (see "Finish" below). Logic Pro and FL Studio key
 commands and menu names were checked against Apple's and Image-Line's own manuals when the lessons were
-written; both programs move things between versions, and each track's first lesson says how to find something
-that has moved.
+written; both programs move things between versions, and each course's first lesson says how to find something
+that has moved. The melodies, chords and drum patterns in the examples and builds were written for the plugin.
 
-**Not done.** Nobody has sat a student in front of it yet. The lessons have not been checked by a teacher,
-and the DAW lessons have not been followed step by step in Logic or FL Studio on a real machine. There are no
-videos or screenshots of the DAWs: the window maps are drawings. Progress is kept per computer, not per
-student. The tutor's answers have only been tested for what it is told, not for how good its explanations are.
+**Not done.**
+- Playing straight to the computer's output has been tested as logic (which path plays, timing at another
+  sample rate, handing back to the track) but the build machines have no sound device, so it has not been
+  heard from inside Logic or FL Studio. It uses the system's default output, which may not be the interface
+  the DAW is using.
+- Nobody has sat a student in front of the course, and no teacher has checked the lessons. The DAW lessons have
+  not been followed step by step in Logic or FL Studio on a real machine.
+- There are no videos or screenshots of the DAWs: the window maps are drawings.
+- Progress is kept per computer, not per student. The practice games keep a score only while they are open.
+- The tutor's answers have been tested for what it is told, not for how good its explanations are.
+- The tempo detector assumes four beats to a bar and a steady tempo. A song in three, or one that speeds up,
+  will read wrongly or as "not certain".
 
 ## Tune tab
 
@@ -253,7 +282,7 @@ that and no download is needed.
 | FX | Doubler, Delay (four styles), Reverb (nine spaces), Harmony, Shift, Phone, Lo-fi, Motion, Chop; presets for each, your own presets, and combined Sounds |
 | Master | Target modes (-18 / -14 / -9 LUFS), true-peak limiter with look-ahead, auto level, loudness history, release check, Mono and Phone speaker listening checks |
 | Mix Brain | Ask the AI tutor about the track or about mixing; model download with sizes |
-| Learn | A course in five tracks: music theory, making a beat, Logic Pro, FL Studio and mixing. 45 lessons, 200 steps, each under an example that can be clicked and heard; the AI tutor can be asked about the step on screen |
+| Learn | Seven courses: music theory, making a beat, Logic Pro, FL Studio, mixing, practice and tools. Examples that can be clicked and heard with the DAW stopped, a page that finds the tempo and key of the song on the track, and the AI tutor on every step |
 
 ## Presets of your own
 
@@ -706,6 +735,8 @@ Source/
   learn/Course*.{h,cpp}          the Learn course: five tracks of lessons, one file per track
   learn/MusicTheory.h            scales, chords of a key, tempo sums; also the facts handed to the tutor
   learn/LessonSound.h            the notes, 808 and drums the lessons play, and their step sequencer
+  learn/LessonOutput.h           the computer's own sound output, for when the DAW is not running the plugin
+  dsp/TempoDetector.h            the tempo of the song playing through the track
   learn/LearnTutor.h             what the tutor is told for a question asked from a lesson
   ui/learn/BeatScenes*.{h,cpp}   the playable examples: keyboard, step grid, piano roll, tempo, pictures
   state/LocalSettings.h          per-computer settings (update checks, lesson progress)

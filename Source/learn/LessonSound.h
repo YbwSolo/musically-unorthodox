@@ -21,7 +21,8 @@ struct LessonPattern
     std::array<signed char, kMaxSteps> lead {}, leadLen {};
     std::array<signed char, kMaxSteps> lead2 {}, lead2Len {};                     // a second voice: harmony, counter-melody or a chord note
     std::array<signed char, kMaxSteps> lead3 {}, lead3Len {};
-    bool click = false;                              // a metronome tick on every beat
+    std::array<signed char, kMaxSteps> lead4 {}, lead4Len {};
+    bool click = false;                              // a metronome tick on every beat, higher on the first beat of each bar
     bool once = false;                               // play through one time and stop, instead of looping
 };
 
@@ -32,14 +33,31 @@ struct LessonPattern
 class LessonSound
 {
 public:
+    // Where the sound goes. Host: mixed into the plugin's own output while the DAW is running it. Direct: straight to
+    // the computer's sound output, for when the DAW is stopped and is not running the plugin at all, so a lesson
+    // never needs a song or the transport. Silent: no output could be opened; the pattern still advances so the
+    // picture moves.
+    enum class Route { Host, Direct, Silent };
+
     void prepare (double sampleRate)
     {
-        fs = sampleRate;
+        const Guard g (*this);
+        hostFs = sampleRate;
+        if (route.load() == Route::Host) fs = sampleRate;
         for (auto& v : voices) v = {};
         drum = {};
         playing.store (false); stepNow.store (-1);
-        samplesToStep = 0.0; step = -1;
+        secondsToStep = 0.0; step = -1;
     }
+    void setRoute (Route r, double sampleRate = 0.0)                           // message thread
+    {
+        const Guard g (*this);
+        route.store (r);
+        fs = r == Route::Host ? hostFs : (sampleRate > 8000.0 ? sampleRate : 48000.0);
+    }
+    Route getRoute() const { return route.load (std::memory_order_relaxed); }
+    // anything to be heard right now or about to be: a pattern running, a note still ringing, a click not yet played
+    bool wantsOutput() const { return playing.load() || sounding.load() || pendingRead.load() != pendingWrite.load(); }
 
     // ---- from the lesson (message thread) ----
     void playNote (int midiNote, float seconds = 0.6f, int sound = 0)          // sound: 0 keys, 1 808
@@ -54,30 +72,46 @@ public:
         const juce::SpinLock::ScopedLockType l (patternLock);
         incoming = p; patternChanged.store (true, std::memory_order_release);
     }
-    void start() { restart.store (true); playing.store (true); }
+    void start() { loops.store (0); restart.store (true); playing.store (true); }
+    int loopsPlayed() const { return loops.load (std::memory_order_relaxed); }            // times the pattern has begun since start: bars, for a one-bar pattern
     void stop()  { playing.store (false); stepNow.store (-1); }
     bool isPlaying() const { return playing.load (std::memory_order_relaxed); }
     int currentStep() const { return stepNow.load (std::memory_order_relaxed); }      // -1 when stopped
     bool isSounding() const { return sounding.load (std::memory_order_relaxed); }
 
     // ---- audio thread ----
-    void process (juce::AudioBuffer<float>& buffer) noexcept
+    void process (juce::AudioBuffer<float>& buffer) noexcept { if (route.load (std::memory_order_relaxed) == Route::Host) render (buffer, Route::Host); }
+    // the computer's own output, or (Silent) a scratch buffer on the message thread that is thrown away
+    void processDirect (juce::AudioBuffer<float>& buffer, Route from) noexcept { render (buffer, from); }
+
+private:
+    struct Guard               // one renderer at a time, and never while the route or rate is being changed
+    {
+        explicit Guard (LessonSound& s) : owner (s) { while (owner.busy.test_and_set (std::memory_order_acquire)) {} }
+        ~Guard() { owner.busy.clear (std::memory_order_release); }
+        LessonSound& owner;
+    };
+    void render (juce::AudioBuffer<float>& buffer, Route from) noexcept
     {
         const int n = buffer.getNumSamples(), ch = buffer.getNumChannels();
         if (n == 0 || ch == 0) return;
+        if (busy.test_and_set (std::memory_order_acquire)) return;            // the other output has it, or it is being re-routed: skip this block
+        struct Release { std::atomic_flag& f; ~Release() { f.clear (std::memory_order_release); } } release { busy };
+        if (route.load (std::memory_order_relaxed) != from) return;
         if (patternChanged.load (std::memory_order_acquire))
         {
             const juce::SpinLock::ScopedTryLockType l (patternLock);
             if (l.isLocked()) { pattern = incoming; patternChanged.store (false, std::memory_order_release); }
         }
-        for (int r = pendingRead; r != pendingWrite.load (std::memory_order_acquire); ++r, pendingRead = r)
+        for (int r = pendingRead.load (std::memory_order_relaxed); r != pendingWrite.load (std::memory_order_acquire); ++r, pendingRead.store (r, std::memory_order_relaxed))
         {
             const auto e = pending[(size_t) (r % kPending)];
             if (e.sound == 2) trigger (-1 - e.note, e.seconds); else noteOn (e.note, e.seconds, e.sound);
         }
         const bool run = playing.load (std::memory_order_relaxed);
-        if (run && restart.exchange (false)) { step = -1; samplesToStep = 0.0; }
-        if (! run) samplesToStep = 0.0;
+        if (run && restart.exchange (false)) { step = -1; secondsToStep = 0.0; }
+        if (! run) secondsToStep = 0.0;
+        const double dt = 1.0 / fs;
         if (! run && ! anythingRinging()) { sounding.store (false, std::memory_order_relaxed); return; }
         sounding.store (true, std::memory_order_relaxed);
 
@@ -85,20 +119,21 @@ public:
         {
             if (run)
             {
-                if (samplesToStep <= 0.0) nextStep();
-                samplesToStep -= 1.0;
+                if (secondsToStep <= 0.0) nextStep();
+                secondsToStep -= dt;
             }
-            const float s = render();
+            const float s = renderSample();
             for (int c = 0; c < ch; ++c) buffer.getWritePointer (c)[i] += s;
         }
     }
 
+public:
     static float noteHz (int midiNote) { return 440.0f * std::pow (2.0f, ((float) midiNote - 69.0f) / 12.0f); }
 
 private:
     struct Voice { bool on = false; float phase = 0.0f, hz = 0.0f, slideHz = 0.0f, age = 0.0f, length = 0.0f, level = 0.0f; int sound = 0; };
     struct Drum { float kickAge = -1.0f, kickPhase = 0.0f, kickLevel = 0.0f, snareAge = -1.0f, snarePhase = 0.0f, snareLevel = 0.0f,
-                  hatAge = -1.0f, hatLevel = 0.0f, hatLength = 0.04f, clickAge = -1.0f, clickPhase = 0.0f, hp = 0.0f, bp = 0.0f; };
+                  hatAge = -1.0f, hatLevel = 0.0f, hatLength = 0.04f, clickAge = -1.0f, clickPhase = 0.0f, clickHz = 1500.0f, hp = 0.0f, bp = 0.0f; };
     struct Event { int note; float seconds; int sound; };
     static constexpr int kVoices = 10, kPending = 64;
 
@@ -127,31 +162,33 @@ private:
         else if (which == 1) { drum.snareAge = 0.0f; drum.snarePhase = 0.0f; drum.snareLevel = level; }
         else if (which == 2) { drum.hatAge = 0.0f; drum.hatLevel = level; drum.hatLength = 0.035f; }
         else if (which == 3) { drum.hatAge = 0.0f; drum.hatLevel = level; drum.hatLength = 0.22f; }
-        else { drum.clickAge = 0.0f; drum.clickPhase = 0.0f; }
+        else { drum.clickAge = 0.0f; drum.clickPhase = 0.0f; drum.clickHz = which == 5 ? 2100.0f : 1500.0f; }      // 5: the first beat of a bar
     }
     void nextStep() noexcept
     {
         const int steps = juce::jlimit (1, LessonPattern::kMaxSteps, pattern.steps);
-        if (pattern.once && step + 1 >= steps) { playing.store (false, std::memory_order_relaxed); stepNow.store (-1, std::memory_order_relaxed); samplesToStep = 1.0e9; return; }
+        if (pattern.once && step + 1 >= steps) { playing.store (false, std::memory_order_relaxed); stepNow.store (-1, std::memory_order_relaxed); secondsToStep = 1.0e9; return; }
         step = (step + 1) % steps;
         const int perBeat = juce::jlimit (1, 8, pattern.stepsPerBeat);
-        const double sixteenth = fs * 60.0 / (double) juce::jlimit (40.0f, 220.0f, pattern.bpm) / (double) perBeat;
+        const double sixteenth = 60.0 / (double) juce::jlimit (40.0f, 220.0f, pattern.bpm) / (double) perBeat;      // seconds
         const double late = (double) juce::jlimit (0.0f, 1.0f, pattern.swing) * 0.33 * sixteenth;
-        samplesToStep += sixteenth + ((step % 2) == 0 ? late : -late);
+        secondsToStep += sixteenth + ((step % 2) == 0 ? late : -late);
         const auto at = (size_t) step;
-        const float stepSeconds = (float) (sixteenth / fs);
+        const float stepSeconds = (float) sixteenth;
+        if (step == 0) loops.fetch_add (1, std::memory_order_relaxed);
         if (pattern.kick[at] > 0)    trigger (0, (float) pattern.kick[at] / 127.0f);
         if (pattern.snare[at] > 0)   trigger (1, (float) pattern.snare[at] / 127.0f);
         if (pattern.hat[at] > 0)     trigger (2, (float) pattern.hat[at] / 127.0f);
         if (pattern.openHat[at] > 0) trigger (3, (float) pattern.openHat[at] / 127.0f);
-        if (pattern.click && (step % perBeat) == 0) trigger (4, 1.0f);
+        if (pattern.click && (step % perBeat) == 0) trigger ((step % (perBeat * 4)) == 0 ? 5 : 4, 1.0f);
         if (pattern.bass[at] > 0)  noteOn (pattern.bass[at],  stepSeconds * (float) juce::jmax (1, (int) pattern.bassLen[at]),  1, pattern.bassSlide[at]);
         if (pattern.lead[at] > 0)  noteOn (pattern.lead[at],  stepSeconds * (float) juce::jmax (1, (int) pattern.leadLen[at]),  0);
         if (pattern.lead2[at] > 0) noteOn (pattern.lead2[at], stepSeconds * (float) juce::jmax (1, (int) pattern.lead2Len[at]), 0);
         if (pattern.lead3[at] > 0) noteOn (pattern.lead3[at], stepSeconds * (float) juce::jmax (1, (int) pattern.lead3Len[at]), 0);
+        if (pattern.lead4[at] > 0) noteOn (pattern.lead4[at], stepSeconds * (float) juce::jmax (1, (int) pattern.lead4Len[at]), 0);
         stepNow.store (step, std::memory_order_relaxed);
     }
-    float render() noexcept
+    float renderSample() noexcept
     {
         const float dt = 1.0f / (float) fs, twoPi = juce::MathConstants<float>::twoPi;
         float out = 0.0f;
@@ -205,15 +242,18 @@ private:
         }
         if (drum.clickAge >= 0.0f)
         {
-            drum.clickPhase += 1500.0f * dt;
+            drum.clickPhase += drum.clickHz * dt;
             out += 0.2f * std::sin (twoPi * drum.clickPhase) * std::exp (-drum.clickAge / 0.012f);
             drum.clickAge += dt; if (drum.clickAge > 0.1f) drum.clickAge = -1.0f;
         }
         return juce::jlimit (-0.95f, 0.95f, out * 0.6f);            // well under a mix's level: it is an example, not a part
     }
 
-    double fs = 48000.0, samplesToStep = 0.0;
-    int step = -1, pendingRead = 0;
+    double fs = 48000.0, hostFs = 48000.0, secondsToStep = 0.0;
+    int step = -1;
+    std::atomic<int> pendingRead { 0 }, loops { 0 };
+    std::atomic<Route> route { Route::Host };
+    std::atomic_flag busy = ATOMIC_FLAG_INIT;
     unsigned int seed = 12345u;
     std::array<Voice, kVoices> voices {};
     Drum drum;

@@ -3,6 +3,7 @@
 #include "../../learn/Course.h"
 #include "../../learn/LessonSound.h"
 #include "../../learn/MusicTheory.h"
+#include "../../dsp/TempoDetector.h"
 #include <algorithm>
 #include <array>
 #include <functional>
@@ -29,15 +30,24 @@ public:
     juce::String hint() const;                      // the short instruction shown in the corner, or empty
     bool makesSound() const;
 
-    std::function<bool()> audioRunning;             // false when the host is not running the plugin's audio
+    // What the examples need from the plugin around them. All optional: without them an example still draws.
+    std::function<bool()> silent;                   // true when no sound output could be reached at all
+    std::function<TempoReading()> songTempo;        // the tempo of the song playing through the track
+    std::function<void (bool)> listenToSong;        // start and stop measuring it
+    std::function<double()> projectTempo;           // the DAW's own tempo, or 0 when it has not said
+    std::function<bool (int& key, bool& minor, float& confidence, float& seconds)> songKey;     // the key heard in the song, false when unknown
 
     // for the tests: the pattern a step would play, and whether the "build a beat" exercise is solved
     const LessonPattern& patternForTest() const { return pattern; }
     bool beatExerciseSolved() const;
+    bool copyExerciseSolved() const;
+    int gameAnswerForTest() const { return answer; }
+    juce::Rectangle<float> hitForTest (int id, int a = 0, int b = 0) const { for (auto& h : hits) if (h.id == id && h.a == a && h.b == b) return h.r; return {}; }
+    enum TestIds { TestChoice = 16, TestMine = 17, TestCheck = 18, TestHear = 19, TestStart = 8, TestPlay = 0 };
     juce::String quizKeyName() const;
 
 private:
-    enum HitId { Play, Cell, RowPick, PianoKey, Root, ScalePick, Degree, Toggle, Start, Pad, Tempo, Section, Area, CardRow, Next, RollCell };
+    enum HitId { Play, Cell, RowPick, PianoKey, Root, ScalePick, Degree, Toggle, Start, Pad, Tempo, Section, Area, CardRow, Next, RollCell, Choice, Mine, Check, Hear, UseProject, CircleKey };
     struct Hit { juce::Rectangle<float> r; int id, a, b; };
     struct RollNote { int step, note, len, voice, slideTo; };      // voice: 0 melody, 1 and 2 harmony, 3 the 808
 
@@ -58,6 +68,14 @@ private:
     void paintFx (juce::Graphics&, juce::Rectangle<float>);
     void paintDaw (juce::Graphics&, juce::Rectangle<float>);
     void paintCard (juce::Graphics&, juce::Rectangle<float>);
+    void paintSongTempo (juce::Graphics&, juce::Rectangle<float>);
+    void paintGame (juce::Graphics&, juce::Rectangle<float>);
+    void paintTool (juce::Graphics&, juce::Rectangle<float>);
+    void paintCircle (juce::Graphics&, juce::Rectangle<float>);
+    void paintBuild (juce::Graphics&, juce::Rectangle<float>);
+    void setupGame(); void setupBuild(); void newRound();
+    void clickedPractice (const Hit& h);
+    juce::String soundNote() const;                 // what to say when an example that should be heard cannot be
 
     void rollToPattern();
     void playProgression (int which);
@@ -105,5 +123,14 @@ private:
 
     // pictures
     int picked = 0, hover = -1;
+
+    // games, tools, the circle of fifths and the guided builds
+    int round = 0, score = 0, asked = 0, answer = 0, chosen = -1, streak = 0, lastLoops = 0;
+    std::array<int, 4> choices {};
+    std::array<std::array<bool, 16>, 3> mine {}, target {};        // hat, snare, kick
+    bool checked = false, hearingTarget = false, seventh = false, circleMinor = true;
+    float toolBpm = 120.0f;
+    int circleKey = 0;
+    juce::Random random;
 };
 }

@@ -8,7 +8,7 @@ namespace mu::course
 enum class Scene
 {
     Wave, EqShapes, EqMove, FreqMap, Masking, Levels, Envelope, Saturation, Stereo, Loudness, TruePeak, Chain,     // drawn by LearnPage
-    Pulse, Grid, Keys, Roll, Song, Layers, Fx, Daw, Card                                                         // drawn by BeatScenes
+    Pulse, Grid, Keys, Roll, Song, Layers, Fx, Daw, Card, Game, Tool, Circle, Build                              // drawn by BeatScenes
 };
 // the plugin's tabs, in the order of HeaderBar::Tab, so a lesson can open the part of the plugin it is about
 enum { kTabMix = 0, kTabEQ, kTabDynamics, kTabTone, kTabTune, kTabFX, kTabMaster, kTabNone = -1 };
@@ -22,6 +22,7 @@ struct Lesson
     const char* tryLabel;           // a button that opens the matching part of the plugin, or nullptr
     int tab;
     const char* preset;
+    int level = 0;                  // 0 for everyone, 1 once the basics are known, 2 advanced
 };
 struct Track { const char* name; const char* shortName; const char* about; std::vector<Lesson> lessons; };
 
@@ -35,4 +36,6 @@ std::vector<Lesson> beatLessons();
 std::vector<Lesson> logicLessons();
 std::vector<Lesson> flLessons();
 std::vector<Lesson> mixingLessons();
+std::vector<Lesson> practiceLessons();
+std::vector<Lesson> toolLessons();
 }

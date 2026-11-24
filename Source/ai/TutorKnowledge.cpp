@@ -31,7 +31,7 @@ juce::String corePrompt()
         "Chop (an even pulse or a sixteen-step pattern). Doubler, Harmony and Shift work side by side on the clean voice; the other six run one after another in the order shown on the rail, and dragging one changes the order. "
         "Sounds at the top loads several at once.\n"
         "Master tab: loudness target and limiter, used on the stereo output. Listen as checks the mix in mono or on a phone speaker.\n"
-        "Learn tab: a course in five tracks (music theory, making a beat, Logic Pro, FL Studio, mixing). Its keyboard, drum grid and piano roll can be clicked and heard, it has a tap pad for counting BPM, and the tutor can be asked about the step on screen.\n"
+        "Learn tab: seven courses (music theory, making a beat, Logic Pro, FL Studio, mixing, practice games, tools). Its keyboard, drum grid and piano roll can be clicked and heard without the DAW playing. Its Tools course works out the tempo and the key of the song playing through the track, and the tutor can be asked about the step on screen.\n"
         "Mix Brain tab: where the student is talking to you now.\n"
         "Presets: the Presets button at the top has whole chains, and each tool on the Tune and FX tabs has its own. Under My presets in either menu the student can save their own (Save as), and rename, delete, import or export them.\n"
         "Every track has a peak guard that stops it going over -1 dB (Settings).\n\n"

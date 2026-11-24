@@ -3,6 +3,7 @@
 #include "HeaderBar.h"
 #include "learn/BeatScenes.h"
 #include "../learn/LearnTutor.h"
+#include "../learn/LessonOutput.h"
 
 namespace mu
 {
@@ -999,14 +1000,25 @@ LearnPage::LearnPage (MUProcessor& p, std::function<void (const juce::String&)> 
     : proc (p), setStatus (std::move (status)), goToTab (std::move (go))
 {
     stage = std::make_unique<LessonStage> (proc.getLessonSound());
-    stage->beat.audioRunning = [this] { return audioRuns; };
-    addAndMakeVisible (*stage);
+    stage->beat.silent = [this] { return proc.getLessonSound().getRoute() == LessonSound::Route::Silent; };
+    stage->beat.songTempo = [this] { return tempoNow; };
+    stage->beat.listenToSong = [this] (bool on) { proc.getTempoDetector().setListening (on); if (! on) tempoNow = {}; };
+    stage->beat.projectTempo = [this] { return proc.hasHostTempo() ? proc.getHostBpm() : 0.0; };
+    stage->beat.songKey = [this] (int& key, bool& minor, float& confidence, float& seconds)
+    {
+        const auto k = proc.getMusicKey();
+        key = k.key; minor = k.minor; confidence = k.confidence; seconds = k.secondsHeard;
+        return true;
+    };
+    addChildComponent (*stage);
     styleButton (prevButton, "Back", false);
     styleButton (nextButton, "Next", true);
     styleButton (tryButton, "Try it", false);
     styleButton (askButton, "Ask", true);
     styleButton (backButton, "Back to the step", false);
     styleButton (getTutorButton, "Open Mix Brain", false);
+    styleButton (homeButton, "All courses", false);
+    styleButton (continueButton, "Continue", true);
     styleButton (starters[0], "Explain this another way", false);
     styleButton (starters[1], "Quiz me on this step", false);
     prevButton.onClick = [this] { if (step > 0) showStep (step - 1); };
@@ -1015,7 +1027,7 @@ LearnPage::LearnPage (MUProcessor& p, std::function<void (const juce::String&)> 
         const auto& list = tracks()[(size_t) track].lessons;
         if (step + 1 < (int) list[(size_t) lesson].steps.size()) showStep (step + 1);
         else if (lesson + 1 < (int) list.size()) showLesson (lesson + 1, 0);
-        else showTrack ((track + 1) % (int) tracks().size());
+        else showHome();
     };
     tryButton.onClick = [this]
     {
@@ -1027,11 +1039,23 @@ LearnPage::LearnPage (MUProcessor& p, std::function<void (const juce::String&)> 
         }
         if (goToTab && l.tab >= 0) goToTab (l.tab);
     };
-    askBox.setFont (body (12.5f));
+    homeButton.onClick = [this] { showHome(); };
+    continueButton.onClick = [this]
+    {
+        const bool resume = started;
+        home = false;
+        resized();
+        showLesson (lesson, resume ? settings->getInt ("learnStep", 0) : 0);
+        blockY = (float) lessonRow (lesson).getY();
+    };
+    for (auto* box : { &askBox, &searchBox }) { box->setFont (body (12.5f)); box->setIndents (8, 6); }
     askBox.setTextToShowWhenEmpty ("Ask about this step", textMute);
-    askBox.setIndents (8, 6);
     askBox.onReturnKey = [this] { askTutor (askBox.getText()); juce::Component::unfocusAllComponents(); };
     askBox.onEscapeKey = [this] { askBox.clear(); juce::Component::unfocusAllComponents(); };
+    searchBox.setTextToShowWhenEmpty ("Search the lessons: 808, swing, export, chords...", textMute);
+    searchBox.onTextChange = [this] { search (searchBox.getText()); };
+    searchBox.onEscapeKey = [this] { searchBox.clear(); search ({}); juce::Component::unfocusAllComponents(); };
+    searchBox.onReturnKey = [this] { juce::Component::unfocusAllComponents(); };
     askButton.onClick = [this] { askTutor (askBox.getText()); };
     starters[0].onClick = [this] { askTutor ("Explain this step another way, with a different example."); };
     starters[1].onClick = [this] { askTutor ("Ask me one short question to check I understood this step. Do not give the answer yet."); };
@@ -1046,10 +1070,8 @@ LearnPage::LearnPage (MUProcessor& p, std::function<void (const juce::String&)> 
     answerView.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
     answerView.setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
     answerView.setColour (juce::TextEditor::textColourId, text.withAlpha (0.9f));
-    for (auto* b : { &prevButton, &nextButton, &tryButton, &askButton, &getTutorButton, &starters[0], &starters[1] }) addAndMakeVisible (b);
-    addAndMakeVisible (askBox);
-    addChildComponent (answerView);
-    addChildComponent (backButton);
+    for (auto* b : { &prevButton, &nextButton, &tryButton, &askButton, &getTutorButton, &starters[0], &starters[1], &homeButton, &continueButton, &backButton }) addChildComponent (b);
+    for (auto* c : std::initializer_list<juce::Component*> { &askBox, &answerView, &searchBox }) addChildComponent (c);
 
     // lessons finished in builds before the course had tracks were saved as one bit each
     doneIds.addTokens (settings->get ("lessonsDoneIds"), ",", "");
@@ -1061,22 +1083,49 @@ LearnPage::LearnPage (MUProcessor& p, std::function<void (const juce::String&)> 
         if (! doneIds.isEmpty()) settings->set ("lessonsDoneIds", doneIds.joinIntoString (","));
     }
     lastAnswerId = proc.getAI().getStatus().answerId;
+    started = settings->get ("learnTrack").isNotEmpty();
     track = juce::jlimit (0, (int) tracks().size() - 1, settings->getInt ("learnTrack", 0));
-    showLesson (settings->getInt ("learnLesson" + juce::String (track), 0), 0);
+    lesson = juce::jlimit (0, (int) tracks()[(size_t) track].lessons.size() - 1, settings->getInt ("learnLesson" + juce::String (track), 0));
+    if (! started) { track = 0; lesson = 0; }
 }
 
-LearnPage::~LearnPage() { stage->silence(); }
+LearnPage::~LearnPage()
+{
+    stage->silence();
+    output.reset();
+    proc.getLessonSound().setRoute (LessonSound::Route::Host);
+}
 
-void LearnPage::visibilityChanged() { if (! isVisible() && stage != nullptr) stage->silence(); }
+void LearnPage::visibilityChanged()
+{
+    if (stage == nullptr) return;
+    if (! isVisible())
+    {
+        stage->silence();
+        if (output != nullptr) output->close();
+        proc.getLessonSound().setRoute (LessonSound::Route::Host);
+    }
+    else if (! home) showStep (step);                       // the example starts fresh, and listening resumes if the step listens
+}
 
 void LearnPage::open (int t, int l, int s)
 {
     track = juce::jlimit (0, (int) tracks().size() - 1, t);
+    home = false;
     showLesson (l, s);
     resized();
 }
 
+void LearnPage::showHome()
+{
+    stage->silence();
+    home = true; started = true;
+    resized();
+    repaint();
+}
+
 bool LearnPage::isDone (int t, int l) const { return doneIds.contains (tracks()[(size_t) t].lessons[(size_t) l].id); }
+int LearnPage::doneIn (int t) const { int n = 0; for (int i = 0; i < (int) tracks()[(size_t) t].lessons.size(); ++i) if (isDone (t, i)) ++n; return n; }
 
 void LearnPage::markDone()
 {
@@ -1089,8 +1138,9 @@ void LearnPage::markDone()
 void LearnPage::showTrack (int t)
 {
     track = juce::jlimit (0, (int) tracks().size() - 1, t);
-    settings->set ("learnTrack", track);
+    home = false;
     scrollY = 0.0f;
+    resized();
     showLesson (settings->getInt ("learnLesson" + juce::String (track), 0), 0);
     blockY = (float) lessonRow (lesson).getY();
 }
@@ -1099,9 +1149,11 @@ void LearnPage::showLesson (int l, int s)
 {
     const auto& list = tracks()[(size_t) track].lessons;
     lesson = juce::jlimit (0, (int) list.size() - 1, l);
+    settings->set ("learnTrack", track);
     settings->set ("learnLesson" + juce::String (track), lesson);
+    started = true;
     const auto& now = list[(size_t) lesson];
-    tryButton.setVisible (now.tryLabel != nullptr);
+    tryButton.setVisible (! home && now.tryLabel != nullptr);
     if (now.tryLabel != nullptr) tryButton.setButtonText (now.tryLabel);
     // keep the chosen lesson in view when the list is longer than its panel
     if (! rowsArea.isEmpty())
@@ -1117,18 +1169,54 @@ void LearnPage::showLesson (int l, int s)
 
 void LearnPage::showStep (int s)
 {
-    const auto& l = tracks()[(size_t) track].lessons[(size_t) lesson];
+    const auto& list = tracks()[(size_t) track].lessons;
+    const auto& l = list[(size_t) lesson];
     step = juce::jlimit (0, (int) l.steps.size() - 1, s);
+    settings->set ("learnStep", step);
     const auto& st = l.steps[(size_t) step];
     stage->show (st.scene, st.variant);
     const bool last = step + 1 == (int) l.steps.size();
     if (last) markDone();
     prevButton.setEnabled (step > 0);
-    const bool lastLesson = lesson + 1 == (int) tracks()[(size_t) track].lessons.size();
-    nextButton.setButtonText (! last ? "Next" : lastLesson ? "Next track" : "Next lesson");
+    nextButton.setButtonText (! last ? "Next" : lesson + 1 == (int) list.size() ? "All courses" : "Next lesson");
     textFade = 0.0f;
     showAnswer (false);
     repaint();
+}
+
+// ---- search -------------------------------------------------------------------------------------------
+void LearnPage::search (const juce::String& words)
+{
+    if (searchBox.getText() != words) searchBox.setText (words, false);
+    results.clear();
+    const auto wanted = juce::StringArray::fromTokens (words.toLowerCase().trim(), " ", "");
+    if (wanted.isEmpty() || words.trim().length() < 2) { repaint(); return; }
+    const auto& all = tracks();
+    for (int t = 0; t < (int) all.size(); ++t)
+        for (int l = 0; l < (int) all[(size_t) t].lessons.size(); ++l)
+        {
+            const auto& lesson1 = all[(size_t) t].lessons[(size_t) l];
+            auto has = [&wanted] (const juce::String& hay) { for (auto& w : wanted) if (! hay.containsIgnoreCase (w)) return false; return true; };
+            // a lesson is listed once: by its title or chapter if they match, otherwise by the first step that does
+            if (has (juce::String (lesson1.title) + " " + lesson1.chapter)) { results.push_back ({ t, l, 0, 0 }); continue; }
+            for (int s = 0; s < (int) lesson1.steps.size(); ++s)
+            {
+                const auto& st = lesson1.steps[(size_t) s];
+                if (has (st.title)) { results.push_back ({ t, l, s, 1 }); break; }
+                if (has (juce::String (st.title) + " " + st.text)) { results.push_back ({ t, l, s, 2 }); break; }
+            }
+        }
+    std::stable_sort (results.begin(), results.end(), [] (const Result& a, const Result& b) { return a.rank < b.rank; });
+    if (results.size() > 12) results.resize (12);
+    repaint();
+}
+
+juce::String LearnPage::resultTitle (int i) const
+{
+    if (i < 0 || i >= (int) results.size()) return {};
+    const auto& r = results[(size_t) i];
+    const auto& l = tracks()[(size_t) r.track].lessons[(size_t) r.lesson];
+    return juce::String (tracks()[(size_t) r.track].name) + ": " + l.title + (r.rank > 0 ? juce::String (" (") + l.steps[(size_t) r.step].title + ")" : juce::String());
 }
 
 // ---- the tutor ----------------------------------------------------------------------------------------
@@ -1152,34 +1240,72 @@ void LearnPage::askTutor (const juce::String& raw)
 
 void LearnPage::showAnswer (bool show)
 {
-    answerShown = show;
-    answerView.setVisible (show);
-    backButton.setVisible (show);
+    answerShown = show && ! home;
+    answerView.setVisible (answerShown);
+    backButton.setVisible (answerShown);
     if (! show) waiting = false;
     repaint (contentArea);
 }
 
-// ---- the list -----------------------------------------------------------------------------------------
-juce::Rectangle<int> LearnPage::trackTab (int index) const
+// ---- where the examples' sound goes -------------------------------------------------------------------
+// While the DAW is running the plugin, the examples play through the track. A DAW that is stopped does not run
+// an effect at all, so then they play straight to the computer's sound output. If that cannot be opened either,
+// the pattern is stepped along silently here so the picture still moves, and the example says why it is quiet.
+void LearnPage::routeSound (float dt)
 {
-    const auto& all = tracks();
-    float total = 0.0f;
-    std::vector<float> widths;
-    for (auto& t : all) { widths.push_back (bodyBold (11.5f).getStringWidthFloat (t.shortName) + 16.0f); total += widths.back(); }
-    const float gap = 3.0f, scale = ((float) tabsArea.getWidth() - gap * (float) (all.size() - 1)) / total;
-    float x = (float) tabsArea.getX();
-    for (int i = 0; i < (int) all.size(); ++i)
+    auto& sound = proc.getLessonSound();
+    const auto samples = proc.getSamplesProcessed();
+    if (samples != lastSamples) { lastSamples = samples; stillFor = 0.0f; } else stillFor += dt;
+    audioRuns = stillFor < 0.6f;
+    const bool wants = ! home && sound.wantsOutput();
+    using Route = LessonSound::Route;
+    if (audioRuns)
     {
-        const float w = widths[(size_t) i] * scale;
-        if (i == index) return juce::Rectangle<float> (x, (float) tabsArea.getY(), w, (float) tabsArea.getHeight()).toNearestInt();
-        x += w + gap;
+        if (sound.getRoute() != Route::Host) { sound.setRoute (Route::Host); if (output != nullptr) output->close(); }
+        quietFor = 0.0f;
     }
-    return {};
+    else if (wants)
+    {
+        quietFor = 0.0f;
+        if (sound.getRoute() == Route::Host)
+        {
+            if (output == nullptr) output = std::make_unique<LessonOutput> (sound);
+            if (output->open()) sound.setRoute (Route::Direct, output->sampleRate());
+            else sound.setRoute (Route::Silent, 48000.0);
+        }
+    }
+    else
+    {
+        quietFor += dt;                                    // nothing has been asked for in a while: give the output back
+        if (quietFor > 20.0f && output != nullptr && output->isOpen()) { output->close(); sound.setRoute (Route::Host); }
+    }
+    if (sound.getRoute() == Route::Silent && sound.wantsOutput())
+    {
+        juce::AudioBuffer<float> scratch (1, juce::jlimit (16, 9600, (int) (dt * 48000.0f)));
+        scratch.clear();
+        sound.processDirect (scratch, Route::Silent);
+    }
 }
 
-int LearnPage::trackAt (juce::Point<int> p) const
+// ---- the list -----------------------------------------------------------------------------------------
+juce::Rectangle<int> LearnPage::cardRect (int card) const
 {
-    for (int i = 0; i < (int) tracks().size(); ++i) if (trackTab (i).contains (p)) return i;
+    const int columns = 4, gap = 12;
+    const int w = (cardsArea.getWidth() - gap * (columns - 1)) / columns, h = (cardsArea.getHeight() - gap) / 2;
+    return { cardsArea.getX() + (card % columns) * (w + gap), cardsArea.getY() + (card / columns) * (h + gap), w, h };
+}
+juce::Rectangle<int> LearnPage::resultRow (int i) const { return { cardsArea.getX(), cardsArea.getY() + 30 + i * 40, cardsArea.getWidth(), 36 }; }
+
+int LearnPage::cardAt (juce::Point<int> p) const
+{
+    if (! home || ! results.empty() || searchBox.getText().trim().length() >= 2) return -1;
+    for (int i = 0; i < (int) tracks().size(); ++i) if (cardRect (i).contains (p)) return i;
+    return -1;
+}
+int LearnPage::resultAt (juce::Point<int> p) const
+{
+    if (! home) return -1;
+    for (int i = 0; i < (int) results.size(); ++i) if (resultRow (i).contains (p)) return i;
     return -1;
 }
 
@@ -1208,22 +1334,29 @@ int LearnPage::listHeight() const
 
 int LearnPage::lessonAt (juce::Point<int> p) const
 {
-    if (! rowsArea.contains (p)) return -1;
+    if (home || ! rowsArea.contains (p)) return -1;
     for (int i = 0; i < (int) tracks()[(size_t) track].lessons.size(); ++i) if (lessonRow (i).contains (p)) return i;
     return -1;
 }
 
 int LearnPage::stepDotAt (juce::Point<int> p) const
 {
-    if (! dotsArea.expanded (0, 8).contains (p)) return -1;
+    if (home || ! dotsArea.expanded (0, 8).contains (p)) return -1;
     const int n = (int) tracks()[(size_t) track].lessons[(size_t) lesson].steps.size();
     return juce::jlimit (0, n - 1, (p.x - dotsArea.getX()) * n / juce::jmax (1, dotsArea.getWidth()));
 }
 
 void LearnPage::mouseDown (const juce::MouseEvent& e)
 {
-    const int t = trackAt (e.getPosition());
-    if (t >= 0) { if (t != track) showTrack (t); return; }
+    juce::Component::unfocusAllComponents();
+    if (home)
+    {
+        const int r = resultAt (e.getPosition());
+        if (r >= 0) { const auto hit = results[(size_t) r]; track = hit.track; home = false; resized(); showLesson (hit.lesson, hit.step); blockY = (float) lessonRow (lesson).getY(); return; }
+        const int c = cardAt (e.getPosition());
+        if (c >= 0) showTrack (c);
+        return;
+    }
     const int l = lessonAt (e.getPosition());
     if (l >= 0 && l != lesson) { showLesson (l, 0); return; }
     const int d = stepDotAt (e.getPosition());
@@ -1232,15 +1365,15 @@ void LearnPage::mouseDown (const juce::MouseEvent& e)
 
 void LearnPage::mouseMove (const juce::MouseEvent& e)
 {
-    const int h = lessonAt (e.getPosition()), th = trackAt (e.getPosition());
-    if (h != hover || th != tabHover) { hover = h; tabHover = th; repaint (listArea); }
-    setMouseCursor (h >= 0 || th >= 0 || stepDotAt (e.getPosition()) >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+    const int h = home ? resultAt (e.getPosition()) : lessonAt (e.getPosition()), c = cardAt (e.getPosition());
+    if (h != hover || c != cardHover) { hover = h; cardHover = c; repaint(); }
+    setMouseCursor (h >= 0 || c >= 0 || stepDotAt (e.getPosition()) >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
 }
-void LearnPage::mouseExit (const juce::MouseEvent&) { hover = -1; tabHover = -1; repaint (listArea); }
+void LearnPage::mouseExit (const juce::MouseEvent&) { hover = -1; cardHover = -1; repaint(); }
 
 void LearnPage::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
 {
-    if (! listArea.contains (e.getPosition())) return;
+    if (home || ! listArea.contains (e.getPosition())) return;
     scrollY = juce::jlimit (0.0f, (float) juce::jmax (0, listHeight() - rowsArea.getHeight()), scrollY - w.deltaY * 220.0f);
     blockY = (float) lessonRow (lesson).getY();
     repaint (listArea);
@@ -1248,15 +1381,15 @@ void LearnPage::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWhee
 
 void LearnPage::tick (float dt)
 {
+    routeSound (dt);
+    if (home) return;
     const float target = (float) lessonRow (lesson).getY();
     if (std::abs (blockY - target) > 0.3f) { blockY = approach (blockY, target, dt, 0.05f); repaint (listArea); }
     if (textFade < 1.0f) { textFade = juce::jmin (1.0f, textFade + dt * 4.5f); repaint (textArea.expanded (0, 12)); }
     if (std::abs (dotAnim - (float) step) > 0.004f) { dotAnim = approach (dotAnim, (float) step, dt, 0.07f); repaint (dotsArea.expanded (0, 6)); }
 
-    // is the host running the plugin's audio? If not, an example that should be heard says how to wake it
-    const auto samples = proc.getSamplesProcessed();
-    if (samples != lastSamples) { lastSamples = samples; stillFor = 0.0f; } else stillFor += dt;
-    audioRuns = stillFor < 0.6f;
+    tempoCheck += dt;                                      // reading the tempo takes a couple of milliseconds, so twice a second is plenty
+    if (tempoCheck > 0.5f && proc.getTempoDetector().isListening()) { tempoCheck = 0.0f; tempoNow = proc.getTempoDetector().read(); }
 
     aiCheck += dt;
     if (aiCheck > 0.25f)
@@ -1284,55 +1417,143 @@ void LearnPage::tick (float dt)
 void LearnPage::paint (juce::Graphics& g)
 {
     g.fillAll (black);
+    if (home) paintHome (g); else paintLessons (g);
+}
+
+void LearnPage::paintHome (juce::Graphics& g)
+{
+    const auto& all = tracks();
+    auto head = homeArea.withHeight (44);
+    g.setFont (headline (30.0f)); g.setColour (text);
+    g.drawText ("LEARN", head.removeFromLeft (110), juce::Justification::centredLeft);
+    int doneCount = 0, total = 0;
+    for (int t = 0; t < (int) all.size(); ++t) { total += (int) all[(size_t) t].lessons.size(); doneCount += doneIn (t); }
+    g.setFont (body (13.0f)); g.setColour (textDim);
+    g.drawText ("Music theory, making beats, Logic Pro, FL Studio and mixing.  " + juce::String (doneCount) + " of " + juce::String (total) + " lessons done.", head.withTrimmedRight (340), juce::Justification::centredLeft);
+
+    // carry on where they stopped
+    auto strip = juce::Rectangle<int> (homeArea.getX(), homeArea.getY() + 56, homeArea.getWidth(), 62);
+    fillPanel (g, strip.toFloat());
+    g.setColour (yellow); g.fillRoundedRectangle (strip.toFloat().withWidth (4.0f), 2.0f);
+    auto words = strip.reduced (20, 10).withTrimmedRight (170);
+    const auto& tr = all[(size_t) track];
+    const auto& ls = tr.lessons[(size_t) lesson];
+    g.setFont (bodyBold (10.5f)); g.setColour (textMute);
+    g.drawText (started ? "CARRY ON WHERE YOU STOPPED" : "START HERE", words.removeFromTop (16), juce::Justification::centredLeft);
+    g.setFont (headline (22.0f)); g.setColour (text);
+    g.drawText ((juce::String (tr.name) + "   " + ls.title).toUpperCase(), words, juce::Justification::centredLeft);
+
+    const bool searching = searchBox.getText().trim().length() >= 2;
+    if (searching)
+    {
+        g.setFont (bodyBold (10.5f)); g.setColour (textMute);
+        g.drawText (results.empty() ? "NOTHING FOUND. TRY ONE WORD: 808, SWING, CHORDS, EXPORT" : "FOUND IN " + juce::String ((int) results.size()) + (results.size() == 1 ? " LESSON" : " LESSONS"),
+                    cardsArea.withHeight (20), juce::Justification::centredLeft);
+        for (int i = 0; i < (int) results.size(); ++i)
+        {
+            const auto row = resultRow (i);
+            if (row.getBottom() > cardsArea.getBottom()) break;
+            const auto& r = results[(size_t) i];
+            const auto& l = all[(size_t) r.track].lessons[(size_t) r.lesson];
+            g.setColour (i == hover ? control.brighter (0.1f) : raised); g.fillRoundedRectangle (row.toFloat(), 5.0f);
+            auto in = row.reduced (14, 0);
+            g.setFont (bodyBold (11.5f)); g.setColour (yellow);
+            g.drawText (all[(size_t) r.track].name, in.removeFromLeft (120), juce::Justification::centredLeft);
+            g.setFont (bodyBold (13.5f)); g.setColour (text);
+            g.drawText (l.title, in.removeFromLeft (300), juce::Justification::centredLeft);
+            g.setFont (body (12.5f)); g.setColour (textDim);
+            g.drawText (r.rank == 0 ? juce::String (l.chapter) : juce::String ("Step ") + juce::String (r.step + 1) + ": " + l.steps[(size_t) r.step].title, in, juce::Justification::centredLeft);
+        }
+        return;
+    }
+
+    for (int t = 0; t <= (int) all.size(); ++t)
+    {
+        const auto card = cardRect (t).toFloat();
+        const bool guide = t == (int) all.size();
+        g.setColour (guide ? black : (t == cardHover ? raised.brighter (0.07f) : raised)); g.fillRoundedRectangle (card, 8.0f);
+        g.setColour (t == cardHover ? yellow : (guide ? lineHi : line)); g.drawRoundedRectangle (card.reduced (0.5f), 8.0f, t == cardHover ? 2.0f : 1.0f);
+        auto in = card.reduced (16.0f, 14.0f);
+        if (guide)
+        {
+            g.setFont (bodyBold (10.5f)); g.setColour (textMute);
+            g.drawText ("WHERE TO START", in.removeFromTop (16.0f), juce::Justification::centredLeft);
+            in.removeFromTop (6.0f);
+            drawWrapped (g, "New to music: Music theory, from the top.\n\nCan already make a loop: Make a beat, then Build one, layer by layer.\n\nHere to mix: Mixing.\n\nTen minutes spare: Practice.",
+                         in, body (12.5f), text.withAlpha (0.85f), 1.3f);
+            continue;
+        }
+        const auto& tr2 = all[(size_t) t];
+        const int count = (int) tr2.lessons.size(), finished = doneIn (t);
+        int stepCount = 0, advanced = 0;
+        for (auto& l : tr2.lessons) { stepCount += (int) l.steps.size(); if (l.level >= 2) ++advanced; }
+        g.setFont (headline (24.0f)); g.setColour (t == cardHover ? yellow : text);
+        g.drawText (juce::String (tr2.name).toUpperCase(), in.removeFromTop (30.0f), juce::Justification::centredLeft);
+        in.removeFromTop (4.0f);
+        auto foot = in.removeFromBottom (40.0f);
+        drawWrapped (g, tr2.about, in.removeFromTop (58.0f), body (13.0f), text.withAlpha (0.82f), 1.35f);
+        // what is inside, so the right course can be picked without opening each one
+        juce::StringArray chapters;
+        for (auto& l : tr2.lessons) chapters.addIfNotAlreadyThere (l.chapter);
+        if (chapters.size() <= 1) { chapters.clear(); for (auto& l : tr2.lessons) chapters.add (l.title); }
+        g.setFont (body (11.5f)); g.setColour (textDim);
+        g.drawFittedText (chapters.joinIntoString (juce::String::fromUTF8 ("  \xc2\xb7  ")), in.withTrimmedTop (4.0f).withTrimmedBottom (6.0f).toNearestInt(), juce::Justification::topLeft, 3, 1.0f);
+        g.setFont (body (11.5f)); g.setColour (textMute);
+        g.drawText (juce::String (count) + (t >= 5 ? (t == 5 ? " exercises" : " tools") : " lessons") + (advanced > 0 ? ", " + juce::String (advanced) + " advanced" : juce::String()), foot.removeFromTop (16.0f), juce::Justification::centredLeft);
+        g.drawText (juce::String (finished) + " done", foot.withHeight (16.0f).translated (0.0f, -16.0f), juce::Justification::centredRight);
+        const auto bar = foot.removeFromBottom (6.0f);
+        g.setColour (control); g.fillRoundedRectangle (bar, 3.0f);
+        if (finished > 0) { g.setColour (yellow); g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * (float) finished / (float) count), 3.0f); }
+    }
+}
+
+void LearnPage::paintLessons (juce::Graphics& g)
+{
     const auto& all = tracks();
     const auto& tr = all[(size_t) track];
 
-    // ---- tracks and lessons
+    // ---- the course and its lessons
     fillPanel (g, listArea.toFloat());
-    auto head = listArea.reduced (16, 0).removeFromTop (44);
-    g.setFont (headline (20.0f)); g.setColour (text);
-    g.drawText ("LEARN", head, juce::Justification::centredLeft);
-    int doneCount = 0, total = 0;
-    for (int t = 0; t < (int) all.size(); ++t) for (int i = 0; i < (int) all[(size_t) t].lessons.size(); ++i) { ++total; if (isDone (t, i)) ++doneCount; }
+    auto head = juce::Rectangle<int> (listArea.getX() + 16, listArea.getY() + 46, listArea.getWidth() - 32, 30);
+    g.setFont (headline (22.0f)); g.setColour (text);
+    g.drawText (juce::String (tr.name).toUpperCase(), head, juce::Justification::centredLeft);
+    const int finished = doneIn (track), count = (int) tr.lessons.size();
     g.setFont (body (11.5f)); g.setColour (textMute);
-    g.drawText (juce::String (doneCount) + " of " + juce::String (total) + " lessons done", head, juce::Justification::centredRight);
-
-    for (int t = 0; t < (int) all.size(); ++t)
-    {
-        const auto tab = trackTab (t).toFloat();
-        const bool on = t == track;
-        g.setColour (on ? yellow : (t == tabHover ? control.brighter (0.15f) : control)); g.fillRoundedRectangle (tab, 5.0f);
-        g.setFont (bodyBold (11.5f)); g.setColour (on ? onYellow : text);
-        g.drawText (all[(size_t) t].shortName, tab, juce::Justification::centred);
-    }
-    auto about = juce::Rectangle<int> (tabsArea.getX(), tabsArea.getBottom() + 8, tabsArea.getWidth(), 30);
-    g.setFont (body (11.5f)); g.setColour (textDim);
-    g.drawFittedText (tr.about, about, juce::Justification::topLeft, 2, 0.95f);
+    g.drawText (juce::String (finished) + " of " + juce::String (count) + " done", head, juce::Justification::centredRight);
+    const auto bar = juce::Rectangle<float> ((float) head.getX(), (float) head.getBottom() + 4.0f, (float) head.getWidth(), 4.0f);
+    g.setColour (control); g.fillRoundedRectangle (bar, 2.0f);
+    if (finished > 0) { g.setColour (yellow); g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * (float) finished / (float) count), 2.0f); }
 
     g.saveState();
     g.reduceClipRegion (rowsArea);
     g.setColour (yellow);
     g.fillRoundedRectangle (juce::Rectangle<float> ((float) rowsArea.getX(), blockY, (float) rowsArea.getWidth(), (float) kRowH - 2.0f), 3.0f);
     const char* chapter = nullptr;
-    for (int i = 0; i < (int) tr.lessons.size(); ++i)
+    for (int i = 0; i < count; ++i)
     {
         const auto row = lessonRow (i);
-        if (chapter == nullptr || juce::String (chapter) != tr.lessons[(size_t) i].chapter)
+        const auto& l = tr.lessons[(size_t) i];
+        if (chapter == nullptr || juce::String (chapter) != l.chapter)
         {
-            chapter = tr.lessons[(size_t) i].chapter;
+            chapter = l.chapter;
             g.setFont (bodyBold (10.5f)); g.setColour (textMute);
             g.drawText (chapter, row.translated (8, -kChapterH + 2).withHeight (18), juce::Justification::centredLeft);
         }
         const bool on = std::abs (blockY - (float) row.getY()) < 14.0f && i == lesson;
         g.setFont (on ? bodyBold (12.5f) : body (12.5f));
         g.setColour (on ? onYellow : (i == hover ? text : textDim));
-        g.drawText (tr.lessons[(size_t) i].title, row.withTrimmedLeft (12).withTrimmedRight (26), juce::Justification::centredLeft);
+        g.drawText (l.title, row.withTrimmedLeft (12).withTrimmedRight (isDone (track, i) ? 26 : (l.level >= 2 ? 40 : 8)), juce::Justification::centredLeft);
         if (isDone (track, i))
         {
             const auto dot = juce::Rectangle<float> ((float) row.getRight() - 22.0f, (float) row.getCentreY() - 6.0f, 12.0f, 12.0f);
             juce::Path tick; tick.startNewSubPath (dot.getX() + 2.0f, dot.getCentreY()); tick.lineTo (dot.getX() + 5.0f, dot.getBottom() - 2.5f); tick.lineTo (dot.getRight() - 1.5f, dot.getY() + 2.5f);
             g.setColour (on ? onYellow : yellow);
             g.strokePath (tick, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+        else if (l.level >= 2)
+        {
+            g.setFont (bodyBold (9.5f)); g.setColour (on ? onYellow : textMute);
+            g.drawText ("ADV", row.withLeft (row.getRight() - 36).withTrimmedRight (8), juce::Justification::centredRight);
         }
     }
     g.restoreState();
@@ -1349,7 +1570,7 @@ void LearnPage::paint (juce::Graphics& g)
     const auto& st = l.steps[(size_t) step];
     auto tArea = textArea.toFloat().translated (0.0f, (1.0f - textFade) * 8.0f);
     g.setFont (bodyBold (11.5f)); g.setColour (yellow.withAlpha (textFade));
-    g.drawText (juce::String (l.title) + "    step " + juce::String (step + 1) + " of " + juce::String ((int) l.steps.size()), tArea.removeFromTop (16.0f), juce::Justification::centredLeft);
+    g.drawText (juce::String (tr.name) + "   " + l.title + (l.steps.size() > 1 ? "    step " + juce::String (step + 1) + " of " + juce::String ((int) l.steps.size()) : juce::String()), tArea.removeFromTop (16.0f), juce::Justification::centredLeft);
     if (! answerShown)
     {
         tArea.removeFromTop (2.0f);
@@ -1378,7 +1599,7 @@ void LearnPage::paint (juce::Graphics& g)
     // ---- step progress
     const int n = (int) l.steps.size();
     const float gap = 6.0f, w = ((float) dotsArea.getWidth() - gap * (float) (n - 1)) / (float) n;
-    for (int i = 0; i < n; ++i)
+    for (int i = 0; i < n && n > 1; ++i)
     {
         const auto seg = juce::Rectangle<float> ((float) dotsArea.getX() + (float) i * (w + gap), (float) dotsArea.getCentreY() - 2.0f, w, 4.0f);
         g.setColour (control); g.fillRoundedRectangle (seg, 2.0f);
@@ -1390,11 +1611,19 @@ void LearnPage::paint (juce::Graphics& g)
 void LearnPage::resized()
 {
     auto r = getLocalBounds().reduced (12);
+    // ---- home
+    homeArea = r.reduced (6, 0);
+    searchBox.setBounds (homeArea.getRight() - 320, homeArea.getY() + 8, 320, 30);
+    continueButton.setBounds (homeArea.getRight() - 168, homeArea.getY() + 56 + 14, 148, 34);
+    continueButton.setButtonText (started ? "Continue" : "Start");
+    cardsArea = homeArea.withTrimmedTop (56 + 62 + 14);
+
+    // ---- a course
     listArea = r.removeFromLeft (262);
     r.removeFromLeft (10);
     contentArea = r;
-    tabsArea = listArea.reduced (8, 0).withTop (listArea.getY() + 44).withHeight (26);
-    rowsArea = listArea.reduced (8, 0).withTop (tabsArea.getBottom() + 42).withBottom (listArea.getBottom() - 8);
+    homeButton.setBounds (listArea.getX() + 12, listArea.getY() + 12, 118, 26);
+    rowsArea = listArea.reduced (8, 0).withTop (listArea.getY() + 92).withBottom (listArea.getBottom() - 8);
     scrollY = juce::jlimit (0.0f, (float) juce::jmax (0, listHeight() - rowsArea.getHeight()), scrollY);
     blockY = (float) lessonRow (lesson).getY();
 
@@ -1410,14 +1639,10 @@ void LearnPage::resized()
     bottom.removeFromRight (24);
     dotsArea = bottom.withSizeKeepingCentre (bottom.getWidth(), 12);
     c.removeFromBottom (10);
-
     tutorArea = c.removeFromRight (juce::jmin (236, c.getWidth() / 3));
     c.removeFromRight (24);
     textArea = c;
     auto tu = tutorArea.withTrimmedTop (20);
-    getTutorButton.setVisible (! tutorReady);
-    askBox.setVisible (tutorReady); askButton.setVisible (tutorReady);
-    for (auto& s : starters) s.setVisible (tutorReady);
     if (tutorReady)
     {
         auto askRow = tu.removeFromTop (28);
@@ -1430,13 +1655,18 @@ void LearnPage::resized()
         starters[1].setBounds (tu.removeFromTop (26));
     }
     else getTutorButton.setBounds (tu.removeFromTop (28).withWidth (juce::jmin (tu.getWidth(), 170)));
-    layoutText();
-}
-
-void LearnPage::layoutText()
-{
-    auto a = textArea.withTrimmedTop (20);
     backButton.setBounds (textArea.getRight() - 132, textArea.getY() - 6, 132, 24);
-    answerView.setBounds (a.expanded (4, 0));
+    answerView.setBounds (textArea.withTrimmedTop (20).expanded (4, 0));
+
+    // ---- which of the two is showing
+    const bool course = ! home;
+    stage->setVisible (course);
+    for (auto* b : { &prevButton, &nextButton, &homeButton }) b->setVisible (course);
+    tryButton.setVisible (course && tracks()[(size_t) track].lessons[(size_t) lesson].tryLabel != nullptr);
+    getTutorButton.setVisible (course && ! tutorReady);
+    askBox.setVisible (course && tutorReady); askButton.setVisible (course && tutorReady);
+    for (auto& s : starters) s.setVisible (course && tutorReady);
+    answerView.setVisible (course && answerShown); backButton.setVisible (course && answerShown);
+    searchBox.setVisible (home); continueButton.setVisible (home);
 }
 }

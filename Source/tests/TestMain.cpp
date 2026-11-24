@@ -4,6 +4,7 @@
 #include "../learn/Course.h"
 #include "../learn/LessonSound.h"
 #include "../learn/LearnTutor.h"
+#include "../dsp/TempoDetector.h"
 #include <juce_core/juce_core.h>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
@@ -2922,18 +2923,20 @@ int main()
                 ++lessons;
                 if (ids.contains (l.id)) unique = false;
                 ids.add (l.id);
-                if (l.steps.size() < 2 || l.steps.size() > 7 || juce::String (l.title).length() > 36) { shaped = false; worst = l.id; }
+                if (l.steps.empty() || l.steps.size() > 7 || juce::String (l.title).length() > 36) { shaped = false; worst = l.id; }
                 for (auto& st : l.steps)
                 {
                     ++steps;
                     if (juce::String (st.text).length() > 450 || juce::String (st.title).length() > 44) { fits = false; worst = juce::String (l.id) + ": " + st.title; }
-                    const int most = st.scene == Scene::Pulse ? 5 : st.scene == Scene::Grid ? 10 : st.scene == Scene::Keys ? 14 : st.scene == Scene::Roll ? 15 : st.scene == Scene::Song ? 2
+                    if (st.scene == Scene::Build && (st.variant / 10 > 2 || st.variant % 10 > 5)) { inRange = false; worst = juce::String (l.id) + ": " + st.title; }
+                    const int most = st.scene == Scene::Pulse ? 6 : st.scene == Scene::Grid ? 10 : st.scene == Scene::Keys ? 16 : st.scene == Scene::Roll ? 15 : st.scene == Scene::Song ? 2
+                                   : st.scene == Scene::Game ? 2 : st.scene == Scene::Tool ? 1 : st.scene == Scene::Circle ? 2
                                    : st.scene == Scene::Layers ? 3 : st.scene == Scene::Fx ? 3 : st.scene == Scene::Daw ? 1 : st.scene == Scene::Card ? 10 : 99;
                     if (st.variant < 0 || st.variant > most) { inRange = false; worst = juce::String (l.id) + ": " + st.title; }
                 }
             }
-        check (tracks().size() == 5 && lessons >= 45 && steps >= 190, "The course has its five tracks and all their lessons", juce::String (lessons) + " lessons, " + juce::String (steps) + " steps");
-        check (unique && shaped, "Every lesson has its own id, two to seven steps and a title that fits the list", worst);
+        check (tracks().size() == 7 && lessons >= 67 && steps >= 240, "The course has its seven tracks and all their lessons", juce::String (lessons) + " lessons, " + juce::String (steps) + " steps");
+        check (unique && shaped, "Every lesson has its own id, one to seven steps and a title that fits the list", worst);
         check (fits && inRange, "Every step's text fits under its example, and its example exists", worst);
         bool legacy = true;
         for (int i = 0; i < 10; ++i) if (legacyLessonId (i) == nullptr || ! ids.contains (legacyLessonId (i))) legacy = false;
@@ -2975,6 +2978,74 @@ int main()
         sound.setPattern (once); sound.start();
         run (2.0, peak, finite);
         check (! sound.isPlaying(), "A scale played once stops by itself at the end");
+    }
+    {
+        // the examples' sound goes to the track while the DAW runs the plugin and straight to the computer's output when it does not
+        mu::LessonSound sound; sound.prepare (48000.0);
+        using Route = mu::LessonSound::Route;
+        juce::AudioBuffer<float> host (2, 441), direct (2, 441);
+        mu::LessonPattern p; p.bpm = 120.0f; p.click = true; for (int s = 0; s < 16; s += 4) p.kick[(size_t) s] = 100;
+        sound.setRoute (Route::Direct, 44100.0);
+        sound.setPattern (p); sound.start();
+        float hostPeak = 0.0f, directPeak = 0.0f;
+        for (int n = 0; n < 95; ++n)                               // 0.95 s at 44.1 kHz
+        {
+            host.clear(); direct.clear();
+            sound.process (host); sound.processDirect (direct, Route::Direct);
+            hostPeak = juce::jmax (hostPeak, host.getMagnitude (0, 441)); directPeak = juce::jmax (directPeak, direct.getMagnitude (0, 441));
+        }
+        check (hostPeak == 0.0f && directPeak > 0.1f && sound.currentStep() == 7 && sound.loopsPlayed() == 1,
+               "With the DAW stopped, a lesson plays straight to the computer's output, in time, and adds nothing to the track", "track " + juce::String (hostPeak, 4) + ", output " + juce::String (directPeak, 3) + ", step " + juce::String (sound.currentStep()));
+        sound.setRoute (Route::Host);
+        hostPeak = directPeak = 0.0f;
+        for (int n = 0; n < 60; ++n)
+        {
+            host.clear(); direct.clear();
+            sound.process (host); sound.processDirect (direct, Route::Direct);
+            hostPeak = juce::jmax (hostPeak, host.getMagnitude (0, 441)); directPeak = juce::jmax (directPeak, direct.getMagnitude (0, 441));
+        }
+        check (hostPeak > 0.1f && directPeak == 0.0f && sound.isPlaying(), "When the DAW starts running the plugin again, the same pattern carries on through the track and the other output falls silent");
+        sound.setRoute (Route::Silent, 48000.0);
+        const int before = sound.currentStep();
+        juce::AudioBuffer<float> scratch (1, 4800);
+        for (int n = 0; n < 5; ++n) { scratch.clear(); sound.processDirect (scratch, Route::Silent); }
+        check (sound.currentStep() != before && sound.wantsOutput(), "With no output at all the pattern still steps along, so the picture keeps moving");
+    }
+    {
+        // the tempo of a song: patterns of known tempo made by the lesson sounds, then silence
+        auto measure = [] (float bpm, int style)
+        {
+            mu::LessonSound s; s.prepare (48000.0);
+            mu::TempoDetector det; det.prepare (48000.0); det.setListening (true);
+            mu::LessonPattern p; p.bpm = bpm;
+            if (style == 0) { p.kick[0] = p.kick[8] = 100; p.snare[4] = p.snare[12] = 100; for (int i = 0; i < 16; i += 2) p.hat[(size_t) i] = 80; }
+            else if (style == 1) { p.steps = 32; for (int i : { 0, 6, 16, 19, 26 }) p.kick[(size_t) i] = 100; p.snare[8] = p.snare[24] = 100; for (int i = 0; i < 32; i += 2) p.hat[(size_t) i] = 80; for (int i : { 0, 6, 16, 26 }) { p.bass[(size_t) i] = 36; p.bassLen[(size_t) i] = 5; } }
+            else { p.steps = 32; for (int i : { 0, 10, 16, 23, 26 }) p.kick[(size_t) i] = 100; p.snare[8] = p.snare[28] = 100; for (int i : { 0, 3, 6, 8, 11, 14, 16, 19, 22, 24, 27, 30 }) p.hat[(size_t) i] = 85; }
+            s.setPattern (p); s.start();
+            juce::AudioBuffer<float> b (2, 480);
+            for (int n = 0; n < 1600; ++n) { b.clear(); s.process (b); det.push (b.getReadPointer (0), b.getReadPointer (1), 480); }
+            return det.read();
+        };
+        int exact = 0, octave = 0, wrong = 0; juce::String misses;
+        for (float bpm : { 70.0f, 82.0f, 90.0f, 96.0f, 104.0f, 120.0f, 128.0f, 140.0f, 142.0f, 160.0f })
+            for (int style = 0; style < 3; ++style)
+            {
+                const auto t = measure (bpm, style);
+                if (std::abs (t.bpm - bpm) < 0.6f) ++exact;
+                else if (std::abs (t.other - bpm) < 0.6f) ++octave;
+                else { ++wrong; misses << bpm << "/" << style << " read " << t.bpm << "  "; }
+            }
+        check (wrong == 0 && exact >= 18, "The tempo detector reads plain, trap and drill patterns from 70 to 160 BPM to within 0.6, as the tempo or as its half with the other given",
+               juce::String (exact) + " exact, " + juce::String (octave) + " at half or double, " + juce::String (wrong) + " wrong  " + misses);
+        const auto drill = measure (142.0f, 2);
+        check ((std::abs (drill.bpm - 142.0f) < 0.6f || std::abs (drill.other - 142.0f) < 0.6f) && drill.rival == 0.0f && drill.confidence > 0.5f,
+               "A three-three-two drill hi-hat pattern is not read a third too fast", juce::String (drill.bpm, 1) + " or " + juce::String (drill.other, 1) + ", confidence " + juce::String (drill.confidence, 2));
+        mu::TempoDetector quiet; quiet.prepare (48000.0); quiet.setListening (true);
+        std::vector<float> zeros (480, 0.0f);
+        for (int n = 0; n < 1200; ++n) quiet.push (zeros.data(), zeros.data(), 480);
+        mu::TempoDetector off; off.prepare (48000.0);
+        for (int n = 0; n < 1200; ++n) off.push (zeros.data(), zeros.data(), 480);
+        check (quiet.read().bpm == 0.0f && ! quiet.read().heard && off.read().seconds == 0.0f, "Silence gives no tempo, and the detector does nothing until a lesson asks it to listen");
     }
     {
         const auto p = mu::learn::prompt ("Music theory", "Keys and scales", "The minor scale", "Minor sounds dark, serious or sad.", "what are the notes of F minor and which chords can I use?");

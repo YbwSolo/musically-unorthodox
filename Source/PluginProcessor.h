@@ -36,6 +36,7 @@
 #include "dsp/PeakGuard.h"
 #include "dsp/LevelProbe.h"
 #include "dsp/KeyFinder.h"
+#include "dsp/TempoDetector.h"
 #include "dsp/TuneGraph.h"
 #include "analysis/ReverbAdvisor.h"
 #include "state/ModulePresets.h"
@@ -140,6 +141,7 @@ public:
     LocalAI& getAI() { return *ai; }
     // The Learn section's own sounds (notes, an 808, drums), mixed in after everything is measured and never into a bounce.
     LessonSound& getLessonSound() { return lessonSound; }
+    TempoDetector& getTempoDetector() { return tempoDetector; }
     uint64_t getSamplesProcessed() const { return samplesProcessed.load (std::memory_order_relaxed); }     // stands still when the host is not running the plugin
     LocalSettings& getSettings() { return *settings; }
     juce::String tutorPrompt (const juce::String& question);   // everything the AI tutor is told before it answers
@@ -423,6 +425,7 @@ private:
     Chop chop;
     PeakGuard guard;
     KeyFinder keyFinder;
+    TempoDetector tempoDetector;                  // listens only while a Learn step asks for the tempo of the song
     TuneGraph graph;
     mutable juce::CriticalSection graphLock;
     juce::AudioBuffer<float> cleanBuffer;

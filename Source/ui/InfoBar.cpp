@@ -12,6 +12,8 @@ void InfoBar::setStatus (const juce::String& s) { status = s; statusLeft = 9.0f;
 HelpEntry InfoBar::coach (int tab) const
 {
     const auto& l = proc.getLoudness();
+    if (tab == 7)                 // Learn runs on its own sound: it needs no song and no playback
+        return { "Learn", "Choose a course, then a lesson. The examples are live: click the keys and steps and press play to hear them. No song is needed, and the DAW can stay stopped." };
     if (! proc.isPlaying())
         return { "Press play", "The plugin measures and teaches from what it hears. Start playback, then hover over any control to find out what it does." };
     if (l.getTruePeakHold() > -0.05f)

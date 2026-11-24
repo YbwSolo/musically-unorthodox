@@ -43,23 +43,37 @@ namespace
 void BeatScenes::enter (Scene s, int v)
 {
     sound.stop();
-    scene = s; variant = v; t = 0.0f;
+    scene = s; variant = v; t = 0.0f; tempoTrack = {};
     hits.clear();
     pattern = {};
     picked = 0; hover = -1;
+    if (listenToSong) listenToSong ((scene == Scene::Pulse && variant == 6) || (scene == Scene::Tool && variant == 1));
     if (scene == Scene::Pulse) setupPulse();
     else if (scene == Scene::Grid) setupGrid();
     else if (scene == Scene::Keys) setupKeys();
     else if (scene == Scene::Roll) setupRoll();
+    else if (scene == Scene::Game) setupGame();
+    else if (scene == Scene::Build) setupBuild();
+    else if (scene == Scene::Tool) toolBpm = projectTempo && projectTempo() > 20.0 ? (float) projectTempo() : 120.0f;
+    else if (scene == Scene::Circle) { circleKey = 0; circleMinor = variant != 0; }
 }
 
-void BeatScenes::leave() { sound.stop(); }
+void BeatScenes::leave() { sound.stop(); if (listenToSong) listenToSong (false); }
 
-bool BeatScenes::makesSound() const { return scene == Scene::Pulse || scene == Scene::Grid || scene == Scene::Keys || scene == Scene::Roll || (scene == Scene::Card && variant == 9); }
+juce::String BeatScenes::soundNote() const
+{
+    return silent && silent() ? "This computer's sound output could not be opened, so the example is running without sound. Press play in your DAW to hear it through this track." : juce::String();
+}
+
+bool BeatScenes::makesSound() const { return scene == Scene::Pulse || scene == Scene::Grid || scene == Scene::Keys || scene == Scene::Roll || scene == Scene::Game || scene == Scene::Build || scene == Scene::Circle || (scene == Scene::Card && variant == 9); }
 
 juce::String BeatScenes::hint() const
 {
-    if (scene == Scene::Pulse) return variant == 1 ? "Drag the tempo" : variant == 4 ? "Tap the pad" : variant == 3 ? "Press start" : variant == 5 ? "Switch the count" : "Press play";
+    if (scene == Scene::Pulse) return variant == 1 ? "Drag the tempo" : variant == 4 ? "Tap the pad" : variant == 3 ? "Press start" : variant == 5 ? "Switch the count" : variant == 6 ? "Play your song" : "Press play";
+    if (scene == Scene::Game)  return variant == 2 ? "Click the steps" : "Press start";
+    if (scene == Scene::Tool)  return variant == 0 ? "Drag the tempo" : "Play your song";
+    if (scene == Scene::Circle) return "Click a key";
+    if (scene == Scene::Build) return "Press play";
     if (scene == Scene::Grid)  return variant == 1 ? "Click a row" : "Click the steps";
     if (scene == Scene::Keys)  return "Click the keys";
     if (scene == Scene::Roll)  return variant == 14 ? "Click to add notes" : "Press play";
@@ -106,24 +120,24 @@ void BeatScenes::transport (juce::Graphics& g, juce::Rectangle<float>& r, const 
     button (g, row.removeFromLeft (84.0f), on ? "Stop" : "Play", on, Play);
     row.removeFromLeft (12.0f);
     row.removeFromRight (130.0f);                    // the corner hint sits there
-    const bool silent = on && audioRunning && ! audioRunning();
-    g.setFont (silent ? bodyBold (12.0f) : body (12.5f)); g.setColour (silent ? yellow : textDim);
-    g.drawText (silent ? "No sound? Your DAW is not running this track yet: press play in the DAW, or select the track." : caption, row, juce::Justification::centredLeft);
+    const bool mute = on && soundNote().isNotEmpty();
+    g.setFont (mute ? bodyBold (12.0f) : body (12.5f)); g.setColour (mute ? yellow : textDim);
+    g.drawText (mute ? soundNote() : caption, row, juce::Justification::centredLeft);
 }
 
 void BeatScenes::mouseDown (juce::Point<float> p)
 {
     for (int i = (int) hits.size() - 1; i >= 0; --i)
         if (hits[(size_t) i].r.contains (p)) { const auto h = hits[(size_t) i]; clicked (h, p); return; }
+    mouseDrag (p);                                    // a click on a slider's track moves it there
 }
 
 void BeatScenes::mouseDrag (juce::Point<float> p)
 {
-    if (scene == Scene::Pulse && variant == 1 && ! tempoTrack.isEmpty() && tempoTrack.expanded (40.0f, 60.0f).contains (p))
-    {
-        tempo = (float) juce::roundToInt (juce::jmap (juce::jlimit (0.0f, 1.0f, (p.x - tempoTrack.getX()) / tempoTrack.getWidth()), 60.0f, 180.0f));
-        pattern.bpm = tempo; send();
-    }
+    if (tempoTrack.isEmpty() || ! tempoTrack.expanded (40.0f, 26.0f).contains (p)) return;
+    const float value = (float) juce::roundToInt (juce::jmap (juce::jlimit (0.0f, 1.0f, (p.x - tempoTrack.getX()) / tempoTrack.getWidth()), 60.0f, 180.0f));
+    if (scene == Scene::Pulse && variant == 1) { tempo = value; pattern.bpm = tempo; send(); }
+    else if (scene == Scene::Tool && variant == 0) toolBpm = value;
 }
 
 void BeatScenes::mouseMove (juce::Point<float> p)
@@ -138,7 +152,12 @@ void BeatScenes::mouseMove (juce::Point<float> p)
 void BeatScenes::paint (juce::Graphics& g, juce::Rectangle<float> r)
 {
     hits.clear();
-    if (scene == Scene::Pulse) paintPulse (g, r);
+    if (scene == Scene::Pulse && variant == 6) paintSongTempo (g, r);
+    else if (scene == Scene::Pulse) paintPulse (g, r);
+    else if (scene == Scene::Game) paintGame (g, r);
+    else if (scene == Scene::Tool) paintTool (g, r);
+    else if (scene == Scene::Circle) paintCircle (g, r);
+    else if (scene == Scene::Build) paintBuild (g, r);
     else if (scene == Scene::Grid) paintGrid (g, r);
     else if (scene == Scene::Keys) paintKeys (g, r);
     else if (scene == Scene::Roll) paintRoll (g, r);
@@ -201,8 +220,26 @@ void BeatScenes::paintPulse (juce::Graphics& g, juce::Rectangle<float> r)
 
     if (variant == 0)
     {
-        transport (g, r, "90 BPM. Count out loud with the click: one, two, three, four.");
-        lamps (r.reduced (r.getWidth() * 0.14f, 24.0f), 4, step >= 0 ? (step / perBeat) % 4 : -1, true);
+        transport (g, r, sound.isPlaying() ? "90 BPM. Say it with the click. The higher click is the one."
+                                           : "Press play. The click starts here in the plugin: no song needed, and the DAW can stay stopped.");
+        const int beat = step >= 0 ? (step / perBeat) % 4 : -1;
+        auto words = r.removeFromBottom (64.0f);
+        lamps (r.reduced (r.getWidth() * 0.16f, 10.0f), 4, beat, true);
+        // the count, in words, and how many bars have gone by
+        static const char* said[] = { "ONE", "two", "three", "four" };
+        const auto area = r.reduced (r.getWidth() * 0.16f, 10.0f);                   // the same spacing as the lamps above
+        const float size = juce::jmin (area.getHeight(), area.getWidth() / 4.0f - 18.0f), gap = (area.getWidth() - size * 4.0f) / 3.0f;
+        auto row = words.removeFromTop (34.0f);
+        for (int i = 0; i < 4; ++i)
+        {
+            g.setFont (headline (i == beat ? 30.0f : 22.0f)); g.setColour (i == beat ? yellow : textMute);
+            g.drawText (said[i], juce::Rectangle<float> (area.getX() + (float) i * (size + gap) - 20.0f, row.getY(), size + 40.0f, row.getHeight()), juce::Justification::centred);
+        }
+        g.setFont (body (13.0f)); g.setColour (text.withAlpha (0.85f));
+        const int bars = sound.isPlaying() ? juce::jmax (1, sound.loopsPlayed()) : 0;
+        g.drawText (bars == 0 ? juce::String ("Four beats make one bar. The count starts again at one.")
+                              : "Bar " + juce::String (bars) + ". Four beats, then the count starts again at one." + (bars >= 4 ? juce::String ("  That is ") + juce::String (bars / 4) + (bars / 4 == 1 ? " four-bar phrase." : " four-bar phrases.") : juce::String()),
+                    words, juce::Justification::centred);
     }
     else if (variant == 1)
     {
@@ -248,9 +285,9 @@ void BeatScenes::paintPulse (juce::Graphics& g, juce::Rectangle<float> r)
         auto row = r.removeFromTop (28.0f); r.removeFromTop (10.0f);
         button (g, row.removeFromLeft (150.0f), countState == 1 ? "Counting..." : countState == 2 ? "Try another tempo" : "Start 15 seconds", countState == 1, Start);
         row.removeFromLeft (12.0f); row.removeFromRight (130.0f);
-        const bool silent = countState == 1 && audioRunning && ! audioRunning();
-        g.setFont (body (12.5f)); g.setColour (silent ? yellow : textDim);
-        g.drawText (silent ? "No sound? Your DAW is not running this track yet: press play in the DAW, or select the track."
+        const bool mute = countState == 1 && soundNote().isNotEmpty();
+        g.setFont (body (12.5f)); g.setColour (mute ? yellow : textDim);
+        g.drawText (mute ? soundNote()
                            : countState == 1 ? "Count every beat. Follow the snare on two and four." : "A beat plays for 15 seconds. Count the beats, then multiply by four.", row, juce::Justification::centredLeft);
         auto bar = r.removeFromTop (16.0f).reduced (0.0f, 4.0f);
         g.setColour (control); g.fillRoundedRectangle (bar, 4.0f);
@@ -280,9 +317,9 @@ void BeatScenes::paintPulse (juce::Graphics& g, juce::Rectangle<float> r)
         const bool on = sound.isPlaying();
         button (g, row.removeFromLeft (150.0f), on ? "Stop the beat" : (hiddenBpm > 0 ? "Another tempo" : "Start a practice beat"), on, Start);
         row.removeFromLeft (12.0f); row.removeFromRight (130.0f);
-        const bool silent = on && audioRunning && ! audioRunning();
-        g.setFont (body (12.5f)); g.setColour (silent ? yellow : textDim);
-        g.drawText (silent ? "No sound? Your DAW is not running this track yet: press play in the DAW, or select the track."
+        const bool mute = on && soundNote().isNotEmpty();
+        g.setFont (body (12.5f)); g.setColour (mute ? yellow : textDim);
+        g.drawText (mute ? soundNote()
                            : "Tap once per beat. Or leave the practice beat off and tap along to any song.", row, juce::Justification::centredLeft);
         auto pad = r.removeFromLeft (r.getHeight()).reduced (6.0f);
         const bool flash = pressedFor > 0.0f;

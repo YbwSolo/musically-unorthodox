@@ -11,7 +11,7 @@ std::vector<Lesson> theoryLessons()
     return {
     { "th.beat", "Time", "Beat, bar and BPM", {
         { "The beat is the pulse",
-          "Every song has a steady pulse you can nod to. That pulse is the beat. Press play and count along out loud: one, two, three, four. Nearly all rap, drill, R&B, afrobeats and pop counts in fours.", S::Pulse, 0 },
+          "Every song has a steady pulse you can nod to. That pulse is the beat. Press play: a click starts, with no song needed, and the count lights up. Say it out loud with the click: one, two, three, four. Nearly all rap, drill, R&B, afrobeats and pop counts in fours.", S::Pulse, 0 },
         { "BPM is how fast the pulse is",
           "BPM means beats per minute. At 60 BPM there is one beat every second. At 120 BPM there are two. Drag the tempo and listen to how the same count turns from slow and heavy to urgent. The tempo sets the mood before a single note is played.", S::Pulse, 1 },
         { "Four beats make a bar",
@@ -32,7 +32,9 @@ std::vector<Lesson> theoryLessons()
         { "Half time and double time",
           "Trap and drill are the trap for beginners. The hi-hats race, but the snare only lands once per bar, so it feels slow. Producers set the project to 140 and count it fast. A listener nods at 70. Both are right: one is double the other. If your count comes out at 70 and the hats are flying, the project tempo is 140.", S::Pulse, 5 },
         { "Check yourself",
-          "Three checks. If your number is far outside the style's range, halve or double it. If you tapped to a whole verse and drifted, tap again for eight beats only. And when you set the DAW to your number, the metronome should stay locked to the song from the first bar to the last. If it slides away, you are a beat or two out.", S::Card, 8 } },
+          "Three checks. If your number is far outside the style's range, halve or double it. If you tapped to a whole verse and drifted, tap again for eight beats only. And when you set the DAW to your number, the metronome should stay locked to the song from the first bar to the last. If it slides away, you are a beat or two out.", S::Card, 8 },
+        { "Now a real song",
+          "Put this plugin on a track with a song or a beat on it and press play in your DAW. Tap along on the pad. The plugin listens too and gives its own reading, so you can check yourself. The third box compares both with the tempo your project is set to.", S::Pulse, 6 } },
       nullptr, kTabNone, nullptr },
 
     { "th.lengths", "Time", "Note lengths and rhythm", {
@@ -147,6 +149,39 @@ std::vector<Lesson> theoryLessons()
         { "Leave space for the artist",
           "A beat is half a song. If the melody fills every gap in the middle of the keyboard, where the voice lives, the rapper or singer has nowhere to go. The beats that get picked are often the ones that feel slightly empty on their own.", S::Layers, 1 } },
       nullptr, kTabNone, nullptr },
+
+    { "th.intervals", "Going further", "Intervals", {
+        { "The distance between two notes",
+          "An interval is the distance from one note to another, counted in semitones. Every melody is a row of intervals and every chord is a stack of them. Click two keys: you hear them together, and the distance is named. The names are worth learning, because they are how musicians tell each other what to play.", S::Keys, 15 },
+        { "Calm ones and tense ones",
+          "Some distances sound settled: the octave, the fifth, the thirds and the sixths. Some sound tense and want to move: the semitone, the tritone, the sevenths. Music is the trade between the two. Try seven semitones, then six, then one, and hear the mood change with nothing else different.", S::Keys, 15 },
+        { "Thirds decide the mood",
+          "Three semitones is a minor third, four is a major third. That single semitone is the whole difference between a dark chord and a bright one, and between a minor key and a major key. If you can hear a third and name it, you can tell the key of most songs by ear.", S::Keys, 8 },
+        { "The tritone and the semitone",
+          "Six semitones, the tritone, is the most unstable sound there is: horror films and dark drill melodies lean on it. One semitone above home is the menace in Phrygian. Used on purpose and briefly, tense intervals are what make a dark beat sound dark instead of just minor.", S::Keys, 13 } },
+      nullptr, kTabNone, nullptr, 2 },
+
+    { "th.sevenths", "Going further", "Seventh chords", {
+        { "Add one more note",
+          "A triad is play, skip, play, skip, play. Do it once more and you have four notes: a seventh chord. It is the same chord with more colour. Pick a chord of the key, then switch the seventh on and off and listen to it open up.", S::Keys, 16 },
+        { "Four kinds",
+          "In a minor key the chords on 1, 4 and 5 become minor sevenths: soft and soulful. The chords on 3 and 6 become major sevenths: dreamy. The chord on 7 becomes a dominant seventh, which pulls hard toward the next chord. The chord on 2 becomes half-diminished: tense, and rare. Click through them.", S::Keys, 16 },
+        { "Where they belong",
+          "R&B, neo-soul, lo-fi and melodic trap are built on seventh chords: play i, VI, III, VII with sevenths and it sounds expensive at once. Hard drill and dark trap mostly keep to plain triads or single notes, because the extra note softens the menace. Choose by mood.", S::Keys, 16 },
+        { "Spread them out",
+          "Four notes packed together in the middle of the keyboard sound muddy. Put the root in the bass, and spread the other three above it, or leave one out: the fifth is the note a chord misses least. Wide chords with a clear bass note are the sound of modern R&B keys.", S::Roll, 9 } },
+      nullptr, kTabNone, nullptr, 2 },
+
+    { "th.circle", "Going further", "The circle of fifths", {
+        { "All twelve keys on one wheel",
+          "Go up seven semitones, a fifth, from any key and you reach the key most like it. Keep going and after twelve steps you are back where you started. Laid out as a circle, every major key is on the outside and its relative minor is inside it. Click around it.", S::Circle, 0 },
+        { "Neighbours share six notes",
+          "Two keys next to each other on the circle differ by one note. That is why moving to a neighbouring key sounds smooth, and why a chord borrowed from a neighbour sounds like a pleasant surprise instead of a mistake. Keys on opposite sides share almost nothing and clash.", S::Circle, 1 },
+        { "Matching samples and loops",
+          "Two loops in the same key will sit together. So will a loop in a key and one in its relative, because the notes are identical. Neighbouring keys often work. Anything further round the circle will fight unless you pitch one of them: moving a sample by seven semitones moves it one step round.", S::Circle, 1 },
+        { "A key change",
+          "For a bridge or a last hook, moving the whole beat to a neighbouring key lifts it without sounding like a different song. Moving everything up one or two semitones is the blunt version, used for a final hook. Either way, every pitched part moves together: melodies, chords and the 808.", S::Circle, 1 } },
+      nullptr, kTabNone, nullptr, 2 },
     };
 }
 }

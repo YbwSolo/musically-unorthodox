@@ -140,6 +140,7 @@ void MUProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     chop.prepare (sampleRate);
     guard.prepare (sampleRate);
     keyFinder.prepare (sampleRate);
+    tempoDetector.prepare (sampleRate);
     // the phone-speaker check: nothing below 350 Hz, little above 5 kHz
     checkHp1.highPass (350.0f, 0.5412f, sampleRate); checkHp2.highPass (350.0f, 1.3066f, sampleRate); checkLp.lowPass (5000.0f, 0.707f, sampleRate);
     checkHp1.clear(); checkHp2.clear(); checkLp.clear();
@@ -385,6 +386,7 @@ void MUProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         dryPos = (dryPos + n) % size;
     }
     keyFinder.push (buffer.getReadPointer (0), numCh > 1 ? buffer.getReadPointer (1) : nullptr, n);
+    tempoDetector.push (buffer.getReadPointer (0), numCh > 1 ? buffer.getReadPointer (1) : nullptr, n);
 
     auto applySmoothedGain = [&] (juce::SmoothedValue<float>& g)
     {

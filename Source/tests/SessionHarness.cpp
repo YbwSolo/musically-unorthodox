@@ -1373,7 +1373,40 @@ int main()
                         ++steps;
                     }
         }
-        check (drew && steps >= 190, "Every step of every lesson draws its example", juce::String (steps) + " steps" + (where.isNotEmpty() ? ", empty: " + where : juce::String()));
+        check (drew && steps >= 240, "Every step of every lesson draws its example", juce::String (steps) + " steps" + (where.isNotEmpty() ? ", empty: " + where : juce::String()));
+
+        {
+            // the home page, search, and what the page does about sound when the DAW is not running the plugin
+            LearnPage page (*vocal, [] (const juce::String&) {}, [] (int) {});
+            page.setSize (1000, 640);
+            page.showHome();
+            const auto shot = page.createComponentSnapshot (page.getLocalBounds(), false, 1.0f);
+            int lit = 0;
+            for (int y = 150; y < 620; y += 8) for (int x = 20; x < 980; x += 8) if (shot.getPixelAt (x, y).getBrightness() > 0.5f) ++lit;
+            page.search ("808");
+            const int found = page.resultCount(); const auto first = page.resultTitle (0);
+            page.search ("drill hats");
+            const int foundTwo = page.resultCount();
+            page.search ("zzzz");
+            check (lit > 150 && found >= 5 && first.containsIgnoreCase ("808") && foundTwo >= 1 && page.resultCount() == 0,
+                   "The Learn home page draws its course cards, and search finds lessons by title first and then by what a step says",
+                   juce::String (found) + " for 808, first: " + first + "; " + juce::String (foundTwo) + " for drill hats");
+
+            auto& snd = vocal->getLessonSound();
+            using Route = LessonSound::Route;
+            page.open (0, 0, 0);
+            LessonPattern click; click.bpm = 120.0f; click.click = true;
+            snd.setPattern (click); snd.start();
+            for (int i = 0; i < 40; ++i) { page.tick (0.05f); juce::Thread::sleep (2); }      // two seconds in which the DAW never runs the plugin
+            const auto away = snd.getRoute(); const int stepped = snd.currentStep();
+            juce::AudioBuffer<float> block (2, 512); juce::MidiBuffer midi;
+            for (int i = 0; i < 6; ++i) { block.clear(); vocal->processBlock (block, midi); page.tick (0.05f); }
+            const auto back = snd.getRoute();
+            snd.stop();
+            check (away != Route::Host && (away == Route::Direct || stepped >= 0) && back == Route::Host,
+                   "With the DAW stopped a lesson takes its sound to the computer's output (or steps silently if there is none), and hands back to the track when the DAW runs again",
+                   juce::String (away == Route::Direct ? "output opened" : "no output here: stepped silently to step ") + (away == Route::Direct ? juce::String() : juce::String (stepped)));
+        }
 
         LessonSound& sound = vocal->getLessonSound();
         BeatScenes scenes (sound);
@@ -1393,6 +1426,31 @@ int main()
         // the scale exercise names a key; clicking the keys is covered by the drawing pass above
         scenes.enter (course::Scene::Keys, 9);
         check (scenes.quizKeyName() == "A minor", "The scale exercise starts on the key with no black keys", scenes.quizKeyName());
+
+        // copy the drums: the first hidden pattern is the plain beat. Wrong steps do not solve it; the right ones do.
+        scenes.enter (course::Scene::Game, 2);
+        draw();
+        auto press = [&] (int id, int a1 = 0, int b1 = 0) { const auto box = scenes.hitForTest (id, a1, b1); if (! box.isEmpty()) scenes.mouseDown (box.getCentre()); draw(); };
+        press (BeatScenes::TestMine, 2, 3); press (BeatScenes::TestCheck);
+        const bool wrongFails = ! scenes.copyExerciseSolved();
+        press (BeatScenes::TestMine, 2, 3);
+        for (int s2 = 0; s2 < 16; s2 += 2) press (BeatScenes::TestMine, 0, s2);
+        press (BeatScenes::TestMine, 1, 4); press (BeatScenes::TestMine, 1, 12); press (BeatScenes::TestMine, 2, 0); press (BeatScenes::TestMine, 2, 8);
+        press (BeatScenes::TestCheck);
+        check (wrongFails && scenes.copyExerciseSolved(), "Copy the drums is solved by rebuilding the hidden pattern exactly, and not by a wrong step");
+        // guess the tempo: a beat plays until an answer is chosen
+        scenes.enter (course::Scene::Game, 0);
+        draw(); press (BeatScenes::TestStart);
+        const bool beatPlays = sound.isPlaying() && scenes.gameAnswerForTest() >= 0;
+        press (BeatScenes::TestChoice, scenes.gameAnswerForTest());
+        check (beatPlays && ! sound.isPlaying(), "Guess the tempo plays a beat and stops it when an answer is chosen");
+        // a guided build adds one layer per step: the melody alone, then the full loop
+        scenes.enter (course::Scene::Build, 10);
+        const auto alone = scenes.patternForTest();
+        scenes.enter (course::Scene::Build, 15);
+        const auto full = scenes.patternForTest();
+        check (alone.lead[0] > 0 && alone.kick[0] == 0 && alone.bass[0] == 0 && full.kick[0] > 0 && full.bass[0] == 41 && full.bassSlide[10] == 53 && full.hat[3] > 0 && full.lead4[14] > 0 && full.bpm == 142.0f,
+               "A guided build starts with the melody alone and ends with every layer: the drill build has its three-three-two hats and a sliding 808 in F");
 
         // a pattern left playing is heard while working and is never written into a bounce
         scenes.enter (course::Scene::Grid, 2);

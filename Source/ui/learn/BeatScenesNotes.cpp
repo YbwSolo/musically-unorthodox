@@ -54,9 +54,34 @@ namespace
     const int kSketchNotes[] = { 84, 82, 79, 77, 75, 72 };      // C minor pentatonic, top row first
 }
 
+// The fourth note of a seventh chord: one more "play one, skip one" up the scale from the triad's top note.
+static int seventhOf (int keyRoot, int degree)
+{
+    const auto steps = theory::scaleSteps (Scale::Minor);
+    const int d = degree + 6;
+    return 48 + keyRoot + steps[(size_t) (d % 7)] + 12 * (d / 7);
+}
+static juce::String seventhName (const theory::Chord& c, int seventh, bool flats)
+{
+    const int gap = seventh - c.midi[0];                    // 10 is a minor seventh above the root, 11 a major seventh
+    const auto root = theory::noteName (c.midi[0], flats);
+    if (c.diminished) return root + " half-diminished (m7b5)";
+    if (c.major) return root + (gap == 11 ? " major 7" : " 7 (dominant)");
+    return root + " minor 7";
+}
+static const char* intervalName (int semitones)
+{
+    static const char* names[] = { "the same note", "a minor second: the harshest clash", "a major second: a step of the scale", "a minor third: the dark middle of a minor chord",
+                                   "a major third: the bright middle of a major chord", "a perfect fourth: open and suspended", "a tritone: unstable and menacing",
+                                   "a perfect fifth: strong and hollow, the outside of nearly every chord", "a minor sixth: yearning", "a major sixth: warm and sweet",
+                                   "a minor seventh: the soft tension in soul and R&B chords", "a major seventh: dreamy when spread out, tense when close", "an octave: the same note, higher" };
+    return names[juce::jlimit (0, 12, semitones)];
+}
+
 // ---- clicks ---------------------------------------------------------------------------------------
 void BeatScenes::clicked (const Hit& h, juce::Point<float>)
 {
+    if (scene == Scene::Game || scene == Scene::Tool || scene == Scene::Circle) { clickedPractice (h); return; }
     switch (h.id)
     {
         case Play:
@@ -91,6 +116,7 @@ void BeatScenes::clicked (const Hit& h, juce::Point<float>)
             pressedKey = note; pressedFor = 0.25f;
             prevKey = lastKey; lastKey = note;
             sound.playNote (note, 0.9f);
+            if (variant == 15 && prevKey >= 0 && prevKey != note) sound.playNote (prevKey, 0.9f);      // both together: an interval is heard as a pair
             if (variant == 5)                                    // the home chord underneath, so a note outside the key can be heard to rub
                 for (int add : { 0, 3, 7 }) sound.playNote (48 + keyRoot + add, 1.3f);
             if (variant == 9)
@@ -107,7 +133,7 @@ void BeatScenes::clicked (const Hit& h, juce::Point<float>)
         {
             degree = h.a;
             const auto chords = theory::chordsOfKey (keyRoot, Scale::Minor, 48);
-            if (degree < (int) chords.size()) playChord (chords[(size_t) degree].midi);
+            if (degree < (int) chords.size()) { playChord (chords[(size_t) degree].midi); if (seventh) sound.playNote (seventhOf (keyRoot, degree), 1.2f); }
             break;
         }
         case Toggle:
@@ -118,6 +144,12 @@ void BeatScenes::clicked (const Hit& h, juce::Point<float>)
                 send();
             }
             else if (variant == 8) { chordMajor = h.a == 0; playChord ({ 60, chordMajor ? 64 : 63, 67 }); }
+            else if (variant == 16)
+            {
+                seventh = h.a == 1;
+                const auto chords = theory::chordsOfKey (keyRoot, Scale::Minor, 48);
+                if (degree < (int) chords.size()) { playChord (chords[(size_t) degree].midi); if (seventh) sound.playNote (seventhOf (keyRoot, degree), 1.2f); }
+            }
             else if (variant == 11) { relativeMinor = h.a == 1; keyRoot = relativeMinor ? 9 : 0; playScale(); }
             break;
 
@@ -155,7 +187,7 @@ void BeatScenes::clicked (const Hit& h, juce::Point<float>)
 // ---- keyboard -------------------------------------------------------------------------------------
 void BeatScenes::setupKeys()
 {
-    keyRoot = 0; degree = 0; pressedKey = lastKey = prevKey = -1; chordMajor = true; relativeMinor = false;
+    keyRoot = 0; degree = 0; pressedKey = lastKey = prevKey = -1; chordMajor = true; relativeMinor = false; seventh = variant == 16;
     scalePick = variant == 12 ? Scale::HarmonicMinor : variant == 13 ? Scale::Phrygian : variant == 14 ? Scale::Dorian : Scale::Minor;
     if (variant == 9) { quizKey = -1; newQuizKey(); }
 }
@@ -210,9 +242,10 @@ float BeatScenes::keyX (int note, juce::Rectangle<float> keys, bool& black) cons
 void BeatScenes::paintKeys (juce::Graphics& g, juce::Rectangle<float> r)
 {
     const Scale scale = keysScale();
-    const bool showsScale = variant >= 3 && variant != 7 && variant != 8 && variant != 9;
-    const bool rootPicker = (variant >= 3 && variant <= 7) || variant == 10 || variant >= 12;
-    const bool flats = variant == 9 ? theory::keyUsesFlats (kQuizRoots[quizKey], Scale::Minor) : (variant <= 2 ? false : theory::keyUsesFlats (keyRoot, scale));
+    const bool chordMode = variant == 7 || variant == 16;
+    const bool showsScale = variant >= 3 && ! chordMode && variant != 8 && variant != 9 && variant != 15;
+    const bool rootPicker = (variant >= 3 && variant <= 7) || variant == 10 || (variant >= 12 && variant != 15);
+    const bool flats = variant == 9 ? theory::keyUsesFlats (kQuizRoots[quizKey], Scale::Minor) : (variant <= 2 || variant == 15 ? false : theory::keyUsesFlats (keyRoot, scale));
     const auto chords = theory::chordsOfKey (keyRoot, Scale::Minor, 48);
 
     // ---- the row of choices
@@ -235,16 +268,22 @@ void BeatScenes::paintKeys (juce::Graphics& g, juce::Rectangle<float> r)
         button (g, row.removeFromLeft (180.0f), "Home on A: A minor", relativeMinor, Toggle, 1);
     }
     r.removeFromTop (8.0f);
-    if (variant == 10 || variant >= 12)
+    if (variant == 10 || (variant >= 12 && variant <= 14))
     {
         auto second = r.removeFromTop (26.0f);
         for (auto s : kExplorerScales) { button (g, second.removeFromLeft (86.0f), juce::String (theory::scaleName (s)).replace ("pentatonic", "pent.").replace ("harmonic", "harm."), s == scalePick, ScalePick, (int) s); second.removeFromLeft (3.0f); }
         r.removeFromTop (8.0f);
     }
-    if (variant == 7)
+    if (chordMode)
     {
         auto second = r.removeFromTop (26.0f);
-        for (int d = 0; d < (int) chords.size(); ++d) { button (g, second.removeFromLeft (64.0f), chords[(size_t) d].numeral, d == degree, Degree, d); second.removeFromLeft (4.0f); }
+        for (int d = 0; d < (int) chords.size(); ++d) { button (g, second.removeFromLeft (variant == 16 ? 52.0f : 64.0f), chords[(size_t) d].numeral, d == degree, Degree, d); second.removeFromLeft (4.0f); }
+        if (variant == 16)
+        {
+            second.removeFromLeft (12.0f);
+            button (g, second.removeFromLeft (92.0f), "Three notes", ! seventh, Toggle, 0); second.removeFromLeft (4.0f);
+            button (g, second.removeFromLeft (92.0f), "Add the 7th", seventh, Toggle, 1);
+        }
         r.removeFromTop (8.0f);
     }
 
@@ -265,7 +304,15 @@ void BeatScenes::paintKeys (juce::Graphics& g, juce::Rectangle<float> r)
     }
     else if (variant == 5) caption = lastKey < 0 ? "The yellow keys are " + key + ". Click one, then click a dim one."
                                    : theory::noteName (lastKey, flats) + (theory::inScale (lastKey, keyRoot, scale) ? " is in " + key + ": it sits with the chord." : " is outside " + key + ": hear it rub against the chord.");
-    else if (variant == 7 && degree < (int) chords.size()) caption = chords[(size_t) degree].numeral + "   " + chords[(size_t) degree].name + ":  " + chords[(size_t) degree].notes;
+    else if (variant == 15)
+    {
+        if (lastKey >= 0 && prevKey >= 0 && lastKey != prevKey && std::abs (lastKey - prevKey) <= 12)
+            caption = theory::noteName (juce::jmin (prevKey, lastKey)) + " up to " + theory::noteName (juce::jmax (prevKey, lastKey)) + " is " + juce::String (std::abs (lastKey - prevKey)) + " semitones, " + intervalName (std::abs (lastKey - prevKey)) + ".";
+        else caption = "Click one key, then another within an octave. You hear both, and the distance is named.";
+    }
+    else if (chordMode && degree < (int) chords.size())
+        caption = seventh && variant == 16 ? chords[(size_t) degree].numeral + "7   " + seventhName (chords[(size_t) degree], seventhOf (keyRoot, degree), flats) + ":  " + chords[(size_t) degree].notes + " " + theory::noteName (seventhOf (keyRoot, degree), flats)
+                                           : chords[(size_t) degree].numeral + "   " + chords[(size_t) degree].name + ":  " + chords[(size_t) degree].notes;
     else if (variant == 8) caption = chordMajor ? "C major: C E G. The middle note is four semitones above the root." : "C minor: C Eb G. The middle note is three semitones above the root.";
     else if (variant == 9)
     {
@@ -304,11 +351,12 @@ void BeatScenes::paintKeys (juce::Graphics& g, juce::Rectangle<float> r)
         const int pc = note % 12;
         if (variant == 1) return pc == 0 ? 2 : 3;
         if (variant == 2) return (pc == 4 || pc == 5 || pc == 11 || pc == 0) ? 1 : 0;
-        if (variant == 7 && degree < (int) chords.size())
+        if (variant == 15) return note == lastKey || note == prevKey ? 1 : 0;
+        if (chordMode && degree < (int) chords.size())
         {
             const auto& m = chords[(size_t) degree].midi;
             if (note == m[0]) return 2;
-            if (note == m[1] || note == m[2]) return 1;
+            if (note == m[1] || note == m[2] || (seventh && variant == 16 && note == seventhOf (keyRoot, degree))) return 1;
             return theory::inScale (note, keyRoot, Scale::Minor) ? 0 : 3;
         }
         if (variant == 8) return note == 60 ? 2 : (note == (chordMajor ? 64 : 63) || note == 67) ? 1 : 3;
@@ -330,7 +378,7 @@ void BeatScenes::paintKeys (juce::Graphics& g, juce::Rectangle<float> r)
         if (pressed) fill = fill.interpolatedWith (state == 1 || state == 2 ? juce::Colours::white : yellow, 0.45f);
         g.setColour (fill); g.fillRoundedRectangle (key1, 3.0f);
         if (sharp) { g.setColour (state == 1 || state == 2 ? juce::Colours::black : lineHi); g.drawRoundedRectangle (key1.reduced (0.5f), 3.0f, 1.0f); }
-        const bool named = variant <= 2 || state == 1 || state == 2 || (variant == 5 && note == lastKey);
+        const bool named = variant <= 2 || variant == 15 || state == 1 || state == 2 || (variant == 5 && note == lastKey);
         if (named)
         {
             const bool dark = sharp && ! (state == 1 || state == 2 || wrong);

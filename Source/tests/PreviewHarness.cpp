@@ -102,9 +102,14 @@ public:
                 proc.getAI().setAddressForTesting (juce::SystemStats::getEnvironmentVariable ("MU_TEST_AI_URL", "http://127.0.0.1:11599"));
                 proc.getAI().refresh();
             }
-            const auto where = juce::StringArray::fromTokens (presetName.fromFirstOccurrenceOf (":", false, false), ",", "");
+            // "learn:home" is the course home page, "learn:find=808" a search on it
+            const auto rest = presetName.fromFirstOccurrenceOf (":", false, false);
+            const auto where = juce::StringArray::fromTokens (rest, ",", "");
             if (auto* editor = dynamic_cast<mu::MUEditor*> (window->getContentComponent()))
-                editor->getLearnPage().open (where[0].getIntValue(), where[1].getIntValue(), where[2].getIntValue());
+            {
+                if (rest.startsWith ("find=")) editor->getLearnPage().search (rest.fromFirstOccurrenceOf ("=", false, false));
+                else if (rest != "home" && rest.isNotEmpty()) editor->getLearnPage().open (where[0].getIntValue(), where[1].getIntValue(), where[2].getIntValue());
+            }
             presetName.clear();
         }
         if (presetName == "graph")
